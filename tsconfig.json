@@ -1,0 +1,31 @@
+{
+    "compilerOptions": {
+        "rootDir": "./src",
+        "baseUrl": ".",
+        "outDir": "./dist",
+
+        "noEmit": false,
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true,
+
+        "lib": ["es2022"],
+        "module": "Node16",
+        "target": "es2022",
+
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "moduleResolution": "node16",
+        "noImplicitAny": true,
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": true,
+
+        "paths": {
+            "Hexai/*": ["src/*"]
+        }
+    },
+    "include": ["src"],
+    "exclude": ["node_modules", "dist"]
+}
