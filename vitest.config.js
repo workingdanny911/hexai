@@ -5,5 +5,11 @@ export default defineConfig({
     plugins: [tsconfigPaths()],
     test: {
         setupFiles: ["dotenv/config"],
+        env: {
+            NODE_ENV: "test",
+            RUNNING_HEXAI_TESTS: "true",
+        },
+        typecheck: true,
+        watch: false,
     },
 });
