@@ -61,7 +61,10 @@ export class TrampolineRunner extends EventEmitter {
     }
 
     protected async execBody() {
-        return;
+        throw new Error(
+            "execution body has to be set via '.setExecutionBody()'" +
+                " or by extending this class and overriding 'execBody()'"
+        );
     }
 
     public async stop() {

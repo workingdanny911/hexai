@@ -1,28 +1,31 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, MockedFunction, test, vi } from "vitest";
 import { TrampolineRunner } from "./trampoline-runner";
 
 describe("TrampolineRunner", () => {
-    const execBodySpy = vi.spyOn(TrampolineRunner.prototype as any, "execBody");
-    const trampolineRunner = new TrampolineRunner(0);
+    let spy: MockedFunction<any>;
+    let trampolineRunner: TrampolineRunner;
+
+    function makeTrampolineRunner(interval = 0) {
+        const runner = new TrampolineRunner(interval);
+        runner.setExecutionBody(spy);
+        return runner;
+    }
 
     beforeEach(() => {
-        execBodySpy.mockClear();
-        trampolineRunner.removeAllListeners();
-        trampolineRunner.reset();
+        spy = vi.fn();
+        trampolineRunner = makeTrampolineRunner();
     });
 
     test("running", async () => {
         await trampolineRunner.run(1);
 
-        expect(execBodySpy).toBeCalledTimes(1);
+        expect(spy).toBeCalledTimes(1);
     });
 
     test("suppresses errors and emits them instead", async () => {
-        const originalExecBody = (trampolineRunner as any).execBody;
-        const failingExecBody = async () => {
+        spy.mockImplementation(async () => {
             throw new Error("expected error");
-        };
-        trampolineRunner.setExecutionBody(failingExecBody);
+        });
         const errorPromise = new Promise<any>((resolve) => {
             trampolineRunner.on("error", (error) => {
                 resolve(error);
@@ -32,8 +35,6 @@ describe("TrampolineRunner", () => {
         await trampolineRunner.run(1);
         const error = await errorPromise;
         expect(error.message).toBe("expected error");
-
-        trampolineRunner.setExecutionBody(originalExecBody);
     });
 
     test("emits stopped event", async () => {
@@ -50,30 +51,25 @@ describe("TrampolineRunner", () => {
     test("running for a number of times", async () => {
         await trampolineRunner.run(3);
 
-        expect(execBodySpy).toBeCalledTimes(3);
+        expect(spy).toBeCalledTimes(3);
     });
 
-    test("interval between runs", async () => {
-        vi.useFakeTimers();
-        const trampolineRunner = new TrampolineRunner(10);
+    function wait(ms: number) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
 
+    test("interval between runs", async () => {
+        const interval = 10;
+        const trampolineRunner = makeTrampolineRunner(interval);
         trampolineRunner.run(5);
 
         for (let i = 1; i <= 5; i++) {
-            expect(execBodySpy).toBeCalledTimes(i);
-            // make sure all ticks are processed
-            for (let j = 0; j < 10; j++) {
-                await Promise.resolve();
-            }
-            vi.advanceTimersByTime(10);
-            // make sure all ticks are processed
-            for (let j = 0; j < 10; j++) {
-                await Promise.resolve();
-            }
+            expect(spy).toBeCalledTimes(i);
+            // + 1 to make sure the event loop has time to run the next iteration
+            await wait(interval + 1);
         }
 
         await trampolineRunner.stop();
-        vi.useRealTimers();
     });
 
     test("stopping", async () => {
@@ -90,22 +86,21 @@ describe("TrampolineRunner", () => {
         trampolineRunner.run(10000);
         await stopEventPromise;
 
-        expect(execBodySpy).toBeCalledTimes(2);
+        expect(spy).toBeCalledTimes(2);
     });
 
     test("reset", async () => {
         await trampolineRunner.run(1);
 
-        expect(execBodySpy).toBeCalledTimes(1);
-        execBodySpy.mockClear();
+        expect(spy).toBeCalledTimes(1);
         await trampolineRunner.run(1);
-        expect(execBodySpy).not.toBeCalled();
+        // did not run again
+        expect(spy).toBeCalledTimes(1);
 
         trampolineRunner.reset();
 
         await trampolineRunner.run(1);
-
-        expect(execBodySpy).toBeCalledTimes(1);
+        expect(spy).toBeCalledTimes(2);
     });
 
     test("can run forever", async () => {
@@ -132,7 +127,7 @@ describe("TrampolineRunner", () => {
 
         await trampolineRunner.run(1);
 
-        expect(execBodySpy).not.toBeCalled();
+        expect(spy).not.toBeCalled();
         expect(otherExecBodySpy).toBeCalledTimes(1);
         expect(otherExecBodySpy).toBeCalledWith(trampolineRunner);
     });
