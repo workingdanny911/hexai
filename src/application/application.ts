@@ -25,10 +25,10 @@ export type FindResponseType<
 > = N.Lower<Index, 0> extends 1
     ? never
     : N.GreaterEq<Index, L.Length<IOPairs>> extends 1
-    ? never
-    : IOPairs[Index] extends [I, infer O]
-    ? O
-    : FindResponseType<IOPairs, I, N.Add<Index, 1>>;
+      ? never
+      : IOPairs[Index] extends [I, infer O]
+        ? O
+        : FindResponseType<IOPairs, I, N.Add<Index, 1>>;
 
 export type IfSupports<
     IOPairs extends L.List,
@@ -108,11 +108,22 @@ export class CommandExecutionResult {
 export class ErrorReport {
     private timestamp = new Date();
 
-    constructor(
+    private constructor(
         private error: Error,
         public during: "command-execution" | "event-handling",
         private message: Message
     ) {}
+
+    public static duringExecutionOf(
+        command: Command,
+        error: Error
+    ): ErrorReport {
+        return new ErrorReport(error, "command-execution", command);
+    }
+
+    public static duringHandlingOf(event: Event, error: Error): ErrorReport {
+        return new ErrorReport(error, "event-handling", event);
+    }
 
     public occurredDuring(): "command-execution" | "event-handling" {
         return this.during;

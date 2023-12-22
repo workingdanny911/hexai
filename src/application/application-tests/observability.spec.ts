@@ -18,6 +18,7 @@ import {
 } from "Hexai/test";
 import {
     ApplicationBuilder,
+    ApplicationEvent,
     CommandExecutionResult,
     ErrorReport,
     EventHandlingResult,
@@ -35,12 +36,7 @@ describe("application observability", () => {
     let uncaughtExceptionReport: ErrorReport | undefined;
     let eventHandlingResult!: EventHandlingResult;
 
-    function appListener(
-        info:
-            | ["command-execution", CommandExecutionResult]
-            | ["uncaught-exception", ErrorReport]
-            | ["event-handling", EventHandlingResult]
-    ) {
+    function appListener(info: ApplicationEvent) {
         const [type, result] = info;
 
         if (type === "command-execution") {

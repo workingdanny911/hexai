@@ -222,11 +222,7 @@ export class ApplicationImpl<
         result.setEventsPublished(this.getEventsPublished(request));
         this.notify(["command-execution", result]);
 
-        const errorReport = new ErrorReport(
-            error,
-            "command-execution",
-            request
-        );
+        const errorReport = ErrorReport.duringExecutionOf(request, error);
         this.notify(["uncaught-exception", errorReport]);
 
         return response;
@@ -287,7 +283,7 @@ export class ApplicationImpl<
 
             this.notify([
                 "uncaught-exception",
-                new ErrorReport(error, "event-handling", event),
+                ErrorReport.duringHandlingOf(event, error),
             ]);
         }
 
