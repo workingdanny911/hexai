@@ -9,7 +9,7 @@ export class DummyEvent extends Event<Record<never, never>> {
 
     public static from(
         _: Record<never, never>,
-        header: MessageHeader
+        header?: MessageHeader
     ): DummyEvent {
         return new this(header);
     }

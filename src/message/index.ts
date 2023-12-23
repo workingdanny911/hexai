@@ -36,7 +36,7 @@ export abstract class Message<
 
     public static from(
         rawPayload: Record<string, unknown>,
-        header: MessageHeader
+        header?: MessageHeader
     ): Event {
         const clazz = this as any;
         const payload = clazz.deserializeRawPayload(rawPayload);
@@ -117,7 +117,7 @@ export type PayloadTypeOfMessage<T extends AnyMessage> = T extends Message<
 export type MessageClass<T extends AnyMessage = AnyMessage> = {
     getSchemaVersion(): Version;
     getType(): string;
-    from: (rawPayload: Record<string, unknown>, header: MessageHeader) => T;
+    from: (rawPayload: Record<string, unknown>, header?: MessageHeader) => T;
     new (...args: any[]): T;
 };
 
