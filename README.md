@@ -37,4 +37,4 @@ yarn add hexai
 
 ## License
 
-This project is licensed under the terms of the [MIT](https://github.com/workingdanny911/hexai/LICENSE) license.
+This project is licensed under the terms of the [MIT](https://github.com/workingdanny911/hexai/blob/master/LICENSE) license.
