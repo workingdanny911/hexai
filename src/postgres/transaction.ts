@@ -57,7 +57,7 @@ export class Transaction {
         try {
             await client.connect();
         } catch (e) {
-            if ((e as Error).message.match(/.*has been connected.*/i)) {
+            if ((e as Error).message.match(/.*has already been connected.*/i)) {
                 // ignore
             } else {
                 throw e;

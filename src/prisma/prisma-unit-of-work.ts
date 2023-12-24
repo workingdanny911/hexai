@@ -16,14 +16,12 @@ export interface PrismaTransactionOptions extends BaseUnitOfWorkOptions {
 }
 
 let source: PrismaClient;
-const als = new AsyncLocalStorage<
-    [Prisma.TransactionClient, PrismaTransactionOptions?]
->();
+const als = new AsyncLocalStorage<[any, PrismaTransactionOptions?]>();
 
-async function doWrap<T>(
-    fn: (client: Prisma.TransactionClient) => Promise<T>,
+async function doWrap<C extends Prisma.TransactionClient, R>(
+    fn: (client: C) => Promise<R>,
     options?: PrismaTransactionOptions
-): Promise<T> {
+): Promise<R> {
     assert(source, "Prisma client is not set.");
 
     const current = als.getStore();
@@ -35,7 +33,7 @@ async function doWrap<T>(
         const isolationLevel = translateIsolationLevel(options?.isolationLevel);
         return source.$transaction(
             (tx) => {
-                return als.run([tx, options], () => fn(tx));
+                return als.run([tx, options], () => fn(tx as C));
             },
             {
                 maxWait: options?.maxWait,
@@ -63,31 +61,28 @@ function translateIsolationLevel(
     }
 }
 
-function getClient(): Prisma.TransactionClient {
+function getClient<T extends Prisma.TransactionClient>(): T {
     const current = als.getStore();
     assert(
         current,
         "UnitOfWork not started. You can only get the client inside a UnitOfWork."
     );
-    return current[0];
+    return current[0] as T;
 }
 
-async function wrap<T>(
-    fn: (client: Prisma.TransactionClient) => Promise<T>,
+async function wrap<C extends Prisma.TransactionClient, R>(
+    fn: (client: C) => Promise<R>,
     options?: PrismaTransactionOptions
-): Promise<T> {
+): Promise<R> {
     return await doWrap(fn, options);
 }
 
-export function bindClient(client: PrismaClient): void {
+export function bindClient<T extends PrismaClient>(client: T): void {
     source = client;
 }
 
-export const prismaUnitOfWork: UnitOfWork<
-    Prisma.TransactionClient,
-    PrismaTransactionOptions
-> & {
-    bindClient(client: PrismaClient): void;
+export const prismaUnitOfWork: UnitOfWork<any, PrismaTransactionOptions> & {
+    bindClient<T extends PrismaClient>(client: T): void;
 } = {
     getClient,
     wrap,

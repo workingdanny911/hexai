@@ -7,18 +7,22 @@ import {
     test,
 } from "vitest";
 import * as pg from "pg";
+import _ from "lodash";
 
 import {
     IsolationLevel,
     Propagation,
     UnitOfWorkAbortedError,
 } from "Hexai/infra";
+import { DB_URL } from "Hexai/config";
 import { postgresUnitOfWork } from "./postgres-unit-of-work";
-import _ from "lodash";
-
-const DB_URL =
-    process.env.POSTGRES_URL ||
-    "postgresql://postgres:postgres@localhost:5432/postgres";
+import {
+    createClient,
+    createDatabase,
+    createPrivilegedClient,
+    dropDatabase,
+    getDatabaseName,
+} from "./helpers";
 
 async function insert(client: pg.Client, id: number): Promise<void> {
     await client.query(`INSERT INTO _test VALUES ($1);`, [id]);
@@ -42,32 +46,19 @@ async function getTxid(client: pg.Client): Promise<string> {
     return result.rows[0].txid_current;
 }
 
-function getDatabaseName(url: string): string {
-    return url.match(/([\w_])+$/)![0];
-}
-
-function replaceDatabaseName(url: string, database: string): string {
-    return url.replace(/([\w_])+$/, database);
-}
-
 describe("PostgreSQL unit of work", () => {
-    const privilegedConn = new pg.Client({
-        connectionString: replaceDatabaseName(DB_URL, "postgres"),
-    });
-    const conn = new pg.Client({ connectionString: DB_URL });
+    let privilegedConn: pg.Client;
+    let conn: pg.Client;
     const database = getDatabaseName(DB_URL);
-    postgresUnitOfWork.bind(
-        () => new pg.Client({ connectionString: DB_URL }),
-        (client) => client.end()
-    );
+    postgresUnitOfWork.bind(createClient, (client) => client.end());
     const uow = postgresUnitOfWork;
 
     beforeAll(async () => {
-        await privilegedConn.connect();
-        await privilegedConn.query(`DROP DATABASE IF EXISTS ${database}`);
-        await privilegedConn.query(`CREATE DATABASE ${database}`);
+        privilegedConn = await createPrivilegedClient();
+        await dropDatabase(database, privilegedConn);
+        await createDatabase(database, privilegedConn);
 
-        await conn.connect();
+        conn = await createClient();
         await conn.query(`DROP TABLE IF EXISTS _test;`);
         await conn.query(`
             CREATE TABLE _test (
@@ -79,7 +70,7 @@ describe("PostgreSQL unit of work", () => {
     afterAll(async () => {
         await conn.end();
 
-        await privilegedConn.query(`DROP DATABASE IF EXISTS ${database}`);
+        await dropDatabase(database, privilegedConn);
         await privilegedConn.end();
     });
 
