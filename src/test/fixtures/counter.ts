@@ -7,11 +7,12 @@ import {
 import { Command, Event } from "Hexai/message";
 import {
     ConsumedEventTracker,
-    EventPublisher,
-    EventTracker,
+    OutboxEventPublisher,
+    PublishedEventTracker,
     UnitOfWork,
 } from "Hexai/infra";
 import {
+    Atomic,
     ErrorResponse,
     UseCase,
     validationErrorResponse,
@@ -137,8 +138,10 @@ export interface CounterRepository extends Repository<Counter> {}
 export class CounterApplicationContext {
     private static dbConcerns = new InMemoryDatabaseConcerns();
     private static unitOfWork = this.dbConcerns.asUnitOfWork();
-    private static eventPublisher = this.dbConcerns.createEventPublisher();
-    private static eventTracker = this.dbConcerns.createEventTracker();
+    private static outboxEventPublisher =
+        this.dbConcerns.createOutboxEventPublisher();
+    private static publishedEventTracker =
+        this.dbConcerns.createPublishedEventTracker();
     private static consumedEventTracker =
         this.dbConcerns.createConsumedEventTracker();
     private static counterRepository =
@@ -152,12 +155,12 @@ export class CounterApplicationContext {
         return CounterApplicationContext.unitOfWork;
     }
 
-    public getEventPublisher(): EventPublisher {
-        return CounterApplicationContext.eventPublisher;
+    public getOutboxEventPublisher(): OutboxEventPublisher {
+        return CounterApplicationContext.outboxEventPublisher;
     }
 
-    public getEventTracker(): EventTracker {
-        return CounterApplicationContext.eventTracker;
+    public getPublishedEventTracker(): PublishedEventTracker {
+        return CounterApplicationContext.publishedEventTracker;
     }
 
     public getConsumedEventTracker(): ConsumedEventTracker {
@@ -185,19 +188,22 @@ export class CreateCounter extends UseCase<
     void,
     CounterApplicationContext
 > {
-    public static readonly type = "test.counter.create-counter";
+    private readonly repository: CounterRepository;
+    private readonly eventPublisher: OutboxEventPublisher;
 
+    constructor(protected readonly context: CounterApplicationContext) {
+        super(context);
+
+        this.repository = context.getCounterRepository();
+        this.eventPublisher = context.getOutboxEventPublisher();
+    }
+
+    @Atomic()
     public async doExecute(request: CreateCounterRequest): Promise<void> {
-        const uow = this.getContext().getUnitOfWork();
-        const repository = this.getContext().getCounterRepository();
-        const eventPublisher = this.getContext().getEventPublisher();
-
         const counter = Counter.create(CounterId.from(request.id));
 
-        await uow.wrap(async () => {
-            await repository.add(counter);
-            await eventPublisher.publish(counter.collectEvents());
-        });
+        await this.repository.add(counter);
+        await this.eventPublisher.publish(counter.collectEvents());
     }
 }
 
@@ -214,27 +220,30 @@ export class IncreaseCounter extends UseCase<
     { value: number },
     CounterApplicationContext
 > {
-    public static readonly type = "test.counter.create-counter";
+    private readonly repository: CounterRepository;
+    private readonly eventPublisher: OutboxEventPublisher;
 
+    constructor(protected readonly context: CounterApplicationContext) {
+        super(context);
+
+        this.repository = context.getCounterRepository();
+        this.eventPublisher = context.getOutboxEventPublisher();
+    }
+
+    @Atomic()
     public async doExecute(request: IncreaseCounterRequest): Promise<{
         value: number;
     }> {
-        const uow = this.getContext().getUnitOfWork();
-        const repository = this.getContext().getCounterRepository();
-        const eventPublisher = this.getContext().getEventPublisher();
+        const counter = await this.repository.get(CounterId.from(request.id));
 
-        return await uow.wrap(async () => {
-            const counter = await repository.get(CounterId.from(request.id));
+        counter.increment();
 
-            counter.increment();
+        await this.repository.update(counter);
+        await this.eventPublisher.publish(counter.collectEvents());
 
-            await repository.update(counter);
-            await eventPublisher.publish(counter.collectEvents());
-
-            return {
-                value: counter.getValue(),
-            };
-        });
+        return {
+            value: counter.getValue(),
+        };
     }
 
     static errorToResponse(error: Error): ErrorResponse | undefined {

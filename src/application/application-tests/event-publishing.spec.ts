@@ -22,7 +22,7 @@ import {
 describe("event publishing", () => {
     let builder = prepareCounterApplication(counterApplicationContext);
     let app = builder.build();
-    const eventTracker = counterApplicationContext.getEventTracker();
+    const eventTracker = counterApplicationContext.getPublishedEventTracker();
 
     beforeEach(async () => {
         app = builder.build();

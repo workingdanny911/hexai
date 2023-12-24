@@ -1,5 +1,5 @@
 import { Event } from "Hexai/message";
 
-export default interface ConsumedEventTracker {
+export interface ConsumedEventTracker {
     markAsConsumed(name: string, event: Event): Promise<void>;
 }

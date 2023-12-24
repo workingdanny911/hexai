@@ -6,7 +6,7 @@ import {
     UnknownErrorResponse,
     ValidationErrorResponse,
 } from "Hexai/application";
-import { ConsumedEventTracker, EventTracker } from "Hexai/infra";
+import { ConsumedEventTracker, PublishedEventTracker } from "Hexai/infra";
 import { Event } from "Hexai/message";
 import { expect } from "./expect";
 
@@ -79,13 +79,13 @@ function assertIsErrorResponse<T extends { errorType: string }>(
 }
 
 export async function expectNoEventsPublished(
-    eventTracker: EventTracker
+    eventTracker: PublishedEventTracker
 ): Promise<void> {
     await expect(eventTracker.getUnpublishedEvents()).resolves.toEqual([1, []]);
 }
 
 export async function expectEventsPublishedToEqual(
-    eventTracker: EventTracker,
+    eventTracker: PublishedEventTracker,
     expectedEvents: Array<Event<any>>
 ): Promise<void> {
     const [, unpublishedEvents] = await eventTracker.getUnpublishedEvents();
@@ -93,7 +93,7 @@ export async function expectEventsPublishedToEqual(
 }
 
 export async function expectEventsPublishedToContain(
-    eventTracker: EventTracker,
+    eventTracker: PublishedEventTracker,
     expectedEvents: Array<Event<any>>
 ): Promise<void> {
     const [, unpublishedEvents] = await eventTracker.getUnpublishedEvents();

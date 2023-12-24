@@ -19,8 +19,8 @@ const repository = concerns.createRepository<CounterRepository>({
     hydrate: (memento) => Counter.fromMemento(memento),
     dehydrate: (entity) => entity.toMemento(),
 });
-const eventTracker = concerns.createEventTracker();
-const eventPublisher = concerns.createEventPublisher();
+const eventTracker = concerns.createPublishedEventTracker();
+const eventPublisher = concerns.createOutboxEventPublisher();
 const consumedEventTracker = concerns.createConsumedEventTracker();
 
 beforeEach(() => {

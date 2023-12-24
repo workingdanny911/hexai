@@ -31,7 +31,7 @@ describe("application observability", () => {
         counterApplicationContext
     ).withUseCase(FailingUseCaseRequest, FailingUseCase);
     let app = builder.build();
-    const eventTracker = counterApplicationContext.getEventTracker();
+    const eventTracker = counterApplicationContext.getPublishedEventTracker();
     let commandExecutionResult!: CommandExecutionResult;
     let uncaughtExceptionReport: ErrorReport | undefined;
     let eventHandlingResult!: EventHandlingResult;

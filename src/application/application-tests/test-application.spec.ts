@@ -30,7 +30,7 @@ describe("test application", () => {
         }));
     let app = builder.build();
     const counterRepository = counterApplicationContext.getCounterRepository();
-    const eventTracker = counterApplicationContext.getEventTracker();
+    const eventTracker = counterApplicationContext.getPublishedEventTracker();
 
     beforeEach(() => {
         app = builder.build();

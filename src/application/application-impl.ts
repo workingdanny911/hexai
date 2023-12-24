@@ -1,9 +1,11 @@
 import EventEmitter from "node:events";
-import { C, L } from "ts-toolbelt";
-import { Command, Event, Message } from "Hexai/message";
-import { ConsumedEventTracker, EventPublisher } from "Hexai/infra";
-import { ObjectRegistry } from "Hexai/utils";
 
+import { C, L } from "ts-toolbelt";
+
+import { Command, Event, Message } from "Hexai/message";
+import { ConsumedEventTracker, OutboxEventPublisher } from "Hexai/infra";
+import { ObjectRegistry } from "Hexai/utils";
+import { isEvent } from "Hexai/helpers";
 import { UseCase } from "./use-case";
 import {
     EventHandler,
@@ -32,7 +34,6 @@ import {
     unknownErrorResponse,
 } from "./error-response";
 import { UseCaseFactory } from "./common-types";
-import { isEvent } from "Hexai/helpers";
 
 class NullConsumedEventTracker implements ConsumedEventTracker {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -41,9 +42,9 @@ class NullConsumedEventTracker implements ConsumedEventTracker {
     }
 }
 
-class EventPublisherProxy implements EventPublisher {
+class OutboxEventPublisherProxy implements OutboxEventPublisher {
     constructor(
-        private eventPublisher: EventPublisher,
+        private eventPublisher: OutboxEventPublisher,
         private causeMessage: Message,
         private reporter: (events: Array<Event>) => void
     ) {}
@@ -193,18 +194,20 @@ export class ApplicationImpl<
     }
 
     private getContextProxy(causeMessage: Message): Ctx {
-        const getEventPublisher = () => {
-            const publisher = this.context.getEventPublisher();
+        const getOutboxEventPublisher = () => {
+            const publisher = this.context.getOutboxEventPublisher();
 
-            return new EventPublisherProxy(publisher, causeMessage, (events) =>
-                this.reportEventsPublished(causeMessage, events)
+            return new OutboxEventPublisherProxy(
+                publisher,
+                causeMessage,
+                (events) => this.reportEventsPublished(causeMessage, events)
             );
         };
 
         return new Proxy(this.context, {
             get: (target, prop) => {
-                if (prop === "getEventPublisher") {
-                    return getEventPublisher;
+                if (prop === "getOutboxEventPublisher") {
+                    return getOutboxEventPublisher;
                 }
 
                 return target[prop as keyof Ctx];

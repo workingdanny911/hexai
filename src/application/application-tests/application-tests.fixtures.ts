@@ -16,6 +16,7 @@ import {
 import { Command, Event, MessageClass } from "Hexai/message";
 import { UnitOfWorkHolder } from "Hexai/helpers";
 import { ApplicationBuilder, EventHandler, UseCase } from "Hexai/application";
+import { OutboxEventPublisher } from "Hexai/infra";
 
 export const counterApplicationContext = new CounterApplicationContext();
 
@@ -158,10 +159,14 @@ export class EchoEventHandler implements EventHandler {
         this.number = 0;
     }
 
+    private readonly eventPublisher: OutboxEventPublisher;
+
     constructor(
         private ctx: CounterApplicationContext,
         private number = 1
-    ) {}
+    ) {
+        this.eventPublisher = ctx.getOutboxEventPublisher();
+    }
 
     async handle(event: Event): Promise<void> {
         if (EchoEventHandler.number < this.number) {
@@ -169,7 +174,7 @@ export class EchoEventHandler implements EventHandler {
             const { header, payload } = event.serialize();
             const newEvent = messageClass.from(payload, header) as Event;
 
-            await this.ctx.getEventPublisher().publish([newEvent]);
+            await this.eventPublisher.publish([newEvent]);
 
             EchoEventHandler.number++;
         }

@@ -1,10 +1,15 @@
 import { Event, MessageHeader } from "Hexai/message";
+import _ from "lodash";
 
 export class DummyEvent extends Event<Record<never, never>> {
     static type = "test.dummy-event";
 
-    constructor(header?: MessageHeader) {
-        super({}, header);
+    public static create(): DummyEvent {
+        return new this();
+    }
+
+    public static createMany(number: number): DummyEvent[] {
+        return _.times(number, () => this.create());
     }
 
     public static from(
@@ -12,6 +17,10 @@ export class DummyEvent extends Event<Record<never, never>> {
         header?: MessageHeader
     ): DummyEvent {
         return new this(header);
+    }
+
+    constructor(header?: MessageHeader) {
+        super({}, header);
     }
 
     protected serializePayload(): Record<never, never> {

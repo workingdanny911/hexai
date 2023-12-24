@@ -1,4 +1,4 @@
 export * from "./unit-of-work";
-export { default as EventPublisher } from "./event-publisher";
-export { default as EventTracker } from "./event-tracker";
-export { default as ConsumedEventTracker } from "./consumed-event-tracker";
+export * from "./outbox-event-publisher";
+export * from "./published-event-tracker";
+export * from "./consumed-event-tracker";

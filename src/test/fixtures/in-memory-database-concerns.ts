@@ -1,6 +1,6 @@
-import {AsyncLocalStorage} from "node:async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 import _ from "lodash";
-import {C} from "ts-toolbelt";
+import { C } from "ts-toolbelt";
 
 import {
     DuplicateObjectError,
@@ -9,11 +9,11 @@ import {
     ObjectNotFoundError,
     Repository,
 } from "Hexai/domain";
-import {Event} from "Hexai/message";
+import { Event } from "Hexai/message";
 import {
     ConsumedEventTracker,
-    EventPublisher,
-    EventTracker,
+    OutboxEventPublisher,
+    PublishedEventTracker,
     UnitOfWork,
 } from "Hexai/infra";
 
@@ -45,9 +45,7 @@ interface RepositoryConstructorArgs<R extends Repository<any>> {
     dehydrate: (entity: RepositoryEntityType<R>) => unknown;
 }
 
-export default class InMemoryDatabaseConcerns
-    implements UnitOfWork<void>
-{
+export default class InMemoryDatabaseConcerns implements UnitOfWork<void> {
     private state = emptyState();
     private transactionStore = new AsyncLocalStorage<State>();
 
@@ -120,12 +118,12 @@ export default class InMemoryDatabaseConcerns
         }) as any;
     }
 
-    public createEventPublisher(): EventPublisher {
-        return new InMemoryEventPublisher(this.makeGetState());
+    public createOutboxEventPublisher(): OutboxEventPublisher {
+        return new InMemoryOutboxPublisher(this.makeGetState());
     }
 
-    public createEventTracker(): EventTracker {
-        return new InMemoryEventTracker(this.makeGetState());
+    public createPublishedEventTracker(): PublishedEventTracker {
+        return new InMemoryPublishedEventTracker(this.makeGetState());
     }
 
     public createConsumedEventTracker(): ConsumedEventTracker {
@@ -253,14 +251,15 @@ export class InMemoryRepository<E extends Entity, M = any>
     }
 }
 
-class InMemoryEventPublisher {
+class InMemoryOutboxPublisher implements OutboxEventPublisher {
     constructor(private getState: () => State) {}
+
     public async publish(events: Array<Event>): Promise<void> {
         this.getState().events.push(...events);
     }
 }
 
-class InMemoryEventTracker {
+class InMemoryPublishedEventTracker implements PublishedEventTracker {
     constructor(private getState: () => State) {}
     public async getUnpublishedEvents(
         batchSize?: number
@@ -282,7 +281,7 @@ class InMemoryEventTracker {
     }
 }
 
-class InMemoryConsumedEventTracker {
+class InMemoryConsumedEventTracker implements ConsumedEventTracker {
     constructor(private getState: () => State) {}
 
     public async markAsConsumed(name: string, event: Event): Promise<void> {
