@@ -4,7 +4,7 @@ import tsconfigPaths from "vite-tsconfig-paths";
 export default defineConfig({
     plugins: [tsconfigPaths()],
     test: {
-        setupFiles: ["dotenv/config"],
+        setupFiles: ["./vitest.setup.js"],
         env: {
             NODE_ENV: "test",
             RUNNING_HEXAI_TESTS: "true",
