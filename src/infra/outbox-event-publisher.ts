@@ -1,5 +1,5 @@
 import { Event } from "Hexai/message";
 
-export default interface EventPublisher {
+export interface OutboxEventPublisher {
     publish(events: Array<Event>): Promise<void>;
 }

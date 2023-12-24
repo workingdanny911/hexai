@@ -1,6 +1,6 @@
 import { Event } from "Hexai/message";
 
-export default interface EventTracker {
+export default interface PublishedEventTracker {
     getUnpublishedEvents(batchSize?: number): Promise<[number, Array<Event>]>;
 
     markEventsAsPublished(
