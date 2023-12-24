@@ -10,6 +10,7 @@ import {
 import { Prisma, PrismaClient } from "@prisma/client";
 
 import { prismaUnitOfWork } from "./prisma-unit-of-work";
+import { IsolationLevel, Propagation } from "Hexai/infra";
 
 describe("prisma unit of work", () => {
     const prisma = new PrismaClient();
@@ -21,7 +22,7 @@ describe("prisma unit of work", () => {
     });
 
     beforeEach(() => {
-        prismaUnitOfWork.setClient(prisma);
+        prismaUnitOfWork.bindClient(prisma);
         txids = new Set<string>();
     });
 
@@ -54,7 +55,7 @@ describe("prisma unit of work", () => {
     });
 
     test("cannot start if prisma client is not set", async () => {
-        prismaUnitOfWork.setClient(undefined as any);
+        prismaUnitOfWork.bindClient(undefined as any);
 
         expect(prismaUnitOfWork.wrap(async () => {})).rejects.toThrowError(
             /.*client is not set.*/
@@ -108,11 +109,13 @@ describe("prisma unit of work", () => {
         expect(getNumberOfDistinctTxids()).toBe(1);
     });
 
-    test("forcing new uow", async () => {
+    test("forcing new transaction", async () => {
         await prismaUnitOfWork.wrap(async () => {
             await addCurrentTxid();
 
-            await prismaUnitOfWork.wrapWithNew(addCurrentTxid);
+            await prismaUnitOfWork.wrap(addCurrentTxid, {
+                propagation: Propagation.NEW,
+            });
         });
 
         expect(getNumberOfDistinctTxids()).toBe(2);
@@ -132,29 +135,32 @@ describe("prisma unit of work", () => {
         expect(await prisma.$queryRaw`SELECT * FROM _test;`).toEqual([]);
     });
 
-    test("when options vary between nested uows", async () => {
-        await prismaUnitOfWork.wrap(
-            async () => {
-                await expect(
-                    prismaUnitOfWork.wrap(async () => {}, {
-                        isolationLevel:
-                            Prisma.TransactionIsolationLevel.Serializable,
-                    })
-                ).rejects.toThrowError(
-                    "options cannot vary between nested uows"
-                );
-            },
-            {
-                isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-            }
-        );
-    });
-
-    test("options", async () => {
+    test.each([
+        {
+            isolationLevel: IsolationLevel.SERIALIZABLE,
+            expectedIsolationLevel:
+                Prisma.TransactionIsolationLevel.Serializable,
+        },
+        {
+            isolationLevel: IsolationLevel.REPEATABLE_READ,
+            expectedIsolationLevel:
+                Prisma.TransactionIsolationLevel.RepeatableRead,
+        },
+        {
+            isolationLevel: IsolationLevel.READ_COMMITTED,
+            expectedIsolationLevel:
+                Prisma.TransactionIsolationLevel.ReadCommitted,
+        },
+        {
+            isolationLevel: IsolationLevel.READ_UNCOMMITTED,
+            expectedIsolationLevel:
+                Prisma.TransactionIsolationLevel.ReadUncommitted,
+        },
+    ])("options", async ({ isolationLevel, expectedIsolationLevel }) => {
         const spy = vi.spyOn(prisma, "$transaction");
         const fn = async () => {};
         const options = {
-            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            isolationLevel,
             maxWait: 1000,
             timeout: 1000,
         };
@@ -162,6 +168,10 @@ describe("prisma unit of work", () => {
         // serializable
         await prismaUnitOfWork.wrap(fn, options);
 
-        expect(spy).toHaveBeenCalledWith(expect.anything(), options);
+        expect(spy).toHaveBeenCalledWith(expect.anything(), {
+            isolationLevel: expectedIsolationLevel,
+            maxWait: 1000,
+            timeout: 1000,
+        });
     });
 });

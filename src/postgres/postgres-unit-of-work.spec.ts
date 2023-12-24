@@ -7,53 +7,60 @@ import {
     test,
 } from "vitest";
 import * as pg from "pg";
-import * as process from "process";
+
 import {
-    POSTGRES_ISOLATION,
-    postgresUnitOfWork,
-} from "Hexai/postgres/postgres-unit-of-work";
+    IsolationLevel,
+    Propagation,
+    UnitOfWorkAbortedError,
+} from "Hexai/infra";
+import { postgresUnitOfWork } from "./postgres-unit-of-work";
+import _ from "lodash";
 
 const DB_URL =
     process.env.POSTGRES_URL ||
     "postgresql://postgres:postgres@localhost:5432/postgres";
 
-class DB {
-    constructor(private readonly conn: pg.Client) {}
+async function insert(client: pg.Client, id: number): Promise<void> {
+    await client.query(`INSERT INTO _test VALUES ($1);`, [id]);
+}
 
-    async insert(id: number): Promise<void> {
-        await this.conn.query(`INSERT INTO _test VALUES ($1);`, [id]);
-    }
+async function exists(client: pg.Client, id: number): Promise<boolean> {
+    const result = await client.query(
+        `SELECT COUNT(*) FROM _test WHERE id = $1;`,
+        [id]
+    );
+    return result.rows[0].count > 0;
+}
 
-    async exists(id: number): Promise<boolean> {
-        const result = await this.conn.query(
-            `SELECT COUNT(*) FROM _test WHERE id = $1;`,
-            [id]
-        );
-        return result.rows[0].count > 0;
-    }
+async function count(client: pg.Client): Promise<number> {
+    const result = await client.query(`SELECT COUNT(*) FROM _test;`);
+    return parseInt(result.rows[0].count);
+}
 
-    async count(): Promise<number> {
-        const result = await this.conn.query(`SELECT COUNT(*) FROM _test;`);
-        return parseInt(result.rows[0].count);
-    }
+async function getTxid(client: pg.Client): Promise<string> {
+    const result = await client.query(`SELECT txid_current();`);
+    return result.rows[0].txid_current;
+}
 
-    async getTxid(): Promise<string> {
-        const result = await this.conn.query(`SELECT txid_current();`);
-        return result.rows[0].txid_current;
-    }
+function getDatabaseName(url: string): string {
+    return url.match(/([\w_])+$/)![0];
+}
+
+function replaceDatabaseName(url: string, database: string): string {
+    return url.replace(/([\w_])+$/, database);
 }
 
 describe("PostgreSQL unit of work", () => {
     const privilegedConn = new pg.Client({
-        connectionString: DB_URL.replace(/([\w_])+$/, "postgres"),
+        connectionString: replaceDatabaseName(DB_URL, "postgres"),
     });
     const conn = new pg.Client({ connectionString: DB_URL });
-
-    const database = DB_URL.match(/([\w_])+$/)![0];
+    const database = getDatabaseName(DB_URL);
     postgresUnitOfWork.bind(
         () => new pg.Client({ connectionString: DB_URL }),
         (client) => client.end()
     );
+    const uow = postgresUnitOfWork;
 
     beforeAll(async () => {
         await privilegedConn.connect();
@@ -70,7 +77,10 @@ describe("PostgreSQL unit of work", () => {
     });
 
     afterAll(async () => {
-        await Promise.all([conn.end(), privilegedConn.end()]);
+        await conn.end();
+
+        await privilegedConn.query(`DROP DATABASE IF EXISTS ${database}`);
+        await privilegedConn.end();
     });
 
     beforeEach(async () => {
@@ -78,114 +88,159 @@ describe("PostgreSQL unit of work", () => {
     });
 
     test("getClient() outside of uow throws error", async () => {
-        expect(() => postgresUnitOfWork.getClient()).toThrowError(
-            /.*not started.*/
-        );
+        expect(() => uow.getClient()).toThrowError(/.*not started.*/);
     });
 
-    test("all of the clients inside uow shares the same transaction", async () => {
-        const [txid1, txid2] = await postgresUnitOfWork.wrap((client) =>
-            Promise.all([new DB(client).getTxid(), new DB(client).getTxid()])
-        );
+    test("client passed as argument and client from .getClient() shares the same transaction", async () => {
+        const txids = new Set<string>();
 
-        expect(txid1).toBe(txid2);
+        await uow.wrap(async (client) => {
+            txids.add(await getTxid(client));
+            txids.add(await getTxid(uow.getClient()));
+        });
+
+        expect(txids.size).toBe(1);
     });
 
     test("committing", async () => {
-        await postgresUnitOfWork.wrap(async (client) => {
-            await new DB(client).insert(1);
-        });
+        await uow.wrap((c) => insert(c, 1));
 
-        await expect(new DB(conn).exists(1)).resolves.toBe(true);
+        expect(await exists(conn, 1)).toBe(true);
     });
 
     test("rolling back", async () => {
         await expect(
-            postgresUnitOfWork.wrap(async (client) => {
-                await new DB(client).insert(2);
+            uow.wrap(async (client) => {
+                await insert(client, 1);
 
                 throw new Error("rollback");
             })
         ).rejects.toThrowError("rollback");
 
-        expect(await new DB(conn).exists(2)).toBe(false);
+        expect(await exists(conn, 1)).toBe(false);
     });
 
-    test("nested uow - same txid", async () => {
-        let txid1 = "txid1";
-        let txid2 = "txid2";
+    test("using existing transaction - same txid", async () => {
+        const txids = new Set();
 
-        await postgresUnitOfWork.wrap(async (client) => {
-            txid1 = await new DB(client).getTxid();
+        await uow.wrap(async (client) => {
+            txids.add(await getTxid(client));
 
-            await postgresUnitOfWork.wrap(async (client) => {
-                txid2 = await new DB(client).getTxid();
+            await uow.wrap(async (client) => txids.add(await getTxid(client)));
+        });
+
+        expect(txids.size).toBe(1);
+    });
+
+    test("using existing transaction - rollback", async () => {
+        await uow.wrap(async (c1) => {
+            await insert(c1, 1);
+
+            try {
+                await uow.wrap(
+                    () => {
+                        throw new Error("rollback");
+                    },
+                    {
+                        propagation: Propagation.EXISTING,
+                    }
+                );
+            } catch {}
+        });
+
+        expect(await count(conn)).toBe(0);
+    });
+
+    test("using existing transaction - cannot use client after rollback", async () => {
+        await uow.wrap(async (c1) => {
+            try {
+                await uow.wrap(
+                    () => {
+                        throw new Error("rollback");
+                    },
+                    {
+                        propagation: Propagation.EXISTING,
+                    }
+                );
+            } catch {}
+
+            await expect(insert(c1, 1)).rejects.toThrowError(
+                UnitOfWorkAbortedError
+            );
+        });
+    });
+
+    test("using existing transaction - commit", async () => {
+        await uow.wrap(async (c1) => {
+            await insert(c1, 1);
+
+            await uow.wrap((c2) => insert(c2, 2));
+        });
+
+        expect(await count(conn)).toBe(2);
+    });
+
+    test("forcing new transaction", async () => {
+        const number = 5;
+        const txids = new Set();
+        function newUow() {
+            return uow.wrap(
+                async (client) => {
+                    txids.add(await getTxid(client));
+                },
+                { propagation: Propagation.NEW }
+            );
+        }
+
+        await uow.wrap(() => Promise.all(_.times(number, newUow)));
+
+        expect(new Set(txids).size).toBe(number);
+    });
+
+    test("nested transactions", async () => {
+        const txids = new Set();
+        async function track(client: pg.Client, id: number) {
+            txids.add(await getTxid(client));
+            await insert(client, id);
+        }
+
+        await uow.wrap(async (c1) => {
+            await track(c1, 1);
+
+            try {
+                await uow.wrap(
+                    async (c2) => {
+                        await track(c2, 2);
+
+                        throw new Error("rollback");
+                    },
+                    { propagation: Propagation.NESTED }
+                );
+            } catch {}
+
+            await track(c1, 3);
+
+            await uow.wrap(async (c4) => track(c4, 4), {
+                propagation: Propagation.NESTED,
             });
         });
 
-        expect(txid1).toBe(txid2);
-    });
+        expect(txids.size).toBe(1);
 
-    test("nested uow - rollback", async () => {
-        await postgresUnitOfWork.wrap(async (client) => {
-            await new DB(client).insert(1);
-
-            expect(
-                postgresUnitOfWork.wrap(async (client) => {
-                    throw new Error("rollback");
-                })
-            ).rejects.toThrowError("rollback");
-        });
-
-        expect(await new DB(conn).count()).toBe(0);
-    });
-
-    test("nested uow - commit", async () => {
-        await postgresUnitOfWork.wrap(async (client) => {
-            await new DB(client).insert(1);
-
-            await postgresUnitOfWork.wrap(async (client) => {
-                await new DB(client).insert(2);
-            });
-        });
-
-        expect(await new DB(conn).count()).toBe(2);
-    });
-
-    test("parallel execution in the same uow", async () => {
-        const txids = await postgresUnitOfWork.wrap(async (client) => {
-            const promises = Array.from({ length: 5 }, () =>
-                new DB(client).getTxid()
-            );
-
-            return Promise.all(promises);
-        });
-
-        expect(txids.every((txid) => txid === txids[0])).toBe(true);
-    });
-
-    test("forcing new uow", async () => {
-        const txids = await postgresUnitOfWork.wrap(async (client) => {
-            const promises = Array.from({ length: 5 }, () =>
-                postgresUnitOfWork.wrapWithNew((client) =>
-                    new DB(client).getTxid()
-                )
-            );
-
-            return Promise.all(promises);
-        });
-
-        expect(new Set(txids).size).toBe(5);
+        expect(await exists(conn, 1)).toBe(true);
+        expect(await exists(conn, 2)).toBe(false);
+        expect(await exists(conn, 3)).toBe(true);
+        expect(await exists(conn, 4)).toBe(true);
     });
 
     test.each([
-        POSTGRES_ISOLATION.READ_COMMITTED,
-        POSTGRES_ISOLATION.REPEATABLE_READ,
-        POSTGRES_ISOLATION.SERIALIZABLE,
-    ])("serializable isolation level", async (isolationLevel) => {
-        await postgresUnitOfWork.wrap(
-            async (outerClient) => {
-                const result = await outerClient.query(
+        IsolationLevel.READ_COMMITTED,
+        IsolationLevel.REPEATABLE_READ,
+        IsolationLevel.SERIALIZABLE,
+    ])("isolation level", async (isolationLevel) => {
+        await uow.wrap(
+            async (client) => {
+                const result = await client.query(
                     "SHOW TRANSACTION ISOLATION LEVEL"
                 );
 
@@ -195,19 +250,5 @@ describe("PostgreSQL unit of work", () => {
             },
             { isolationLevel }
         );
-    });
-
-    test("when options vary between nested uows", async () => {
-        const txids = await postgresUnitOfWork.wrap(async (client) => {
-            const promises = Array.from({ length: 5 }, () =>
-                postgresUnitOfWork.wrapWithNew((client) =>
-                    new DB(client).getTxid()
-                )
-            );
-
-            return Promise.all(promises);
-        });
-
-        expect(new Set(txids).size).toBe(5);
     });
 });

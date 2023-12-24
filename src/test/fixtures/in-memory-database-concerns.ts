@@ -1,6 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import {AsyncLocalStorage} from "node:async_hooks";
 import _ from "lodash";
-import { C } from "ts-toolbelt";
+import {C} from "ts-toolbelt";
 
 import {
     DuplicateObjectError,
@@ -9,7 +9,7 @@ import {
     ObjectNotFoundError,
     Repository,
 } from "Hexai/domain";
-import { Event } from "Hexai/message";
+import {Event} from "Hexai/message";
 import {
     ConsumedEventTracker,
     EventPublisher,
@@ -46,7 +46,7 @@ interface RepositoryConstructorArgs<R extends Repository<any>> {
 }
 
 export default class InMemoryDatabaseConcerns
-    implements UnitOfWork<void, void>
+    implements UnitOfWork<void>
 {
     private state = emptyState();
     private transactionStore = new AsyncLocalStorage<State>();
@@ -88,7 +88,7 @@ export default class InMemoryDatabaseConcerns
         return undefined;
     }
 
-    public asUnitOfWork(): UnitOfWork<void, void> {
+    public asUnitOfWork(): UnitOfWork<void> {
         return this;
     }
 

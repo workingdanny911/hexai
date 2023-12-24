@@ -1,6 +1,7 @@
 import { UnitOfWorkHolder } from "Hexai/helpers";
+import { BaseUnitOfWorkOptions } from "Hexai/infra";
 
-export function Atomic(options?: unknown) {
+export function Atomic(options?: BaseUnitOfWorkOptions) {
     return function (
         target: any,
         propertyKey: string,

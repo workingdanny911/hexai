@@ -1,15 +1,18 @@
 import assert from "node:assert";
 import { AsyncLocalStorage } from "node:async_hooks";
-
-import _ from "lodash";
 import { Prisma, PrismaClient } from "@prisma/client";
 
-import { UnitOfWork } from "Hexai/infra";
+import {
+    BaseUnitOfWorkOptions,
+    IsolationLevel,
+    Propagation,
+    UnitOfWork,
+} from "Hexai/infra";
 
-export interface PrismaTransactionOptions {
+export interface PrismaTransactionOptions extends BaseUnitOfWorkOptions {
     maxWait?: number;
     timeout?: number;
-    isolationLevel?: Prisma.TransactionIsolationLevel;
+    isolationLevel?: IsolationLevel;
 }
 
 let source: PrismaClient;
@@ -19,30 +22,44 @@ const als = new AsyncLocalStorage<
 
 async function doWrap<T>(
     fn: (client: Prisma.TransactionClient) => Promise<T>,
-    options?: PrismaTransactionOptions,
-    forceNew = false
+    options?: PrismaTransactionOptions
 ): Promise<T> {
     assert(source, "Prisma client is not set.");
 
     const current = als.getStore();
 
-    if (current && !forceNew) {
-        const [tx, currentOptions] = current;
-
-        if (options && !_.isEqual(options, currentOptions)) {
-            throw new Error(
-                "options cannot vary between nested uows.\n" +
-                    "use '.wrapWithNew()' to start a new transaction with different options.\n" +
-                    `current: ${JSON.stringify(currentOptions)}\n` +
-                    `provided: ${JSON.stringify(options)}`
-            );
-        }
-
+    if (current && options?.propagation !== Propagation.NEW) {
+        const [tx] = current;
         return fn(tx);
     } else {
-        return source.$transaction((tx) => {
-            return als.run([tx, options], () => fn(tx));
-        }, options);
+        const isolationLevel = translateIsolationLevel(options?.isolationLevel);
+        return source.$transaction(
+            (tx) => {
+                return als.run([tx, options], () => fn(tx));
+            },
+            {
+                maxWait: options?.maxWait,
+                timeout: options?.timeout,
+                isolationLevel,
+            }
+        );
+    }
+}
+
+function translateIsolationLevel(
+    isolationLevel?: IsolationLevel
+): Prisma.TransactionIsolationLevel | undefined {
+    switch (isolationLevel) {
+        case IsolationLevel.READ_UNCOMMITTED:
+            return Prisma.TransactionIsolationLevel.ReadUncommitted;
+        case IsolationLevel.READ_COMMITTED:
+            return Prisma.TransactionIsolationLevel.ReadCommitted;
+        case IsolationLevel.REPEATABLE_READ:
+            return Prisma.TransactionIsolationLevel.RepeatableRead;
+        case IsolationLevel.SERIALIZABLE:
+            return Prisma.TransactionIsolationLevel.Serializable;
+        default:
+            return undefined;
     }
 }
 
@@ -59,17 +76,10 @@ async function wrap<T>(
     fn: (client: Prisma.TransactionClient) => Promise<T>,
     options?: PrismaTransactionOptions
 ): Promise<T> {
-    return await doWrap(fn, options, false);
+    return await doWrap(fn, options);
 }
 
-async function wrapWithNew<T>(
-    fn: (client: Prisma.TransactionClient) => Promise<T>,
-    options?: PrismaTransactionOptions
-): Promise<T> {
-    return await doWrap(fn, options, true);
-}
-
-export function setClient(client: PrismaClient): void {
+export function bindClient(client: PrismaClient): void {
     source = client;
 }
 
@@ -77,10 +87,9 @@ export const prismaUnitOfWork: UnitOfWork<
     Prisma.TransactionClient,
     PrismaTransactionOptions
 > & {
-    setClient(client: PrismaClient): void;
+    bindClient(client: PrismaClient): void;
 } = {
     getClient,
     wrap,
-    wrapWithNew,
-    setClient,
+    bindClient,
 };
