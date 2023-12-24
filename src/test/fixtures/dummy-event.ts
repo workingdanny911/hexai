@@ -27,7 +27,3 @@ export class DummyEvent extends Event<Record<never, never>> {
         return this.getPayload();
     }
 }
-
-export function createDummyEvents(number = 1): Array<DummyEvent> {
-    return Array.from({ length: number }).map(() => new DummyEvent());
-}

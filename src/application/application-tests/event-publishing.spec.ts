@@ -4,7 +4,7 @@ import {
     CounterId,
     CounterValueChanged,
     CreateCounterRequest,
-    createDummyEvents,
+    DummyEvent,
     expectEventsPublishedToContain,
     expectEventsPublishedToEqual,
     waitForSeveralTicks,
@@ -80,23 +80,23 @@ describe("event publishing", () => {
     });
 
     test("when correlation is set on the command", async () => {
-        const [dummyMessage] = createDummyEvents();
+        const cause = DummyEvent.create();
         const command = new CreateCounterRequest("counter-id");
-        command.setCause(dummyMessage);
+        command.setCause(cause);
 
         await app.execute(command);
 
-        await expectCorrelationToBe(dummyMessage);
+        await expectCorrelationToBe(cause);
     });
 
     test("when correlation is set on the event", async () => {
-        const [dummyMessage] = createDummyEvents();
+        const cause = DummyEvent.create();
         const counterCreated = await setUpCounter();
-        counterCreated.setCause(dummyMessage);
+        counterCreated.setCause(cause);
 
         await app.handle(counterCreated);
 
-        await expectCorrelationToBe(dummyMessage);
+        await expectCorrelationToBe(cause);
     });
 
     test("handling events occurred during command execution", async () => {
@@ -115,16 +115,17 @@ describe("event publishing", () => {
     });
 
     test("handling events occurred during event handling", async () => {
-        const [dummyEvent] = createDummyEvents();
+        const event = DummyEvent.create();
+        const expectedEvents = DummyEvent.createMany(2);
         app = builder
             .withEventHandler("echo", (ctx) => new EchoEventHandler(ctx, 2))
             .build();
 
-        await app.handle(dummyEvent);
+        await app.handle(event);
 
         await waitForSeveralTicks();
         // echo twice
-        await expectEventsPublishedToEqual(eventTracker, createDummyEvents(2));
+        await expectEventsPublishedToEqual(eventTracker, expectedEvents);
     });
 
     test("failure of internal event handling does not affect command execution or event publishing", async () => {

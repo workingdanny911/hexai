@@ -5,7 +5,7 @@ import {
     CounterId,
     CreateCounter,
     CreateCounterRequest,
-    createDummyEvents,
+    DummyEvent,
 } from "Hexai/test";
 import { Event } from "Hexai/message";
 import { ApplicationBuilder, EventHandler } from "Hexai/application";
@@ -45,7 +45,7 @@ class TimeTakingEventHandler {
 }
 
 describe("event handling", () => {
-    const [event] = createDummyEvents();
+    const event = DummyEvent.create();
     let builder: ApplicationBuilder;
 
     beforeEach(() => {

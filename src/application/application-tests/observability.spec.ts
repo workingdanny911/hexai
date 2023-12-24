@@ -10,7 +10,7 @@ import {
 import {
     CounterApplicationContext,
     CreateCounterRequest,
-    createDummyEvents,
+    DummyEvent,
     expectEventsToEqual,
     expectUnknownErrorResponse,
     expectValidationErrorResponse,
@@ -134,7 +134,7 @@ describe("application observability", () => {
             )
             .build();
         app.listen(appListener);
-        const [event] = createDummyEvents();
+        const event = DummyEvent.create();
 
         await app.handle(event);
 
@@ -181,7 +181,7 @@ describe("application observability", () => {
             .withEventHandler(FailingEventHandler)
             .build();
         app.listen(appListener);
-        const [event] = createDummyEvents();
+        const event = DummyEvent.create();
 
         await app.handle(event);
 

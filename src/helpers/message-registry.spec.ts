@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "vitest";
 
 import { Message, MessageClass, MessageHeader } from "Hexai/message";
-import { createDummyEvents, DummyEvent } from "Hexai/test";
+import { DummyEvent } from "Hexai/test";
 
 import { MessageRegistry } from "./message-registry";
 import { isMessageClass } from "Hexai/helpers/index";
@@ -62,7 +62,7 @@ describe("message registry", () => {
     });
 
     test("preserves header fields", () => {
-        const [event] = createDummyEvents();
+        const event = DummyEvent.create();
         const { header } = event.serialize();
 
         register(DummyEvent);

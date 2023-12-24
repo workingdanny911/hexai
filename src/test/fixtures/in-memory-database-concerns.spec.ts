@@ -6,25 +6,26 @@ import {
     EntityId,
     ObjectNotFoundError,
 } from "Hexai/domain";
-import { UnitOfWork } from "Hexai/infra";
-import InMemoryDatabaseConcerns from "./in-memory-database-concerns";
-import { createDummyEvents } from "./dummy-event";
-import { expectEventsPublishedToEqual } from "../assertions";
+import {
+    DummyEvent,
+    expectEventsPublishedToEqual,
+    InMemoryDatabaseConcerns,
+} from "Hexai/test";
 import { Counter, CounterId, CounterRepository } from "./counter";
 
-const concerns = new InMemoryDatabaseConcerns();
-const unitOfWork: UnitOfWork<void, void> = concerns;
-const repository = concerns.createRepository<CounterRepository>({
+const dbConcerns = new InMemoryDatabaseConcerns();
+const unitOfWork = dbConcerns.asUnitOfWork();
+const repository = dbConcerns.createRepository<CounterRepository>({
     namespace: "counter",
     hydrate: (memento) => Counter.fromMemento(memento),
     dehydrate: (entity) => entity.toMemento(),
 });
-const eventTracker = concerns.createPublishedEventTracker();
-const eventPublisher = concerns.createOutboxEventPublisher();
-const consumedEventTracker = concerns.createConsumedEventTracker();
+const eventTracker = dbConcerns.createPublishedEventTracker();
+const eventPublisher = dbConcerns.createOutboxEventPublisher();
+const consumedEventTracker = dbConcerns.createConsumedEventTracker();
 
 beforeEach(() => {
-    concerns.clear();
+    dbConcerns.clear();
 });
 
 function createCounter(id: string): Counter {
@@ -110,12 +111,12 @@ describe("repository", () => {
     }
 
     test("multiple repositories", async () => {
-        const aRepository = concerns.createRepository({
+        const aRepository = dbConcerns.createRepository({
             namespace: "a-entities",
             hydrate: ({ id }) => EntityA.create(GenericEntityId.from(id)),
             dehydrate: (entity) => ({ id: entity.getId().getValue() }),
         });
-        const bRepository = concerns.createRepository({
+        const bRepository = dbConcerns.createRepository({
             namespace: "b-entities",
             hydrate: ({ id }) => EntityB.create(GenericEntityId.from(id)),
             dehydrate: (entity) => ({ id: entity.getId().getValue() }),
@@ -137,7 +138,7 @@ describe("repository", () => {
 
 describe("event publisher and tracker", () => {
     test("publishing events", async () => {
-        const events = createDummyEvents(5);
+        const events = DummyEvent.createMany(5);
 
         await eventPublisher.publish(events);
 
@@ -152,7 +153,7 @@ describe("event publisher and tracker", () => {
     });
 
     test("marking events as published", async () => {
-        const events = createDummyEvents(5);
+        const events = DummyEvent.createMany(5);
 
         await eventPublisher.publish(events);
         await eventTracker.markEventsAsPublished(1, 5);
@@ -161,7 +162,7 @@ describe("event publisher and tracker", () => {
     });
 
     test("rolling back", async () => {
-        const events = createDummyEvents(5);
+        const events = DummyEvent.createMany(5);
 
         await expect(
             unitOfWork.wrap(async () => {
@@ -176,7 +177,7 @@ describe("event publisher and tracker", () => {
 
 describe("consumed event tracker", () => {
     test("marking event as consumed", async () => {
-        const [event] = createDummyEvents(1);
+        const event = DummyEvent.create();
 
         await consumedEventTracker.markAsConsumed("consumer-name", event);
 
@@ -186,7 +187,7 @@ describe("consumed event tracker", () => {
     });
 
     test("rolling back", async () => {
-        const [event] = createDummyEvents(1);
+        const event = DummyEvent.create();
 
         await expect(
             unitOfWork.wrap(async () => {
@@ -207,7 +208,7 @@ describe("consumed event tracker", () => {
 describe("transactional behavior", () => {
     test("all roles share the same transaction", async () => {
         const entity = Counter.create(CounterId.from("id"));
-        const [event] = createDummyEvents(1);
+        const event = DummyEvent.create();
 
         await unitOfWork.wrap(async () => {
             await repository.add(entity);
