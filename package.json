@@ -1,85 +1,25 @@
 {
-    "name": "hexai",
+    "name": "hexai-root",
     "version": "0.1.0",
     "description": "Hexai is a lightweight hexagonal architecture library.",
-    "author": "Sangwoo Hyun <workingdanny@naver.com>",
-    "license": "ISC",
-    "files": [
-        "dist"
-    ],
-    "exports": {
-        "./application": {
-            "types": "./dist/application/index.d.ts",
-            "import": "./dist/application/index.js",
-            "require": "./dist/application/index.js"
-        },
-        "./domain": {
-            "types": "./dist/domain/index.d.ts",
-            "import": "./dist/domain/index.js",
-            "require": "./dist/domain/index.js"
-        },
-        "./helpers": {
-            "types": "./dist/helpers/index.d.ts",
-            "import": "./dist/helpers/index.js",
-            "require": "./dist/helpers/index.js"
-        },
-        "./infra": {
-            "types": "./dist/infra/index.d.ts",
-            "import": "./dist/infra/index.js",
-            "require": "./dist/infra/index.js"
-        },
-        "./message": {
-            "types": "./dist/message/index.d.ts",
-            "import": "./dist/message/index.js",
-            "require": "./dist/message/index.js"
-        },
-        "./test": {
-            "types": "./dist/test/index.d.ts",
-            "import": "./dist/test/index.js",
-            "require": "./dist/test/index.js"
-        },
-        "./utils": {
-            "types": "./dist/utils/index.d.ts",
-            "import": "./dist/utils/index.js",
-            "require": "./dist/utils/index.js"
-        },
-        "./prisma": {
-            "types": "./dist/prisma/index.d.ts",
-            "import": "./dist/prisma/index.js",
-            "require": "./dist/prisma/index.js"
-        },
-        "./postgres": {
-            "types": "./dist/postgres/index.d.ts",
-            "import": "./dist/postgres/index.js",
-            "require": "./dist/postgres/index.js"
-        },
-        "./package.json": "./package.json"
-    },
+    "main": "index.js",
     "scripts": {
-        "test": "vitest",
-        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+        "test": "lerna run test",
+        "build": "lerna run build"
     },
-    "dependencies": {
-        "dotenv": "^16.3.1",
-        "express": "^4.18.2",
-        "lodash": "^4.17.21",
-        "uuid": "^9.0.1"
-    },
+    "author": "",
+    "license": "ISC",
+    "private": true,
+    "workspaces": [
+        "packages/*"
+    ],
     "devDependencies": {
-        "@prisma/client": "^5.7.1",
-        "@types/express": "^4.17.21",
-        "@types/lodash": "^4.14.201",
-        "@types/node": "^20.9.1",
-        "@types/pg": "^8.10.9",
-        "@types/uuid": "^9.0.7",
         "@typescript-eslint/eslint-plugin": "^6.10.0",
         "@typescript-eslint/parser": "^6.10.0",
-        "axios": "^1.6.2",
+        "dotenv": "^16.3.1",
         "eslint": "^8.53.0",
-        "pg": "^8.11.3",
+        "lerna": "^6.6.2",
         "prettier": "^3.0.3",
-        "ts-node": "^10.9.1",
-        "tsc-alias": "^1.8.8",
         "typescript": "^5.2.2",
         "vite-tsconfig-paths": "^4.2.1",
         "vitest": "0.34.6"

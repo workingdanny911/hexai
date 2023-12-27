@@ -1,8 +1,6 @@
 {
     "compilerOptions": {
-        "rootDir": "./src",
         "baseUrl": ".",
-        "outDir": "./dist",
 
         "noEmit": false,
         "declaration": true,
@@ -23,7 +21,7 @@
         "emitDecoratorMetadata": true,
 
         "paths": {
-            "Hexai/*": ["src/*"]
+            "@hexai/*": ["packages/*/src"]
         }
     },
     "include": ["src"],
