@@ -1,8 +1,9 @@
 import * as pg from "pg";
 
-import { DB_URL } from "Hexai/config";
+import {DB_URL} from "Hexai/config";
+import {replaceDatabaseNameIn} from "Hexai/utils";
 
-export class DatabaseWrapper {
+export class ClientWrapper {
     protected client: pg.Client;
 
     public getClient(): pg.Client {
@@ -41,7 +42,7 @@ export class DatabaseWrapper {
     }
 }
 
-export class DatabaseManager extends DatabaseWrapper {
+export class DatabaseManager extends ClientWrapper {
     public async createDatabase(name: string): Promise<void> {
         const exists = await this.query(
             `SELECT 1 FROM pg_database WHERE datname = '${name}'`
@@ -57,7 +58,7 @@ export class DatabaseManager extends DatabaseWrapper {
     }
 }
 
-export class MigrationManager extends DatabaseWrapper {
+export class MigrationManager extends ClientWrapper {
     public tableManager: TableManager;
     private static readonly MIGRATION_TABLE: [
         string,
@@ -136,7 +137,7 @@ export class MigrationManager extends DatabaseWrapper {
     }
 }
 
-export class TableManager extends DatabaseWrapper {
+export class TableManager extends ClientWrapper {
     public async getTableSchema(tableName: string): Promise<
         Array<{
             column: string;
@@ -222,12 +223,8 @@ export class TableManager extends DatabaseWrapper {
     }
 }
 
-export function getDatabaseName(url?: string): string {
-    return (url || DB_URL).match(/([\w_])+$/)![0];
-}
-
 export function replaceDatabaseName(database: string, url?: string): string {
-    return (url || DB_URL).replace(/([\w_])+$/, database);
+    return replaceDatabaseNameIn(url || DB_URL, database);
 }
 
 export async function runInsideTransaction<T = unknown>(
