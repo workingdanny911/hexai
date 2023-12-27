@@ -12,17 +12,18 @@ import {
     ClientFactory,
     PostgresTransactionOptions,
 } from "./types";
+import { ensureConnection } from "./helpers";
 
 export class Transaction {
     private static storage = new AsyncLocalStorage<Transaction>();
     private static clientFactory: ClientFactory;
-    private static clientCleanUp: ClientCleanUp | undefined;
+    private static clientCleanUp?: ClientCleanUp;
 
-    public static getCurrentTransaction(): Transaction | undefined {
+    public static getCurrent(): Transaction | undefined {
         return this.storage.getStore();
     }
 
-    public static startNewTransaction<T>(
+    public static startNew<T>(
         fn: (client: pg.Client) => Promise<T>,
         options: Partial<PostgresTransactionOptions>
     ): Promise<T> {
@@ -43,32 +44,20 @@ export class Transaction {
         this.clientFactory = factory;
     }
 
-    public static setClientCleanUp(cleanUp?: ClientCleanUp): void {
+    public static setClientCleanUp(cleanUp: ClientCleanUp): void {
         this.clientCleanUp = cleanUp;
     }
 
     private static async spawnNewClient(): Promise<pg.Client> {
-        const client = await this.clientFactory();
+        const client = await Transaction.clientFactory();
 
         if (!(client instanceof pg.Client)) {
             throw new Error("Client factory must return a pg.Client");
         }
 
-        try {
-            await client.connect();
-        } catch (e) {
-            if ((e as Error).message.match(/.*has already been connected.*/i)) {
-                // ignore
-            } else {
-                throw e;
-            }
-        }
+        await ensureConnection(client);
 
         return client;
-    }
-
-    private static async annihilateClient(client: pg.Client): Promise<void> {
-        await this.clientCleanUp?.(client);
     }
 
     private originalClient!: pg.Client;
@@ -81,12 +70,13 @@ export class Transaction {
         | "committed"
         | "aborted" = "not started";
     private currentLevel = 0;
+    private namespace = "default";
 
     constructor(options: Partial<PostgresTransactionOptions> = {}) {
         this.setOptions(options);
     }
 
-    async start(): Promise<void> {
+    public async start(): Promise<void> {
         if (this.state !== "not started") {
             return;
         }
@@ -122,9 +112,12 @@ export class Transaction {
     private async begin(): Promise<void> {
         const client = this.getClient();
         await client.query("BEGIN");
-        await client.query(
-            `SET TRANSACTION ISOLATION LEVEL ${this.getIsolationLevel()}`
-        );
+
+        if (this.getIsolationLevel() !== IsolationLevel.READ_COMMITTED) {
+            await client.query(
+                `SET TRANSACTION ISOLATION LEVEL ${this.getIsolationLevel()}`
+            );
+        }
     }
 
     public async run<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
@@ -132,50 +125,67 @@ export class Transaction {
             await this.start();
         }
 
-        const client = this.getClient();
+        const runner =
+            this.getPropagation() === Propagation.NESTED
+                ? this.runInSavepoint
+                : this.runFn;
+
         try {
-            return await this.runInSavepoint(client, fn);
+            return (await runner.call(this, fn)) as T;
         } finally {
-            // root level
             if (this.isRoot()) {
-                await Transaction.annihilateClient(this.originalClient);
+                await this.commitOrRollback();
+                await this.annihilate();
             }
         }
     }
 
     private async runInSavepoint<T>(
-        client: pg.Client,
         fn: (client: pg.Client) => Promise<T>
     ): Promise<T> {
-        const useSavepoint = this.getPropagation() === Propagation.NESTED;
-        this.currentLevel++;
-        const isRootNode = this.isRoot();
-
         try {
-            if (useSavepoint) {
-                await client.query(`SAVEPOINT savepoint_${this.currentLevel}`);
-            }
+            await this.enterSavepoint(this.currentLevel);
 
-            return await fn(client);
+            return await this.withLevelAdjustment(fn);
         } catch (e) {
-            if (useSavepoint) {
-                if (!isRootNode) {
-                    await client.query(
-                        `ROLLBACK TO SAVEPOINT savepoint_${this.currentLevel}`
-                    );
-                }
-            } else {
+            if (this.isRoot()) {
                 this.abort();
+            } else {
+                await this.rollbackToSavepoint(this.currentLevel);
             }
 
             throw e;
+        }
+    }
+
+    private async withLevelAdjustment<T>(
+        fn: (client: pg.Client) => Promise<T>
+    ): Promise<T> {
+        this.currentLevel++;
+        try {
+            return await fn(this.getClient());
         } finally {
             this.currentLevel--;
-
-            if (this.isRoot()) {
-                await this.commitOrRollback();
-            }
         }
+    }
+
+    private async runFn<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+        try {
+            return await this.withLevelAdjustment(fn);
+        } catch (e) {
+            this.abort();
+            throw e;
+        }
+    }
+
+    private async enterSavepoint(level: number): Promise<void> {
+        await this.getClient().query(`SAVEPOINT savepoint_${level}`);
+    }
+
+    private async rollbackToSavepoint(level: number): Promise<void> {
+        await this.getClient().query(
+            `ROLLBACK TO SAVEPOINT savepoint_${level}`
+        );
     }
 
     private isRoot(): boolean {
@@ -189,6 +199,10 @@ export class Transaction {
         } else {
             await client.query("COMMIT");
         }
+    }
+
+    private async annihilate(): Promise<void> {
+        await Transaction.clientCleanUp?.(this.originalClient);
     }
 
     public getClient(): pg.Client {

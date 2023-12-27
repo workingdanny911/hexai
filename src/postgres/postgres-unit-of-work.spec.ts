@@ -1,11 +1,4 @@
-import {
-    afterAll,
-    beforeAll,
-    beforeEach,
-    describe,
-    expect,
-    test,
-} from "vitest";
+import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import * as pg from "pg";
 import _ from "lodash";
 
@@ -16,66 +9,41 @@ import {
 } from "Hexai/infra";
 import { DB_URL } from "Hexai/config";
 import { postgresUnitOfWork } from "./postgres-unit-of-work";
-import {
-    createClient,
-    createDatabase,
-    createPrivilegedClient,
-    dropDatabase,
-    getDatabaseName,
-} from "./helpers";
+import { DatabaseManager, replaceDatabaseName, TableManager } from "./helpers";
 
-async function insert(client: pg.Client, id: number): Promise<void> {
-    await client.query(`INSERT INTO _test VALUES ($1);`, [id]);
-}
-
-async function exists(client: pg.Client, id: number): Promise<boolean> {
-    const result = await client.query(
-        `SELECT COUNT(*) FROM _test WHERE id = $1;`,
-        [id]
-    );
-    return result.rows[0].count > 0;
-}
-
-async function count(client: pg.Client): Promise<number> {
-    const result = await client.query(`SELECT COUNT(*) FROM _test;`);
-    return parseInt(result.rows[0].count);
-}
-
-async function getTxid(client: pg.Client): Promise<string> {
-    const result = await client.query(`SELECT txid_current();`);
-    return result.rows[0].txid_current;
-}
+const DATABASE = "test_hexai__uow";
+const TABLE = "_test";
+const URL = replaceDatabaseName(DATABASE, DB_URL);
 
 describe("PostgreSQL unit of work", () => {
-    let privilegedConn: pg.Client;
-    let conn: pg.Client;
-    const database = getDatabaseName(DB_URL);
-    postgresUnitOfWork.bind(createClient, (client) => client.end());
+    const dbManager = new DatabaseManager(replaceDatabaseName("postgres", URL));
+    const conn = new pg.Client(URL);
+    const tableManager = new TableManager(conn);
+    postgresUnitOfWork.bind(
+        () => new pg.Client(URL),
+        (client) => client.end()
+    );
     const uow = postgresUnitOfWork;
 
     beforeAll(async () => {
-        privilegedConn = await createPrivilegedClient();
-        await dropDatabase(database, privilegedConn);
-        await createDatabase(database, privilegedConn);
+        await dbManager.createDatabase(DATABASE);
+        await tableManager.createTable(TABLE, [
+            {
+                name: "id",
+                property: "INT",
+            },
+        ]);
 
-        conn = await createClient();
-        await conn.query(`DROP TABLE IF EXISTS _test;`);
-        await conn.query(`
-            CREATE TABLE _test (
-                id INT
-            );
-        `);
-    });
+        return async () => {
+            await tableManager.close();
 
-    afterAll(async () => {
-        await conn.end();
-
-        await dropDatabase(database, privilegedConn);
-        await privilegedConn.end();
+            await dbManager.dropDatabase(DATABASE);
+            await dbManager.close();
+        };
     });
 
     beforeEach(async () => {
-        await conn.query(`TRUNCATE TABLE _test;`);
+        await tableManager.truncateTable(TABLE);
     });
 
     test("getClient() outside of uow throws error", async () => {
@@ -242,4 +210,36 @@ describe("PostgreSQL unit of work", () => {
             { isolationLevel }
         );
     });
+
+    test("anniehilating client", async () => {
+        let client!: pg.Client;
+
+        await uow.wrap(async () => {
+            client = uow.getClient();
+        });
+
+        await expect(getTxid(client)).rejects.toThrowError(/.*closed.*/);
+    });
 });
+
+async function insert(client: pg.Client, id: number): Promise<void> {
+    await client.query(`INSERT INTO ${TABLE} VALUES ($1);`, [id]);
+}
+
+async function exists(client: pg.Client, id: number): Promise<boolean> {
+    const result = await client.query(
+        `SELECT COUNT(*) FROM ${TABLE} WHERE id = $1;`,
+        [id]
+    );
+    return result.rows[0].count > 0;
+}
+
+async function count(client: pg.Client): Promise<number> {
+    const result = await client.query(`SELECT COUNT(*) FROM ${TABLE};`);
+    return parseInt(result.rows[0].count);
+}
+
+async function getTxid(client: pg.Client): Promise<string> {
+    const result = await client.query(`SELECT txid_current();`);
+    return result.rows[0].txid_current;
+}

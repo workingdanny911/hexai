@@ -8,13 +8,16 @@ import {
 } from "./types";
 import { Transaction } from "./transaction";
 
-function bind(factory: ClientFactory, cleanUp?: ClientCleanUp) {
+function bind(factory: ClientFactory, cleanUp?: ClientCleanUp): void {
     Transaction.setClientFactory(factory);
-    Transaction.setClientCleanUp(cleanUp);
+
+    if (cleanUp) {
+        Transaction.setClientCleanUp(cleanUp);
+    }
 }
 
 function getClient(): pg.Client {
-    const current = Transaction.getCurrentTransaction();
+    const current = Transaction.getCurrent();
 
     if (!current) {
         throw new Error("Unit of work not started");
@@ -27,11 +30,11 @@ async function wrap<T = unknown>(
     fn: (client: pg.Client) => Promise<T>,
     options: Partial<PostgresTransactionOptions> = {}
 ): Promise<T> {
-    const transaction = Transaction.getCurrentTransaction();
+    const transaction = Transaction.getCurrent();
     const startNew = options?.propagation === Propagation.NEW;
 
     if (!transaction || startNew) {
-        return Transaction.startNewTransaction(fn, options);
+        return Transaction.startNew(fn, options);
     }
 
     transaction.setOptions(options);

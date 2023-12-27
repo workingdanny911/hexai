@@ -1,5 +1,226 @@
-import { DB_URL } from "Hexai/config";
 import * as pg from "pg";
+
+import { DB_URL } from "Hexai/config";
+
+export class DatabaseWrapper {
+    protected client: pg.Client;
+
+    public getClient(): pg.Client {
+        return this.client;
+    }
+
+    constructor(urlOrClient: string | pg.Client) {
+        if (typeof urlOrClient === "string") {
+            this.client = new pg.Client({
+                connectionString: urlOrClient,
+            });
+        } else {
+            this.client = urlOrClient;
+        }
+    }
+
+    protected async withClient<T = unknown>(
+        work: (client: pg.Client) => Promise<T>
+    ): Promise<T> {
+        await ensureConnection(this.client);
+        return work(this.client);
+    }
+
+    public async query<R = any>(
+        query: string,
+        params?: any[]
+    ): Promise<Array<R>> {
+        const result = await this.withClient((client) =>
+            client.query(query, params)
+        );
+        return result.rows;
+    }
+
+    public async close(): Promise<void> {
+        await this.client.end();
+    }
+}
+
+export class DatabaseManager extends DatabaseWrapper {
+    public async createDatabase(name: string): Promise<void> {
+        const exists = await this.query(
+            `SELECT 1 FROM pg_database WHERE datname = '${name}'`
+        );
+
+        if (exists.length === 0) {
+            await this.client.query(`CREATE DATABASE ${name}`);
+        }
+    }
+
+    public async dropDatabase(name: string): Promise<void> {
+        await this.query(`DROP DATABASE IF EXISTS ${name}`);
+    }
+}
+
+export class MigrationManager extends DatabaseWrapper {
+    public tableManager: TableManager;
+    private static readonly MIGRATION_TABLE: [
+        string,
+        {
+            name: string;
+            property: string;
+        }[],
+    ] = [
+        "hexai__migrations",
+        [
+            {
+                name: "name",
+                property: "VARCHAR(255) NOT NULL",
+            },
+            {
+                name: "applied_at",
+                property: "TIMESTAMP NOT NULL DEFAULT NOW()",
+            },
+        ],
+    ];
+
+    constructor(urlOrClient: string | pg.Client) {
+        super(urlOrClient);
+
+        this.tableManager = new TableManager(this.client);
+    }
+
+    public async ensureMigrationTableCreated(): Promise<void> {
+        const exists = await this.tableManager.tableExists(
+            MigrationManager.MIGRATION_TABLE[0]
+        );
+        if (exists) {
+            return;
+        }
+
+        await this.tableManager.createTable(
+            ...MigrationManager.MIGRATION_TABLE
+        );
+    }
+
+    public async getAppliedMigrations(): Promise<string[]> {
+        const result = await this.query(
+            `SELECT name FROM hexai__migrations ORDER BY applied_at ASC;`
+        );
+
+        return result.map((row) => row.name);
+    }
+
+    public async applyMigrations(
+        migrations: Array<{
+            name: string;
+            sql: string;
+        }>
+    ): Promise<void> {
+        const client = this.getClient();
+
+        await runInsideTransaction(client, async () => {
+            for (const migration of migrations) {
+                await Promise.all([
+                    this.query(migration.sql),
+                    this.markMigrationsAsApplied(migration.name),
+                ]);
+            }
+        });
+    }
+
+    private async markMigrationsAsApplied(
+        ...migrations: string[]
+    ): Promise<void> {
+        for (const migration of migrations) {
+            await this.query(
+                `INSERT INTO hexai__migrations (name) VALUES ($1);`,
+                [migration]
+            );
+        }
+    }
+}
+
+export class TableManager extends DatabaseWrapper {
+    public async getTableSchema(tableName: string): Promise<
+        Array<{
+            column: string;
+            type: string;
+        }>
+    > {
+        const result = await this.query(`
+            SELECT
+                column_name AS column,
+                data_type AS type
+            FROM information_schema.columns
+            WHERE table_name = '${tableName}';
+        `);
+
+        return result.map((row) => ({
+            column: row.column,
+            type: row.type,
+        }));
+    }
+
+    public async tableExists(tableName: string): Promise<boolean> {
+        const result = await this.query(`
+            SELECT
+                table_name
+            FROM information_schema.tables
+            WHERE table_name = '${tableName}';
+        `);
+
+        return result.length > 0;
+    }
+
+    public async createTable(
+        name: string,
+        columns: Array<{
+            name: string;
+            property: string;
+        }>
+    ): Promise<void> {
+        if (await this.tableExists(name)) {
+            return;
+        }
+
+        const query = `
+            CREATE TABLE ${name} (
+                ${columns
+                    .map((column) => `${column.name} ${column.property}`)
+                    .join(", ")}
+            );
+        `;
+
+        await this.query(query);
+    }
+
+    public async dropTable(name: string): Promise<void> {
+        await this.query(`DROP TABLE IF EXISTS ${name};`);
+    }
+
+    public async truncateTable(name: string): Promise<void> {
+        await this.query(`TRUNCATE TABLE ${name} RESTART IDENTITY CASCADE;`);
+    }
+
+    public async truncateAllTables(): Promise<void> {
+        const tables = await this.getTableNames();
+
+        await Promise.all(tables.map((table) => this.truncateTable(table)));
+    }
+
+    public async dropAllTables(): Promise<void> {
+        const tables = await this.getTableNames();
+
+        await Promise.all(tables.map((table) => this.dropTable(table)));
+    }
+
+    private async getTableNames(): Promise<string[]> {
+        const result = await this.query(`
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_type = 'BASE TABLE';
+        `);
+
+        return result.map((row) => row.table_name);
+    }
+}
 
 export function getDatabaseName(url?: string): string {
     return (url || DB_URL).match(/([\w_])+$/)![0];
@@ -9,106 +230,30 @@ export function replaceDatabaseName(database: string, url?: string): string {
     return (url || DB_URL).replace(/([\w_])+$/, database);
 }
 
-export async function createClient(url?: string): Promise<pg.Client> {
-    const client = new pg.Client({
-        connectionString: url || DB_URL,
-    });
-    await client.connect();
-    return client;
-}
-
-export async function createPrivilegedClient(url?: string): Promise<pg.Client> {
-    const client = new pg.Client({
-        connectionString: replaceDatabaseName("postgres", url),
-    });
-    await client.connect();
-    return client;
-}
-
-export async function createDatabase(
-    name?: string,
-    client?: pg.Client
-): Promise<void> {
-    await withClient(async (client) => {
-        const exists = await client.query(
-            `SELECT 1 FROM pg_database WHERE datname = '${
-                name || getDatabaseName()
-            }'`
-        );
-
-        if (exists.rows.length === 0) {
-            await client.query(`CREATE DATABASE ${name || getDatabaseName()}`);
-        }
-    }, client ?? createPrivilegedClient);
-}
-
-export async function dropDatabase(
-    name?: string,
-    client?: pg.Client
-): Promise<void> {
-    await withClient(async (client) => {
-        await client.query(
-            `DROP DATABASE IF EXISTS ${name || getDatabaseName()}`
-        );
-    }, client ?? createPrivilegedClient);
-}
-
-async function withClient<T = unknown>(
-    work: (client: pg.Client) => Promise<T>,
-    clientOrFactory: pg.Client | (() => Promise<pg.Client>)
+export async function runInsideTransaction<T = unknown>(
+    client: pg.Client,
+    fn: (client: pg.Client) => Promise<T>
 ): Promise<T> {
-    let isLocallyCreated = false;
-    let client: pg.Client;
-
-    if (typeof clientOrFactory === "function") {
-        client = await clientOrFactory();
-        isLocallyCreated = true;
-    } else {
-        client = clientOrFactory;
-    }
+    await client.query("BEGIN");
 
     try {
-        return await work(client);
-    } finally {
-        if (isLocallyCreated) {
-            await client.end();
-        }
+        const result = await fn(client);
+        await client.query("COMMIT");
+        return result;
+    } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
     }
 }
 
-export async function createMigrationsTable(client?: pg.Client): Promise<void> {
-    await withClient(async (client) => {
-        const queryExists = await client.query(`
-        SELECT 1 FROM information_schema.tables
-        WHERE table_name = 'hexai__migrations';
-    `);
-
-        if (queryExists.rows.length > 0) {
-            return;
+export async function ensureConnection(client: pg.Client): Promise<void> {
+    try {
+        await client.connect();
+    } catch (e) {
+        if ((e as Error).message.includes("already")) {
+            // ignore
+        } else {
+            throw e;
         }
-
-        await client.query(`
-        CREATE TABLE hexai__migrations (
-            name VARCHAR(255) NOT NULL,
-            applied_at TIMESTAMP NOT NULL DEFAULT NOW()
-        );
-    `);
-    }, client ?? createClient);
-}
-
-export async function getAppliedMigrations(
-    client?: pg.Client
-): Promise<string[]> {
-    return withClient(async (client) => {
-        const result = await client.query(
-            `SELECT name FROM hexai__migrations ORDER BY applied_at ASC;`
-        );
-        return result.rows.map((row) => row.name);
-    }, client ?? createClient);
-}
-
-export async function deleteMigrationsTable(client?: pg.Client): Promise<void> {
-    await withClient(async (client) => {
-        await client.query(`DROP TABLE IF EXISTS hexai__migrations;`);
-    }, client ?? createClient);
+    }
 }
