@@ -4,8 +4,8 @@
     "description": "Hexai is a lightweight hexagonal architecture library.",
     "main": "index.js",
     "scripts": {
-        "test": "lerna run test",
-        "build": "lerna run build"
+        "test": "pnpm -F \"*\" -F ./packages/_template test",
+        "build": "pnpm -F \"*\" -F ./packages/_template build"
     },
     "author": "",
     "license": "ISC",
@@ -14,12 +14,15 @@
         "packages/*"
     ],
     "devDependencies": {
+        "@types/lodash": "^4.14.202",
+        "@types/node": "^20.10.5",
         "@typescript-eslint/eslint-plugin": "^6.10.0",
         "@typescript-eslint/parser": "^6.10.0",
         "dotenv": "^16.3.1",
         "eslint": "^8.53.0",
-        "lerna": "^6.6.2",
         "prettier": "^3.0.3",
+        "ts-toolbelt": "^9.6.0",
+        "tsc-alias": "^1.8.8",
         "typescript": "^5.2.2",
         "vite-tsconfig-paths": "^4.2.1",
         "vitest": "0.34.6"
