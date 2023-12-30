@@ -14,13 +14,9 @@
     },
     "scripts": {
         "test": "vitest",
-        "build": "tsc -p ./tsconfig.build.json && tsc-alias",
-        "link:core": "yarn workspace @hexai/core build && yarn add ./packages/core"
+        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
     },
     "dependencies": {
-        "@hexai/core": "^0.1.0"
-    },
-    "devDependencies": {
-        "tsc-alias": "^1.8.8"
+        "@hexai/core": "workspace:*"
     }
 }
