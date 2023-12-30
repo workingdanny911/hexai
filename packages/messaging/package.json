@@ -1,7 +1,7 @@
 {
-    "name": "@hexai/postgres",
+    "name": "@hexai/messaging",
     "version": "0.1.0",
-    "description": "PostgreSQL support for hexai",
+    "description": "Messaging module for heaxi",
     "author": "Sangwoo Hyun <workingdanny@naver.com>",
     "license": "ISC",
     "files": [
@@ -18,10 +18,9 @@
     },
     "dependencies": {
         "@hexai/core": "workspace:*",
-        "lodash": "^4.17.21",
-        "pg": "^8.11.3"
+        "lodash": "^4.17.21"
     },
     "devDependencies": {
-        "@types/pg": "^8.10.9"
+        "@types/lodash": "^4.14.202"
     }
 }

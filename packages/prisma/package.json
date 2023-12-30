@@ -17,7 +17,7 @@
         "build": "tsc -p ./tsconfig.build.json && tsc-alias"
     },
     "dependencies": {
-        "@hexai/core": "^0.1.0",
+        "@hexai/core": "workspace:*",
         "@prisma/client": "^5.7.1"
     },
     "devDependencies": {
