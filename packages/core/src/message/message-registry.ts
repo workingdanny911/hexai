@@ -1,6 +1,6 @@
 import { ObjectRegistry } from "@/utils";
 
-import { AnyMessage, MessageClass, MessageHeader } from "./message";
+import { AnyMessage, MessageClass, MessageHeaders } from "./message";
 
 export class MessageRegistry {
     private readonly registry = new ObjectRegistry();
@@ -20,7 +20,7 @@ export class MessageRegistry {
     }
 
     public dehydrate<T extends AnyMessage = AnyMessage>(
-        header: MessageHeader,
+        header: MessageHeaders,
         body: Record<string, unknown>
     ): T {
         const { type, schemaVersion } = header;

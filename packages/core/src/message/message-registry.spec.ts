@@ -4,7 +4,7 @@ import { DummyEvent } from "@/test";
 import { isMessageClass } from "@/helpers";
 
 import { MessageRegistry } from "./message-registry";
-import { Message, MessageClass, MessageHeader } from "./message";
+import { Message, MessageClass, MessageHeaders } from "./message";
 
 describe("message registry", () => {
     let messageRegistry: MessageRegistry;
@@ -15,9 +15,9 @@ describe("message registry", () => {
         counter = 0;
     });
 
-    function header(
-        fields: { type: string } & Partial<MessageHeader>
-    ): MessageHeader {
+    function headers(
+        fields: { type: string } & Partial<MessageHeaders>
+    ): MessageHeaders {
         return {
             id: fields.id ?? `message-id-${++counter}`,
             type: fields.type,
@@ -31,10 +31,10 @@ describe("message registry", () => {
     }
 
     function dehydrate(
-        header: MessageHeader,
+        headers: MessageHeaders,
         body: Record<string, unknown> = {}
     ): Message {
-        return messageRegistry.dehydrate(header, body);
+        return messageRegistry.dehydrate(headers, body);
     }
 
     function expectMessageClass(cls: MessageClass, message: Message): void {
@@ -47,7 +47,7 @@ describe("message registry", () => {
 
         register(E);
 
-        expectMessageClass(E, dehydrate(header({ type: "event-type" })));
+        expectMessageClass(E, dehydrate(headers({ type: "event-type" })));
     });
 
     test("with 2 message types", () => {
@@ -57,19 +57,19 @@ describe("message registry", () => {
         register(A);
         register(B);
 
-        expectMessageClass(A, dehydrate(header({ type: "event-a" })));
-        expectMessageClass(B, dehydrate(header({ type: "event-b" })));
+        expectMessageClass(A, dehydrate(headers({ type: "event-a" })));
+        expectMessageClass(B, dehydrate(headers({ type: "event-b" })));
     });
 
     test("preserves header fields", () => {
         const event = DummyEvent.create();
-        const { header } = event.serialize();
+        const { headers } = event.serialize();
 
         register(DummyEvent);
 
-        const result: DummyEvent = dehydrate(header) as any;
+        const result: DummyEvent = dehydrate(headers) as any;
 
-        expect(event.serialize().header).toEqual(result.serialize().header);
+        expect(event.serialize().headers).toEqual(result.serialize().headers);
     });
 
     test("registering same message type twice - not versioned", () => {
@@ -103,27 +103,27 @@ describe("message registry", () => {
         register(E2);
         register(E3_1);
 
-        expectMessageClass(E1, dehydrate(header({ type: "same-type" })));
+        expectMessageClass(E1, dehydrate(headers({ type: "same-type" })));
         expectMessageClass(
             E2,
-            dehydrate(header({ type: "same-type", schemaVersion: 2 }))
+            dehydrate(headers({ type: "same-type", schemaVersion: 2 }))
         );
         expectMessageClass(
             E3_1,
-            dehydrate(header({ type: "same-type", schemaVersion: "3.1" }))
+            dehydrate(headers({ type: "same-type", schemaVersion: "3.1" }))
         );
     });
 
     test("when trying to dehydrate to message type that is not registered", () => {
         expect(() =>
-            dehydrate(header({ type: "not-registered-event-type" }))
+            dehydrate(headers({ type: "not-registered-event-type" }))
         ).toThrowError(/.*'not-registered-event-type'.*not registered.*/);
     });
 
     test("dehydration with data", () => {
         register(MessageWithData);
 
-        const dehydrated = dehydrate(header({ type: "message-with-data" }), {
+        const dehydrated = dehydrate(headers({ type: "message-with-data" }), {
             n: 1,
             s: "string",
             o: { object: null },

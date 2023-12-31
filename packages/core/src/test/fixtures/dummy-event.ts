@@ -1,6 +1,6 @@
 import _ from "lodash";
 
-import { Event, MessageHeader } from "@/message";
+import { Event, MessageHeaders } from "@/message";
 
 export class DummyEvent extends Event<Record<never, never>> {
     static type = "test.dummy-event";
@@ -15,13 +15,13 @@ export class DummyEvent extends Event<Record<never, never>> {
 
     public static from(
         _: Record<never, never>,
-        header?: MessageHeader
+        headers?: MessageHeaders
     ): DummyEvent {
-        return new this(header);
+        return new this(headers);
     }
 
-    constructor(header?: MessageHeader) {
-        super({}, header);
+    constructor(headers?: MessageHeaders) {
+        super({}, headers);
     }
 
     protected serializePayload(): Record<never, never> {

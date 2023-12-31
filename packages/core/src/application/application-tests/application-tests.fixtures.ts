@@ -173,8 +173,8 @@ export class EchoEventHandler implements EventHandler {
     async handle(event: Event): Promise<void> {
         if (EchoEventHandler.number < this.number) {
             const messageClass = event.constructor as MessageClass;
-            const { header, payload } = event.serialize();
-            const newEvent = messageClass.from(payload, header) as Event;
+            const { headers, payload } = event.serialize();
+            const newEvent = messageClass.from(payload, headers) as Event;
 
             await this.eventPublisher.publish([newEvent]);
 

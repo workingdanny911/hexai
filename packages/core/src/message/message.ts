@@ -7,7 +7,7 @@ export interface MessageMeta {
 
 type Version = string | number | undefined;
 
-export interface MessageHeader {
+interface CommonMessageHeaders {
     id: string;
     type: string;
     schemaVersion: Version;
@@ -17,10 +17,23 @@ export interface MessageHeader {
     returnAddress?: string;
 }
 
+export interface MessageHeaders extends CommonMessageHeaders {
+    [key: string]: unknown;
+}
+
+type ExtraHeaderField = Exclude<
+    keyof MessageHeaders,
+    keyof CommonMessageHeaders
+>;
+
+type KnownHeaderOrUnknown<T> = T extends keyof CommonMessageHeaders
+    ? CommonMessageHeaders[T]
+    : unknown;
+
 export abstract class Message<
     T extends Record<string, any> = Record<string, unknown>,
 > {
-    protected readonly header: MessageHeader;
+    protected headers!: MessageHeaders;
 
     public static getSchemaVersion(): Version {
         return (this as any).schemaVersion ?? undefined;
@@ -30,17 +43,17 @@ export abstract class Message<
         return (this as any).type ?? this.name;
     }
 
-    protected static newHeader(): MessageHeader {
+    protected static newHeader(): MessageHeaders {
         return generateHeaderFor(this as any);
     }
 
     public static from(
         rawPayload: Record<string, unknown>,
-        header?: MessageHeader
+        headers?: Record<string, unknown>
     ): Message {
         const clazz = this as any;
         const payload = clazz.deserializeRawPayload(rawPayload);
-        return new clazz(payload, header);
+        return new clazz(payload, headers);
     }
 
     protected static deserializeRawPayload(rawPayload: any): any {
@@ -49,13 +62,17 @@ export abstract class Message<
 
     constructor(
         protected readonly payload: T,
-        header?: MessageHeader
+        headers?: MessageHeaders
     ) {
-        if (!header) {
-            this.header = (this.constructor as any).newHeader();
-        } else {
-            this.header = header;
-        }
+        this.headers = headers ?? (this.constructor as any).newHeader();
+    }
+
+    public setHeader(field: ExtraHeaderField, value: unknown): void {
+        this.headers[field] = value;
+    }
+
+    public getHeader<T extends string>(field: T): KnownHeaderOrUnknown<T> {
+        return this.headers[field] as KnownHeaderOrUnknown<T>;
     }
 
     public getPayload(): T {
@@ -63,46 +80,46 @@ export abstract class Message<
     }
 
     public getMessageId(): string {
-        return this.header.id;
+        return this.headers.id;
     }
 
     public getMessageType(): string {
-        return this.header.type;
+        return this.getHeader("type");
     }
 
     public getSchemaVersion(): Version {
-        return this.header.schemaVersion;
+        return this.getHeader("schemaVersion");
     }
 
     public getTimestamp(): Date {
-        return this.header.createdAt;
+        return this.getHeader("createdAt");
     }
 
-    public setCause(message: Message): void {
+    public setPropagation(message: Message): void {
         this.setCausation(message);
         this.setCorrelation(message);
     }
 
     private setCausation(message: Message): void {
-        this.header.causation = {
+        this.headers.causation = {
             id: message.getMessageId(),
             type: message.getMessageType(),
         };
     }
 
     public getCausation(): MessageMeta | undefined {
-        return this.header.causation;
+        return this.getHeader("causation");
     }
 
     private setCorrelation(message: Message): void {
-        this.header.correlation = message.getCorrelation() ?? {
+        this.headers.correlation = message.getCorrelation() ?? {
             id: message.getMessageId(),
             type: message.getMessageType(),
         };
     }
 
     public getCorrelation(): MessageMeta | undefined {
-        return this.header.correlation;
+        return this.getHeader("correlation");
     }
 }
 
@@ -115,7 +132,7 @@ export type PayloadTypeOfMessage<T extends AnyMessage> = T extends Message<
 export type MessageClass<T extends AnyMessage = AnyMessage> = {
     getSchemaVersion(): Version;
     getType(): string;
-    from: (rawPayload: any, header?: MessageHeader) => T;
+    from: (rawPayload: any, header?: MessageHeaders) => T;
     new (...args: any[]): T;
 };
 
@@ -124,7 +141,7 @@ function generateHeaderFor(
     extra: {
         returnAddress?: string;
     } = {}
-): MessageHeader {
+): MessageHeaders {
     return {
         id: uuid(),
         type: cls.getType(),

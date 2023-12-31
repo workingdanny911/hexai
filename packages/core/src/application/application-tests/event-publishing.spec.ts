@@ -82,7 +82,7 @@ describe("event publishing", () => {
     test("when correlation is set on the command", async () => {
         const cause = DummyEvent.create();
         const command = new CreateCounterRequest("counter-id");
-        command.setCause(cause);
+        command.setPropagation(cause);
 
         await app.execute(command);
 
@@ -92,7 +92,7 @@ describe("event publishing", () => {
     test("when correlation is set on the event", async () => {
         const cause = DummyEvent.create();
         const counterCreated = await setUpCounter();
-        counterCreated.setCause(cause);
+        counterCreated.setPropagation(cause);
 
         await app.handle(counterCreated);
 

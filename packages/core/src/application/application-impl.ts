@@ -50,7 +50,7 @@ class OutboxEventPublisherProxy implements OutboxEventPublisher {
     ) {}
 
     public async publish(events: Array<Event>): Promise<void> {
-        events.forEach((event) => event.setCause(this.causeMessage));
+        events.forEach((event) => event.setPropagation(this.causeMessage));
         await this.eventPublisher.publish(events);
         this.reporter(events);
     }
