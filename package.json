@@ -4,8 +4,8 @@
     "description": "Hexai is a lightweight hexagonal architecture library.",
     "main": "index.js",
     "scripts": {
-        "test": "pnpm -F \"*\" -F ./packages/_template test",
-        "build": "pnpm -F \"*\" -F ./packages/_template build"
+        "test": "pnpm test",
+        "build": "pnpm build"
     },
     "author": "",
     "license": "ISC",
