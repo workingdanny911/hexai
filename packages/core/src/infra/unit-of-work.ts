@@ -26,4 +26,11 @@ export interface UnitOfWork<
     ): Promise<T>;
 }
 
+export type OptionsOfUnitOfWork<U extends UnitOfWork> = U extends UnitOfWork<
+    any,
+    infer O
+>
+    ? O
+    : never;
+
 export class UnitOfWorkAbortedError extends Error {}

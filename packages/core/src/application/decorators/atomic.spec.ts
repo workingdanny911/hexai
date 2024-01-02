@@ -16,18 +16,12 @@ describe("atomic", () => {
     test("when target instance has no unit of work", async () => {
         class Target {
             @Atomic()
-            async do(): Promise<void> {
-                await counterRepo.add(
-                    Counter.create(CounterId.from("counter-id"))
-                );
-
-                throw new Error("rollback");
-            }
+            async do(): Promise<void> {}
         }
 
-        await expect(new Target().do()).rejects.toThrow("rollback");
-
-        expect(await counterRepo.count()).toBe(1);
+        await expect(new Target().do()).rejects.toThrowError(
+            "UnitOfWorkHolder not implemented"
+        );
     });
 
     test("when target instance has unit of work", async () => {

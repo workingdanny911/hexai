@@ -1,7 +1,9 @@
 import { UnitOfWorkHolder } from "@/helpers";
-import { BaseUnitOfWorkOptions } from "@/infra";
+import { OptionsOfUnitOfWork, UnitOfWork } from "@/infra";
 
-export function Atomic(options?: BaseUnitOfWorkOptions) {
+export function Atomic<U extends UnitOfWork = UnitOfWork>(
+    options?: OptionsOfUnitOfWork<U>
+) {
     return function (
         target: any,
         propertyKey: string,
@@ -10,7 +12,7 @@ export function Atomic(options?: BaseUnitOfWorkOptions) {
         const originalMethod = descriptor.value;
 
         descriptor.value = async function (
-            this: UnitOfWorkHolder,
+            this: UnitOfWorkHolder<U>,
             ...args: any[]
         ) {
             if ("getUnitOfWork" in this) {
@@ -20,7 +22,7 @@ export function Atomic(options?: BaseUnitOfWorkOptions) {
                     options
                 );
             } else {
-                return originalMethod.apply(this, args);
+                throw new Error("UnitOfWorkHolder not implemented");
             }
         };
 
