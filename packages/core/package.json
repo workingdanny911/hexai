@@ -29,6 +29,11 @@
             "import": "./dist/infra/index.js",
             "require": "./dist/infra/index.js"
         },
+        "./injection": {
+            "types": "./dist/injection/index.d.ts",
+            "import": "./dist/injection/index.js",
+            "require": "./dist/injection/index.js"
+        },
         "./message": {
             "types": "./dist/message/index.d.ts",
             "import": "./dist/message/index.js",
