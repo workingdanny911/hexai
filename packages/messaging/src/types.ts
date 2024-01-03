@@ -38,13 +38,13 @@ export interface MessageSourcePoller extends Lifecycle {
 }
 
 export interface MessageFilter<M> {
-    (message: M): boolean | Promise<boolean>;
+    select(message: M): boolean | Promise<boolean>;
 }
 
-export interface MessageTransformer<I, O> {
-    (message: I): O | Promise<O>;
-}
+export type MessageFilterFunction<M> = MessageFilter<M>["select"];
 
 export interface MessageHandler<I, O> {
-    (message: I): O | Promise<O>;
+    handle(message: I): O | Promise<O>;
 }
+
+export type MessageHandlerFunction<I, O> = MessageHandler<I, O>["handle"];

@@ -1,27 +1,27 @@
 import { Message } from "@hexai/core/message";
 
-import { MessageHandler, SubscribableMessageChannel } from "@/types";
+import { SubscribableMessageChannel } from "@/types";
 
 export class DirectChannel implements SubscribableMessageChannel {
-    private handler?: MessageHandler<Message, unknown>;
+    private callback?: (message: Message) => void | Promise<void>;
 
-    subscribe(handler: MessageHandler<Message, unknown>): void {
-        if (this.handler) {
+    subscribe(callback: (message: Message) => void | Promise<void>): void {
+        if (this.callback) {
             throw new Error(
                 "only one subscriber can subscribe to a direct channel"
             );
         }
 
-        this.handler = handler;
+        this.callback = callback;
     }
 
     async send(message: Message): Promise<boolean> {
-        if (!this.handler) {
+        if (!this.callback) {
             throw new Error("no subscriber to send message to");
         }
 
         try {
-            await this.handler(message);
+            await this.callback(message);
             return true;
         } catch {
             return false;

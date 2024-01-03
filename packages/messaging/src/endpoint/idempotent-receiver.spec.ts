@@ -2,13 +2,23 @@ import { describe, expect, it, test } from "vitest";
 
 import { ApplicationContextAware } from "@hexai/core/injection";
 import { BaseApplicationContext } from "@hexai/core/application";
+import { UnitOfWork } from "@hexai/core/infra";
+import { IdempotencySupport } from "@/types";
 
-class IdempotentReceiver<C extends BaseApplicationContext>
-    implements ApplicationContextAware<C>
+class IdempotentReceiver<
+    U extends UnitOfWork<any, any>,
+    C extends BaseApplicationContext<U>,
+> implements ApplicationContextAware<C>
 {
-    private applicationContext!: C;
+    protected applicationContext!: C;
 
-    setApplicationContext(context: C): void {
+    constructor(
+        protected key: string,
+        protected handler: (message: any) => Promise<void>,
+        protected support: IdempotencySupport
+    ) {}
+
+    public setApplicationContext(context: C): void {
         this.applicationContext = context;
     }
 }

@@ -42,12 +42,6 @@ describe("channel A->B", () => {
         expect(build).toThrowError("output channel already set");
     });
 
-    test("cannot settle without an output channel", () => {
-        const settle = () => MessageFlow.from(inputChannel).settle();
-
-        expect(settle).toThrowError("no output channel");
-    });
-
     test("cannot settle if input channel is not subscribable", () => {
         const pollableChannel: PollableMessageChannel = {
             send: async () => true,
@@ -248,22 +242,6 @@ describe("with message handler", () => {
         expectMessagesSentToBe([messageAfterHandler]);
     });
 
-    test("message transformation after handler", async () => {
-        const messageBeforeHandler = FooMessage.create();
-        const messageAfterHandler = BarMessage.create();
-        const messageAfterTransformer = BazMessage.create();
-
-        await MessageFlow.from(inputChannel)
-            .handle(async () => messageAfterHandler)
-            .transform(() => messageAfterTransformer)
-            .to(outputChannel)
-            .settle()
-            .start();
-
-        await inputChannel.send(messageBeforeHandler);
-        expectMessagesSentToBe([messageAfterTransformer]);
-    });
-
     test("message filter after handler", async () => {
         const messageBeforeHandler = FooMessage.create();
         const messageAfterHandler = BarMessage.create();
@@ -277,30 +255,6 @@ describe("with message handler", () => {
 
         await inputChannel.send(messageBeforeHandler);
         expectMessagesSentToBe([]);
-    });
-
-    it("only accepts a single handler", () => {
-        const build = () =>
-            MessageFlow.from(inputChannel)
-                .handle(() => {})
-                .handle(() => {})
-                .settle();
-
-        expect(build).toThrowError("only one handler");
-    });
-
-    test.todo("multiple handlers", () => {
-        /* channel A->handler */
-        // builder.from(A).handle((message) => console.log(message)).build();
-        /* channel A->handler 1->B */
-        /*            handler 2->C */
-        // builder
-        //     .from(A)
-        //     .handle((message) => console.log('handler 1', message))
-        //         .to(B)
-        //     .handle((message) => console.log('handler 2', message))
-        //         .to(C)
-        //     .build();
     });
 });
 

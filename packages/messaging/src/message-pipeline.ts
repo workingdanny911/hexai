@@ -10,8 +10,9 @@ import {
     Lifecycle,
     MessageChannel,
     MessageFilter,
+    MessageFilterFunction,
     MessageHandler,
-    MessageTransformer,
+    MessageHandlerFunction,
     SubscribableMessageChannel,
 } from "@/types";
 import { Pipe } from "@/pipe";
@@ -20,7 +21,6 @@ import { DirectChannel } from "@/channel";
 export class MessageFlow<I> extends BaseLifecycle {
     private inputChannel: SubscribableMessageChannel;
     private outputChannel?: MessageChannel;
-    private handler?: MessageHandler<I, any>;
     private pipe = Pipe.passThrough<any>();
     private resources: Lifecycle[] = [];
 
@@ -36,8 +36,8 @@ export class MessageFlow<I> extends BaseLifecycle {
     public static from(
         channel: SubscribableMessageChannel | InboundChannelAdapter
     ): MessageFlow<Message> {
+        const resources: Lifecycle[] = [];
         let inputChannel: SubscribableMessageChannel;
-        let resources: Lifecycle[] = [];
 
         if (isSubscribableChannel(channel)) {
             inputChannel = channel;
@@ -64,9 +64,15 @@ export class MessageFlow<I> extends BaseLifecycle {
         return this;
     }
 
-    public filter(filter: MessageFilter<I>): MessageFlow<I> {
+    public filter(
+        filter: MessageFilter<I> | MessageFilterFunction<I>
+    ): MessageFlow<I> {
         const filterPipe = Pipe.from<I, I>((m, { next }) => {
-            if (filter(m)) {
+            if (typeof filter === "function") {
+                filter = { select: filter };
+            }
+
+            if (filter.select(m)) {
                 return next(m);
             }
         });
@@ -75,26 +81,26 @@ export class MessageFlow<I> extends BaseLifecycle {
         return this as any;
     }
 
-    public transform<O>(transformer: MessageTransformer<I, O>): MessageFlow<O> {
-        const transformerPipe = Pipe.from<I, O>(async (m, { next }) => {
-            return next(await transformer(m));
-        });
-
-        this.pipe = this.pipe.extend(transformerPipe);
-
+    public transform<O>(
+        transformer: O extends void
+            ? never
+            : MessageHandler<I, O> | MessageHandlerFunction<I, O>
+    ): MessageFlow<O> {
+        this.handle(transformer);
         return this as any;
     }
 
-    public handle<O>(handler: MessageHandler<I, O>): MessageFlow<O> {
-        if (this.handler) {
-            throw new Error("only one handler can be set");
-        }
-
+    public handle<O>(
+        handler: MessageHandler<I, O> | MessageHandlerFunction<I, O>
+    ): MessageFlow<O> {
         const handlerPipe = Pipe.from<I, O>(async (m, { next }) => {
-            return next(await handler(m));
+            if (typeof handler === "function") {
+                handler = { handle: handler };
+            }
+
+            return next(await handler.handle(m));
         });
 
-        this.handler = handler;
         this.pipe = this.pipe.extend(handlerPipe);
 
         return this as any;
@@ -103,10 +109,6 @@ export class MessageFlow<I> extends BaseLifecycle {
     public settle(): Lifecycle {
         if (!this.inputChannel) {
             throw new Error("no input channel provided");
-        }
-
-        if (!this.outputChannel && !this.handler) {
-            throw new Error("no output channel or handler provided");
         }
 
         return this;
