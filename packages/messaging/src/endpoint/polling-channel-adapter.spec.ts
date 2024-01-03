@@ -1,0 +1,223 @@
+import { beforeEach, describe, expect, it, test, vi } from "vitest";
+import _ from "lodash";
+import { Message } from "@hexai/core/message";
+import { waitForSeveralTicks } from "@hexai/core/test";
+
+import { MessageChannel, MessageSource, MessageSourcePoller } from "@/types";
+import { FooMessage } from "@/test-fixtures";
+import { PollingChannelAdapter } from "./polling-channel-adapter";
+import { BaseLifecycle } from "@/helpers";
+
+describe("PollingChannelAdapter", () => {
+    let messageSource: MessageSourceStub;
+    let poller: MessageSourcePoller;
+    const outputChannel: MessageChannel = {
+        send: vi.fn(),
+    };
+    let adapter: PollingChannelAdapter;
+
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        vi.resetAllMocks();
+
+        messageSource = new MessageSourceStub();
+        messageSource.setReceiveFunction(() => null);
+        poller = new ImmediatelyInvokingPoller();
+        adapter = new PollingChannelAdapter(messageSource, poller, 1);
+    });
+
+    function withPoller(poller: MessageSourcePoller): void {
+        adapter = new PollingChannelAdapter(messageSource, poller, 1);
+    }
+
+    function startAdapter(): Promise<void> {
+        adapter.setOutputChannel(outputChannel);
+        return adapter.start();
+    }
+
+    function expectNumberOfMessagesSentToBe(number: number): void {
+        expect(outputChannel.send).toHaveBeenCalledTimes(number);
+    }
+
+    function expectMessageSentToBe(message: Message): void {
+        expect(outputChannel.send).toHaveBeenCalledWith(message);
+    }
+
+    async function wait(time: number): Promise<void> {
+        return new Promise((resolve) => setTimeout(resolve, time));
+    }
+
+    it("cannot start without an outbound channel", async () => {
+        await expect(adapter.start()).rejects.toThrowError(
+            /output channel required/
+        );
+    });
+
+    it("initializes the message source on start", async () => {
+        const spy = vi.spyOn(messageSource, "start");
+
+        await startAdapter();
+
+        expect(spy).toHaveBeenCalled();
+    });
+
+    it("starts the poller when the message source is initialized", async () => {
+        const messageSourceStart = vi.spyOn(messageSource, "start");
+        const pollerStart = vi.spyOn(poller, "start");
+        messageSourceStart.mockImplementation(async () => {
+            expect(pollerStart).not.toHaveBeenCalled();
+        });
+
+        await startAdapter();
+
+        expect(pollerStart).toHaveBeenCalled();
+    });
+
+    it("cannot stop without starting", async () => {
+        await expect(adapter.stop()).rejects.toThrowError(/not started/);
+    });
+
+    it("gracefully shuts down the poller", async () => {
+        await startAdapter();
+        vi.spyOn(poller, "stop").mockImplementation(async () => {
+            await wait(100);
+        });
+
+        const beforeStop = Date.now();
+        await adapter.stop();
+        const afterStop = Date.now();
+
+        expect(afterStop - beforeStop).toBeGreaterThanOrEqual(100);
+    });
+
+    it("stops the message source after the poller is stopped", async () => {
+        await startAdapter();
+        const messageSourceStop = vi.spyOn(messageSource, "stop");
+        vi.spyOn(poller, "stop").mockImplementation(async () => {
+            expect(messageSourceStop).not.toHaveBeenCalled();
+        });
+
+        await adapter.stop();
+
+        expect(messageSourceStop).toHaveBeenCalled();
+    });
+
+    it("sends messages received from the message source", async () => {
+        const message = FooMessage.create();
+        messageSource.setReceiveFunction(() => message);
+
+        await startAdapter();
+
+        await waitForSeveralTicks();
+        expectNumberOfMessagesSentToBe(1);
+        expectMessageSentToBe(message);
+    });
+
+    it("ignores when message source returns null", async () => {
+        messageSource.setReceiveFunction(() => null);
+
+        await startAdapter();
+
+        expectNumberOfMessagesSentToBe(0);
+    });
+
+    it("does not process messages when stopping", async () => {
+        const timeUnit = 10;
+        messageSource.setReceiveFunction(() => FooMessage.create());
+        withPoller(new IntervalBasedPoller(timeUnit));
+
+        await startAdapter();
+        await wait(timeUnit * 2.5);
+        // should have processed two messages by now
+        await adapter.stop();
+
+        // wait to see if any more messages are processed
+        await wait(timeUnit * 5);
+        expectNumberOfMessagesSentToBe(2);
+    });
+
+    test.each([1, 2, 3])(
+        "max messages per poll",
+        async (maxMessagesPerPoll) => {
+            messageSource.setReceiveFunction(() => FooMessage.create());
+            adapter.setMaxMessagesPerPoll(maxMessagesPerPoll);
+
+            await startAdapter();
+
+            await waitForSeveralTicks();
+            expectNumberOfMessagesSentToBe(maxMessagesPerPoll);
+        }
+    );
+
+    test.each([3, 5, 10])(
+        "when max messages per poll is 0, polls until message source returns null",
+        async (numMessagesInSource) => {
+            const messages = [
+                ..._.times(numMessagesInSource, FooMessage.create),
+                null,
+            ];
+            messageSource.setReceiveFunction(() => messages.shift()!);
+            adapter.setMaxMessagesPerPoll(0);
+
+            await startAdapter();
+
+            await waitForSeveralTicks();
+            expectNumberOfMessagesSentToBe(numMessagesInSource);
+        }
+    );
+});
+
+class MessageSourceStub extends BaseLifecycle implements MessageSource {
+    private doReceive!: () => Message | null;
+
+    public setReceiveFunction(fn: () => Message | null): void {
+        this.doReceive = fn;
+    }
+
+    public async receive(): Promise<Message | null> {
+        return this.doReceive();
+    }
+}
+
+class ImmediatelyInvokingPoller
+    extends BaseLifecycle
+    implements MessageSourcePoller
+{
+    private callback!: () => Promise<void>;
+
+    public async start(): Promise<void> {
+        await super.start();
+        await this.callback();
+    }
+
+    public async stop(): Promise<void> {
+        await super.stop();
+    }
+
+    public onPoll(callback: () => Promise<void>): void {
+        this.callback = callback;
+    }
+}
+
+class IntervalBasedPoller extends BaseLifecycle implements MessageSourcePoller {
+    private callback!: () => Promise<void>;
+    private intervalId!: NodeJS.Timeout;
+
+    constructor(private interval: number) {
+        super();
+    }
+
+    public async start(): Promise<void> {
+        await super.start();
+        this.intervalId = setInterval(this.callback, this.interval);
+    }
+
+    public async stop(): Promise<void> {
+        await super.stop();
+        clearInterval(this.intervalId);
+    }
+
+    public onPoll(callback: () => Promise<void>): void {
+        this.callback = callback;
+    }
+}

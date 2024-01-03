@@ -5,6 +5,9 @@
         "dist",
         "**/*.spec.ts",
         "**/*.test.ts",
-        "**/*.fixtures.ts"
+        "**/*.fixture.ts",
+        "**/*.fixtures.ts",
+        "*-fixture.ts",
+        "*-fixtures.ts"
     ]
 }

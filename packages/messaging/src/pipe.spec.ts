@@ -138,4 +138,17 @@ describe("pipe", () => {
             new Error("error from subscriber")
         );
     });
+
+    test.each([1, "string", null, undefined, {}, []])(
+        "pass-through pipe",
+        async (payload) => {
+            let result!: unknown;
+            const pipe = Pipe.passThrough().extend((payload) => {
+                result = payload;
+            });
+
+            await pipe.send(payload);
+            expect(result).toBe(payload);
+        }
+    );
 });

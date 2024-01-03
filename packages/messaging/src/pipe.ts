@@ -66,6 +66,10 @@ export class Pipe<I, O> {
         private eventChannel = new EventEmitter()
     ) {}
 
+    public static passThrough<I = unknown>(): Pipe<I, I> {
+        return Pipe.from((input, control) => control.next(input));
+    }
+
     public static from<I, O>(pipeFunction: PipeFunction<I, O>): Pipe<I, O> {
         assertIsPipeLike(pipeFunction);
 
