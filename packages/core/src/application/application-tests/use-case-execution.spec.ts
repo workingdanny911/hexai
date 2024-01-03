@@ -15,7 +15,7 @@ import {
     QuzUseCase,
 } from "./application-tests.fixtures";
 
-interface AuthPrincipal {
+interface SecurityContext {
     userId: string;
 }
 
@@ -90,7 +90,7 @@ describe("use case execution", () => {
         expect(quzResponse).toEqual(new QuzUseCase.Response());
     });
 
-    test("when auth filter is set but auth descriptor is not provided", async () => {
+    test("when auth filter is set but auth factor is not provided", async () => {
         const app = builder
             .withUseCase(FooUseCase.Request, FooUseCase, () =>
                 Promise.resolve()
@@ -101,24 +101,24 @@ describe("use case execution", () => {
 
         expectAuthErrorResponse(
             response,
-            "auth principal or factor must be provided."
+            "security context or auth factor must be provided."
         );
     });
 
-    test("when auth principal provided manually", async () => {
+    test("when security context is provided manually", async () => {
         const app = builder
             .withUseCase(FooUseCase.Request, FooUseCase, authFilterStub)
             .build();
 
         const response = await app
-            .withAuthPrincipal({ userId: "anonymous-user-id" })
+            .withSecurityContext({ userId: "anonymous-user-id" })
             .execute(new FooUseCase.Request());
 
         expectAuthErrorResponse(response, "auth validation failed");
 
         await expect(
             app
-                .withAuthPrincipal({ userId: "authenticated-user-id" })
+                .withSecurityContext({ userId: "authenticated-user-id" })
                 .execute(new FooUseCase.Request())
         ).resolves.toEqual(new FooUseCase.Response());
     });
@@ -151,13 +151,13 @@ describe("use case execution", () => {
     });
 });
 
-const authFilterStub: AuthFilter<AuthPrincipal> = async (principal) => {
-    if (principal.userId !== "authenticated-user-id") {
+const authFilterStub: AuthFilter<SecurityContext> = async (securityContext) => {
+    if (securityContext.userId !== "authenticated-user-id") {
         throw new Error("auth validation failed");
     }
 };
 
-const authenticatorStub: Authenticator<string, AuthPrincipal> = async (
+const authenticatorStub: Authenticator<string, SecurityContext> = async (
     factor
 ) => {
     if (factor !== "valid-auth-factor") {

@@ -38,19 +38,15 @@ export type AuthFactorOf<A extends Authenticator> = A extends Authenticator<
     ? Factor
     : never;
 
-export type AuthPrincipalOf<A extends Authenticator> = A extends Authenticator<
-    any,
-    infer Principal
->
-    ? Principal
-    : never;
+export type SecurityContextOf<A extends Authenticator> =
+    A extends Authenticator<any, infer S> ? S : never;
 
 export interface Application<
     Ctx extends BaseApplicationContext,
     Cmds extends L.List,
     Events extends Event,
-    AuthPrincipal = any,
-    TAuthenticator extends Authenticator = Authenticator<any, AuthPrincipal>,
+    SecurityContext = any,
+    TAuthenticator extends Authenticator = Authenticator<any, SecurityContext>,
 > {
     getContext(): Ctx;
     execute<I extends Command>(
@@ -59,10 +55,10 @@ export interface Application<
     handle(event: Events): Promise<void>;
     withAuthFactor(
         factor: AuthFactorOf<TAuthenticator>
-    ): Application<Ctx, Cmds, Events, AuthPrincipal>;
-    withAuthPrincipal(
-        principal: AuthPrincipal
-    ): Application<Ctx, Cmds, Events, AuthPrincipal>;
+    ): Application<Ctx, Cmds, Events, SecurityContext>;
+    withSecurityContext(
+        securityContext: SecurityContext
+    ): Application<Ctx, Cmds, Events, SecurityContext>;
     listen(listener: ApplicationEventListener): void;
     removeListener(listener: ApplicationEventListener): void;
 }

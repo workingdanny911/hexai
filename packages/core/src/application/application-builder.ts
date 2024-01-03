@@ -9,7 +9,7 @@ import { ApplicationImpl } from "./application-impl";
 import { UseCaseFactory } from "./common-types";
 import { EventHandler, EventHandlerMeta } from "./event-handler";
 import { Authenticator, AuthFilter } from "./auth";
-import { Application, AuthPrincipalOf } from "./application";
+import { Application, SecurityContextOf } from "./application";
 
 type WithUseCase<UseCase, App> = App extends ApplicationBuilder<
     infer Ctx,
@@ -38,7 +38,7 @@ export class ApplicationBuilder<
     Ctx extends BaseApplicationContext = any,
     Cmds extends L.List = [],
     Events extends Event = never,
-    AuthPrincipal = any,
+    SecurityContext = any,
 > {
     private context!: Ctx;
     private applicationClass: any = ApplicationImpl;
@@ -46,25 +46,25 @@ export class ApplicationBuilder<
     private eventHandlerFactories = new ObjectRegistry();
     private authFilters = new ObjectRegistry();
     private consumedEventTracker?: ConsumedEventTracker;
-    private authenticator?: Authenticator<any, AuthPrincipal>;
+    private authenticator?: Authenticator<any, SecurityContext>;
 
     public withApplicationClass(
         applicationClass: unknown
-    ): ApplicationBuilder<Ctx, Cmds, Events, AuthPrincipal> {
+    ): ApplicationBuilder<Ctx, Cmds, Events, SecurityContext> {
         this.applicationClass = applicationClass;
         return this as any;
     }
 
     public withContext<T extends Ctx>(
         context: T
-    ): ApplicationBuilder<T, Cmds, Events, AuthPrincipal> {
+    ): ApplicationBuilder<T, Cmds, Events, SecurityContext> {
         this.context = context;
         return this as any;
     }
 
     public withAuthenticator<T extends Authenticator>(
         authenticator: T
-    ): ApplicationBuilder<Ctx, Cmds, Events, AuthPrincipalOf<T>> {
+    ): ApplicationBuilder<Ctx, Cmds, Events, SecurityContextOf<T>> {
         (this as any).authenticator = authenticator;
         return this as any;
     }
@@ -72,8 +72,8 @@ export class ApplicationBuilder<
     public withUseCase<T extends UseCaseFactory<Ctx>>(
         requestClass: C.Class<any[], ReqTypeOfUCFactory<T>>,
         useCaseFactory: T,
-        authFilter?: AuthFilter<AuthPrincipal, ReqTypeOfUCFactory<T>>
-    ): WithUseCase<T, ApplicationBuilder<Ctx, Cmds, Events, AuthPrincipal>> {
+        authFilter?: AuthFilter<SecurityContext, ReqTypeOfUCFactory<T>>
+    ): WithUseCase<T, ApplicationBuilder<Ctx, Cmds, Events, SecurityContext>> {
         if (!isClass(requestClass)) {
             throw new Error(`parameter 'requestClass' must be a class.`);
         }
@@ -166,7 +166,7 @@ export class ApplicationBuilder<
         );
     }
 
-    public build(): Application<Ctx, Cmds, Events, AuthPrincipal> {
+    public build(): Application<Ctx, Cmds, Events, SecurityContext> {
         if (!this.context) {
             throw new Error(
                 "application context must be provided. \n" +

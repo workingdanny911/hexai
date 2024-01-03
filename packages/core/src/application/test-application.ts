@@ -11,9 +11,9 @@ export class TestApplication<
     Ctx extends BaseApplicationContext,
     Cmds extends L.List,
     Events extends Event,
-    AuthPrincipal = any,
-    TAuthenticator extends Authenticator = Authenticator<any, AuthPrincipal>,
-> extends ApplicationImpl<Ctx, Cmds, Events, AuthPrincipal, TAuthenticator> {
+    SecurityContext = any,
+    TAuthenticator extends Authenticator = Authenticator<any, SecurityContext>,
+> extends ApplicationImpl<Ctx, Cmds, Events, SecurityContext, TAuthenticator> {
     public async execute<I extends Command>(
         request: IfSupports<Cmds, I>
     ): Promise<FindResponseType<Cmds, I> | ErrorResponse> {

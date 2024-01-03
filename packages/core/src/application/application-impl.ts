@@ -66,9 +66,9 @@ export class ApplicationImpl<
     Ctx extends BaseApplicationContext,
     Cmds extends L.List,
     Events extends Event,
-    AuthPrincipal = any,
-    TAuthenticator extends Authenticator = Authenticator<any, AuthPrincipal>,
-> implements Application<Ctx, Cmds, Events, AuthPrincipal, TAuthenticator>
+    SecurityContext = any,
+    TAuthenticator extends Authenticator = Authenticator<any, SecurityContext>,
+> implements Application<Ctx, Cmds, Events, SecurityContext, TAuthenticator>
 {
     private eventsPublished = new WeakMap<Message, Array<Event>>();
     protected eventEmitter = new EventEmitter();
@@ -86,7 +86,7 @@ export class ApplicationImpl<
             AuthFilter
         > = new ObjectRegistry(),
         private authenticator?: TAuthenticator,
-        private authPrincipal?: AuthPrincipal,
+        private securityContext?: SecurityContext,
         private authFactor?: AuthFactorOf<TAuthenticator>
     ) {}
 
@@ -136,20 +136,24 @@ export class ApplicationImpl<
             return;
         }
 
-        const authPrincipal = await this.resolveAuthPrincipal();
-        await this.authFilters.createFrom(commandClass, authPrincipal, command);
+        const securityContext = await this.resolveSecurityContext();
+        await this.authFilters.createFrom(
+            commandClass,
+            securityContext,
+            command
+        );
     }
 
-    private async resolveAuthPrincipal(): Promise<AuthPrincipal> {
-        if (this.authPrincipal) {
-            return this.authPrincipal;
+    private async resolveSecurityContext(): Promise<SecurityContext> {
+        if (this.securityContext) {
+            return this.securityContext;
         }
 
         if (this.authFactor && this.authenticator) {
             return await this.authenticator(this.authFactor);
         }
 
-        throw new Error("auth principal or factor must be provided.");
+        throw new Error("security context or auth factor must be provided.");
     }
 
     private authErrorAsResponse(
@@ -317,15 +321,15 @@ export class ApplicationImpl<
         this.notify(["event-handling", result]);
     }
 
-    public withAuthPrincipal(
-        principal: AuthPrincipal
-    ): ApplicationImpl<Ctx, Cmds, Events, AuthPrincipal, TAuthenticator> {
-        return this.cloneWithAuthPrincipal(principal);
+    public withSecurityContext(
+        securityContext: SecurityContext
+    ): ApplicationImpl<Ctx, Cmds, Events, SecurityContext, TAuthenticator> {
+        return this.cloneWithSecurityContext(securityContext);
     }
 
-    private cloneWithAuthPrincipal(
-        principal: AuthPrincipal
-    ): ApplicationImpl<Ctx, Cmds, Events, AuthPrincipal, TAuthenticator> {
+    private cloneWithSecurityContext(
+        securityContext: SecurityContext
+    ): ApplicationImpl<Ctx, Cmds, Events, SecurityContext, TAuthenticator> {
         return new ApplicationImpl(
             this.context,
             this.useCaseFactories,
@@ -333,13 +337,13 @@ export class ApplicationImpl<
             this.consumedEventTracker,
             this.authFilters,
             this.authenticator,
-            principal
+            securityContext
         );
     }
 
     public withAuthFactor(
         factor: AuthFactorOf<TAuthenticator>
-    ): ApplicationImpl<Ctx, Cmds, Events, AuthPrincipal, TAuthenticator> {
+    ): ApplicationImpl<Ctx, Cmds, Events, SecurityContext, TAuthenticator> {
         if (!this.authenticator) {
             throw new Error(
                 "authenticator must be provided in order to authenticate."
@@ -351,12 +355,12 @@ export class ApplicationImpl<
 
     private cloneWithAuthFactor(
         factor: AuthFactorOf<TAuthenticator>
-    ): ApplicationImpl<Ctx, Cmds, Events, AuthPrincipal, TAuthenticator> {
+    ): ApplicationImpl<Ctx, Cmds, Events, SecurityContext, TAuthenticator> {
         return new ApplicationImpl<
             Ctx,
             Cmds,
             Events,
-            AuthPrincipal,
+            SecurityContext,
             TAuthenticator
         >(
             this.context,
