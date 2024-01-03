@@ -3,11 +3,11 @@ import { Message } from "@hexai/core/message";
 import { waitForSeveralTicks } from "@hexai/core/test";
 
 import {
+    DirectChannel,
     MessageChannel,
     PollableMessageChannel,
     SubscribableMessageChannel,
-} from "@/types";
-import { DirectChannel } from "@/channel";
+} from "@/channel";
 import { BarMessage, BazMessage, FooMessage } from "@/test-fixtures";
 import { AbstractInboundChannelAdapter } from "@/endpoint";
 import { MessageFlow } from "@/message-pipeline";

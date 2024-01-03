@@ -1,6 +1,8 @@
-import { BaseLifecycle } from "@/helpers";
-import { InboundChannelAdapter, MessageChannel } from "@/types";
 import { Message } from "@hexai/core/message";
+
+import { BaseLifecycle } from "@/helpers";
+import { MessageChannel } from "@/channel";
+import { InboundChannelAdapter } from "./inbound-channel-adapter";
 
 export abstract class AbstractInboundChannelAdapter
     extends BaseLifecycle

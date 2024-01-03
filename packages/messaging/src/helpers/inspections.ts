@@ -1,9 +1,6 @@
-import {
-    InboundChannelAdapter,
-    Lifecycle,
-    MessageChannel,
-    SubscribableMessageChannel,
-} from "@/types";
+import { InboundChannelAdapter } from "@/endpoint";
+import { MessageChannel, SubscribableMessageChannel } from "@/channel";
+import { Lifecycle } from "@/lifecycle";
 
 function isObject(obj: unknown): obj is Record<string, unknown> {
     return typeof obj === "object" && obj !== null;

@@ -5,18 +5,20 @@ import {
     isInboundChannelAdapter,
     isSubscribableChannel,
 } from "@/helpers";
+import { Pipe } from "@/pipe";
+import {
+    DirectChannel,
+    MessageChannel,
+    SubscribableMessageChannel,
+} from "@/channel";
 import {
     InboundChannelAdapter,
-    Lifecycle,
-    MessageChannel,
     MessageFilter,
     MessageFilterFunction,
     MessageHandler,
     MessageHandlerFunction,
-    SubscribableMessageChannel,
-} from "@/types";
-import { Pipe } from "@/pipe";
-import { DirectChannel } from "@/channel";
+} from "@/endpoint";
+import { Lifecycle } from "@/lifecycle";
 
 export class MessageFlow<I> extends BaseLifecycle {
     private inputChannel: SubscribableMessageChannel;

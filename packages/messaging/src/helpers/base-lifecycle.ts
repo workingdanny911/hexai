@@ -1,4 +1,4 @@
-import { Lifecycle } from "@/types";
+import { Lifecycle } from "@/lifecycle";
 
 export class BaseLifecycle implements Lifecycle {
     private _isRunning = false;

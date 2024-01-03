@@ -1,6 +1,6 @@
 import { Message } from "@hexai/core/message";
 
-import { SubscribableMessageChannel } from "@/types";
+import { SubscribableMessageChannel } from "./subscribable-message-channel";
 
 export class DirectChannel implements SubscribableMessageChannel {
     private callback?: (message: Message) => void | Promise<void>;

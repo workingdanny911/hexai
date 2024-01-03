@@ -1,6 +1,7 @@
-import { MessageSource, MessageSourcePoller } from "@/types";
-import { AbstractInboundChannelAdapter } from "./abstract-inbound-channel-adapter";
 import { Message } from "@hexai/core/message";
+
+import { MessageSource, MessageSourcePoller } from "@/endpoint";
+import { AbstractInboundChannelAdapter } from "./abstract-inbound-channel-adapter";
 
 export class PollingChannelAdapter extends AbstractInboundChannelAdapter {
     constructor(

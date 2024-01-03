@@ -3,7 +3,7 @@ import { describe, expect, it, test } from "vitest";
 import { ApplicationContextAware } from "@hexai/core/injection";
 import { BaseApplicationContext } from "@hexai/core/application";
 import { UnitOfWork } from "@hexai/core/infra";
-import { IdempotencySupport } from "@/types";
+import { IdempotencySupport } from "@/endpoint";
 
 class IdempotentReceiver<
     U extends UnitOfWork<any, any>,

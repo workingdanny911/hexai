@@ -3,10 +3,12 @@ import _ from "lodash";
 import { Message } from "@hexai/core/message";
 import { waitForSeveralTicks } from "@hexai/core/test";
 
-import { MessageChannel, MessageSource, MessageSourcePoller } from "@/types";
 import { FooMessage } from "@/test-fixtures";
-import { PollingChannelAdapter } from "./polling-channel-adapter";
 import { BaseLifecycle } from "@/helpers";
+import { MessageChannel } from "@/channel";
+import { PollingChannelAdapter } from "./polling-channel-adapter";
+import { MessageSourcePoller } from "./message-source-poller";
+import { MessageSource } from "./message-source";
 
 describe("PollingChannelAdapter", () => {
     let messageSource: MessageSourceStub;
