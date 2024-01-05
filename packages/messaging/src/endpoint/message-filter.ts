@@ -1,5 +1,11 @@
-export interface MessageFilter<M> {
-    select(message: M): boolean | Promise<boolean>;
+interface MessageFilterFunction<I = unknown> {
+    (message: I): boolean | Promise<boolean>;
 }
 
-export type MessageFilterFunction<M> = MessageFilter<M>["select"];
+export interface MessageFilterObject<M = unknown> {
+    select: MessageFilterFunction<M>;
+}
+
+export type MessageFilter<M = unknown> =
+    | MessageFilterObject<M>
+    | MessageFilterFunction<M>;

@@ -1,5 +1,11 @@
-export interface MessageHandler<I, O> {
-    handle(message: I): O | Promise<O>;
+export interface MessageHandlerFunction<I = unknown, O = unknown> {
+    (input: I): O | Promise<O>;
 }
 
-export type MessageHandlerFunction<I, O> = MessageHandler<I, O>["handle"];
+export interface MessageHandlerObject<I = unknown, O = unknown> {
+    handle: MessageHandlerFunction<I, O>;
+}
+
+export type MessageHandler<I = unknown, O = unknown> =
+    | MessageHandlerObject<I, O>
+    | MessageHandlerFunction<I, O>;

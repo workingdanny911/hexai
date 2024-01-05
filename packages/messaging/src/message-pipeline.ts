@@ -19,7 +19,6 @@ import {
 import {
     InboundChannelAdapter,
     MessageFilter,
-    MessageFilterFunction,
     MessageHandler,
     MessageHandlerFunction,
 } from "@/endpoint";
@@ -32,33 +31,43 @@ type IntermediateMessagePipeline<
     I = Message,
 > = OmitLifecycleMethods<MessagePipeline<AC, I>>;
 
-interface HandlerConfig<I, O, AC extends BaseApplicationContext> {
+interface HandlerConfig<
+    AC extends BaseApplicationContext,
+    I = unknown,
+    O = unknown,
+> {
+    name?: string;
     template?:
         | string
-        | ((ctx: MessageHandlingContext<I, O, AC>) => Promise<void>);
+        | ((ctx: MessageHandlingContext<AC, I, O>) => Promise<void>);
 }
 
 export interface MessageHandlingTemplate<
-    I,
-    O,
     AC extends BaseApplicationContext = BaseApplicationContext,
+    I = unknown,
+    O = unknown,
 > {
-    (ctx: MessageHandlingContext<I, O, AC>): Promise<void>;
+    (ctx: MessageHandlingContext<AC, I, O>): Promise<void>;
 }
 
 export interface MessageHandlingContext<
-    I = Message,
-    O = any,
     AC extends BaseApplicationContext = BaseApplicationContext,
+    I = unknown,
+    O = unknown,
 > {
     message: I;
-    handle: () => O | Promise<O>;
     applicationContext: AC;
+    pipelineName: string;
+    handlerName: string;
+
+    handle: () => O | Promise<O>;
     next(message: O): Promise<void>;
     reject(error: Error): Promise<void>;
 }
 
 type AnyMessageHandlingTemplate = MessageHandlingTemplate<any, any, any>;
+
+type InboundChannel = SubscribableMessageChannel | InboundChannelAdapter;
 
 export class MessagePipeline<
         AC extends BaseApplicationContext = BaseApplicationContext,
@@ -104,7 +113,7 @@ export class MessagePipeline<
     ): IntermediateMessagePipeline<AC>;
 
     public from(
-        channelOrAdapter: SubscribableMessageChannel | InboundChannelAdapter
+        channelOrAdapter: InboundChannel
     ): IntermediateMessagePipeline<AC> {
         if (isSubscribableChannel(channelOrAdapter)) {
             this.inputChannel = channelOrAdapter;
@@ -141,7 +150,7 @@ export class MessagePipeline<
     }
 
     public filter(
-        filter: MessageFilter<I> | MessageFilterFunction<I>
+        filter: MessageFilter<I>
     ): IntermediateMessagePipeline<AC, I> {
         const filterPipe = Pipe.from<I, I>((m, { next }) => {
             if (typeof filter === "function") {
@@ -158,26 +167,26 @@ export class MessagePipeline<
     }
 
     public transform<O>(
-        transformer: O extends void
-            ? never
-            : MessageHandler<I, O> | MessageHandlerFunction<I, O>
+        transformer: O extends void ? never : MessageHandler<I, O>
     ): IntermediateMessagePipeline<AC, O> {
-        this.handle(transformer);
-        return this as any;
+        return this.handle(transformer);
     }
 
     public handle<O>(
-        handler: MessageHandler<I, O> | MessageHandlerFunction<I, O>,
-        config?: HandlerConfig<I, O, AC>
+        handler: MessageHandler<I, O>,
+        config?: HandlerConfig<AC, I, O>
     ): IntermediateMessagePipeline<AC, O> {
         this.applicationContextInjector.addCandidate(handler);
 
-        const handle = this.resolveHandler(handler);
+        const handle = this.toHandlerFunction(handler);
         const template = this.resolveTemplate(config?.template);
+        const handlerName = this.resolveHandlerName(handler, config?.name);
 
         const handlerPipe = Pipe.from<I, O>(async (message, { next }) => {
-            const ctx: MessageHandlingContext<I, O> = {
+            const ctx: MessageHandlingContext<AC, I, O> = {
                 message,
+                pipelineName: this.name,
+                handlerName,
                 applicationContext: this.applicationContext,
                 handle: () => handle(message),
                 next: (message: O) => {
@@ -200,14 +209,14 @@ export class MessagePipeline<
         return this as any;
     }
 
-    private resolveHandler(
-        handler: MessageHandler<any, any> | MessageHandlerFunction<any, any>
+    private toHandlerFunction(
+        handler: MessageHandler<any, any>
     ): MessageHandlerFunction<any, any> {
         if (typeof handler === "function") {
             return handler;
+        } else {
+            return handler.handle.bind(handler);
         }
-
-        return handler.handle.bind(handler);
     }
 
     private resolveTemplate(
@@ -222,6 +231,21 @@ export class MessagePipeline<
         }
 
         return template;
+    }
+
+    private resolveHandlerName(
+        handler: MessageHandler<any, any>,
+        name?: string
+    ): string {
+        if (name) {
+            return name;
+        }
+
+        if (typeof handler === "function") {
+            return handler?.name ?? "anonymous";
+        }
+
+        return handler.constructor.name;
     }
 
     public settle(): Lifecycle & ApplicationContextAware<AC> {
@@ -293,18 +317,22 @@ export class MessagePipelinesNamespace<
         MessagePipelinesNamespace.namespaceRegistry = {};
     }
 
-    constructor(private namespace: string) {
+    constructor(private name: string) {
         super();
 
-        if (!isNonEmptyString(namespace)) {
+        if (!isNonEmptyString(name)) {
             throw new Error("namespace must be a non-empty string");
         }
 
-        if (MessagePipelinesNamespace.namespaceRegistry[namespace]) {
-            throw new Error(`namespace '${namespace}' already defined`);
+        if (MessagePipelinesNamespace.namespaceRegistry[name]) {
+            throw new Error(`namespace '${name}' already defined`);
         }
 
-        MessagePipelinesNamespace.namespaceRegistry[namespace] = this;
+        MessagePipelinesNamespace.namespaceRegistry[name] = this;
+    }
+
+    public getName(): string {
+        return this.name;
     }
 
     public setApplicationContext(context: AC) {
@@ -350,7 +378,6 @@ export class MessagePipelinesNamespace<
         return new (MessagePipeline as any)(this, name);
     }
 
-    // this method is used by MessagePipeline#settle() method
     private registerPipeline(pipeline: MessagePipeline): void {
         this.pipelines[pipeline.getName()] = pipeline;
         this.applicationContextInjector.addCandidate(pipeline);
@@ -358,14 +385,14 @@ export class MessagePipelinesNamespace<
 
     public registerTemplate(
         name: string,
-        template: (ctx: MessageHandlingContext<any, any>) => Promise<void>
+        template: (ctx: MessageHandlingContext) => Promise<void>
     ): MessagePipelinesNamespace<AC> {
         this.templates[name] = template;
 
         return this;
     }
 
-    public getTemplate(name: string): MessageHandlingTemplate<any, any> {
+    public getTemplate(name: string): MessageHandlingTemplate {
         if (!this.templates[name]) {
             throw new Error(`template with name '${name}' not registered`);
         }

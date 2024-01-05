@@ -2,6 +2,6 @@ import { Message } from "@hexai/core/message";
 
 import { Lifecycle } from "@/lifecycle";
 
-export interface MessageSource extends Lifecycle {
-    receive(): Promise<Message | null>;
+export interface MessageSource<M extends Message = Message> extends Lifecycle {
+    receive(): Promise<M | null>;
 }
