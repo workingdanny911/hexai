@@ -1,4 +1,5 @@
 export * from "./application-context-aware";
 export * from "./unit-of-work-aware";
 export * from "./inspection";
-export * from "./injector";
+export * from "./abstract-injector";
+export * from "./application-context-injector";
