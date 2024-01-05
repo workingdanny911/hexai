@@ -120,20 +120,20 @@ describe("pipe", () => {
             });
         });
 
-        let haveCompleted = false;
+        let hasCompleted = false;
         dummy.subscribe(async () => {
             throw new Error("error from subscriber");
         });
         dummy.subscribe(async () => {
             await waitForSeveralTicks();
 
-            haveCompleted = true;
+            hasCompleted = true;
         });
 
         await dummy.send();
 
         await waitForSeveralTicks();
-        expect(haveCompleted).toBe(true);
+        expect(hasCompleted).toBe(true);
         await expect(errorFromSubscriber).resolves.toEqual(
             new Error("error from subscriber")
         );

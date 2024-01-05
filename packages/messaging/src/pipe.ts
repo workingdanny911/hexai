@@ -31,35 +31,6 @@ export type OutputOfPipe<P extends AnyPipeLike> = P extends PipeLike<
 
 type Subscriber<O> = (output: O) => void | Promise<void>;
 
-export function isPipeLike(pipe: unknown): pipe is AnyPipeLike {
-    return pipe instanceof Pipe || typeof pipe === "function";
-}
-
-function assertIsPipeLike(pipe: unknown): asserts pipe is AnyPipeLike {
-    if (!isPipeLike(pipe)) {
-        throw new Error(
-            `Cannot create a pipe from '${pipe}'. It is not a function.`
-        );
-    }
-}
-
-function chainFunctions(
-    fnList: PipeFunction[],
-    receiveFinalOutput: (value: any) => void
-): (input: any) => Promise<void> {
-    return async function chain(input, index = 0) {
-        if (index < fnList.length) {
-            const next = (output: any) => chain(output, index + 1);
-            await fnList[index](input, {
-                next,
-            });
-        } else {
-            receiveFinalOutput(input);
-        }
-    };
-}
-
-// The main class representing a pipeline of operations
 export class Pipe<I, O> {
     private constructor(
         private pipeFunctions: PipeFunction<any, any>[] = [],
@@ -115,4 +86,32 @@ export class Pipe<I, O> {
         newPipe.pipeFunctions = [...this.pipeFunctions];
         return newPipe;
     }
+}
+
+export function isPipeLike(pipe: unknown): pipe is AnyPipeLike {
+    return pipe instanceof Pipe || typeof pipe === "function";
+}
+
+function assertIsPipeLike(pipe: unknown): asserts pipe is AnyPipeLike {
+    if (!isPipeLike(pipe)) {
+        throw new Error(
+            `Cannot create a pipe from '${pipe}'. It is not a function.`
+        );
+    }
+}
+
+function chainFunctions(
+    fnList: PipeFunction[],
+    receiveFinalOutput: (value: any) => void
+): (input: any) => Promise<void> {
+    return async function chain(input, index = 0) {
+        if (index < fnList.length) {
+            const next = (output: any) => chain(output, index + 1);
+            await fnList[index](input, {
+                next,
+            });
+        } else {
+            receiveFinalOutput(input);
+        }
+    };
 }
