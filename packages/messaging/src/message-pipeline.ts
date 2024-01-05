@@ -1,7 +1,12 @@
 import { Message } from "@hexai/core/message";
+import {
+    ApplicationContextAware,
+    ApplicationContextInjector,
+} from "@hexai/core/injection";
+import { BaseApplicationContext } from "@hexai/core/application";
 
 import {
-    BaseLifecycle,
+    AbstractLifecycle,
     isInboundChannelAdapter,
     isSubscribableChannel,
 } from "@/helpers";
@@ -20,33 +25,91 @@ import {
 } from "@/endpoint";
 import { Lifecycle } from "@/lifecycle";
 
-export class MessageFlow<I> extends BaseLifecycle {
-    private inputChannel: SubscribableMessageChannel;
+type OmitLifecycleMethods<T> = Omit<T, keyof Lifecycle>;
+
+type IntermediateMessagePipeline<
+    AC extends BaseApplicationContext = BaseApplicationContext,
+    I = Message,
+> = OmitLifecycleMethods<MessagePipeline<AC, I>>;
+
+interface HandlerConfig<I, O, AC extends BaseApplicationContext> {
+    template?:
+        | string
+        | ((ctx: MessageHandlingContext<I, O, AC>) => Promise<void>);
+}
+
+export interface MessageHandlingTemplate<
+    I,
+    O,
+    AC extends BaseApplicationContext = BaseApplicationContext,
+> {
+    (ctx: MessageHandlingContext<I, O, AC>): Promise<void>;
+}
+
+export interface MessageHandlingContext<
+    I = Message,
+    O = any,
+    AC extends BaseApplicationContext = BaseApplicationContext,
+> {
+    message: I;
+    handle: () => O | Promise<O>;
+    applicationContext: AC;
+    next(message: O): Promise<void>;
+    reject(error: Error): Promise<void>;
+}
+
+type AnyMessageHandlingTemplate = MessageHandlingTemplate<any, any, any>;
+
+export class MessagePipeline<
+        AC extends BaseApplicationContext = BaseApplicationContext,
+        I = Message,
+    >
+    extends AbstractLifecycle
+    implements ApplicationContextAware<AC>
+{
+    private applicationContextInjector = new ApplicationContextInjector();
+    private applicationContext!: AC;
+    private inputChannel!: SubscribableMessageChannel;
     private outputChannel?: MessageChannel;
-    private pipe = Pipe.passThrough<any>();
+    private pipe: Pipe<any, any> = Pipe.from<I, I>((message, { next }) => {
+        if (this.isRunning()) {
+            return next(message);
+        }
+    });
     private resources: Lifecycle[] = [];
+    private isSettled = false;
 
     private constructor(
-        inputChannel: SubscribableMessageChannel,
-        resources: Lifecycle[]
+        private namespace: MessagePipelinesNamespace,
+        private name: string
     ) {
         super();
-        this.inputChannel = inputChannel;
-        this.resources = resources;
     }
 
-    public static from(
-        channel: SubscribableMessageChannel | InboundChannelAdapter
-    ): MessageFlow<Message> {
-        const resources: Lifecycle[] = [];
-        let inputChannel: SubscribableMessageChannel;
+    public getName(): string {
+        return this.name;
+    }
 
-        if (isSubscribableChannel(channel)) {
-            inputChannel = channel;
-        } else if (isInboundChannelAdapter(channel)) {
-            resources.push(channel);
-            inputChannel = new DirectChannel();
-            channel.setOutputChannel(inputChannel);
+    public setApplicationContext(context: AC): void {
+        this.applicationContext = context;
+        this.applicationContextInjector.setInjectingObject(context);
+    }
+
+    public from(
+        channel: SubscribableMessageChannel
+    ): IntermediateMessagePipeline<AC>;
+
+    public from(
+        adapter: InboundChannelAdapter
+    ): IntermediateMessagePipeline<AC>;
+
+    public from(
+        channelOrAdapter: SubscribableMessageChannel | InboundChannelAdapter
+    ): IntermediateMessagePipeline<AC> {
+        if (isSubscribableChannel(channelOrAdapter)) {
+            this.inputChannel = channelOrAdapter;
+        } else if (isInboundChannelAdapter(channelOrAdapter)) {
+            this.inputChannel = this.connectInboundAdapter(channelOrAdapter);
         } else {
             throw new Error(
                 "the provided argument is not " +
@@ -54,10 +117,21 @@ export class MessageFlow<I> extends BaseLifecycle {
             );
         }
 
-        return new this(inputChannel, resources);
+        return this as any;
     }
 
-    public to(channel: MessageChannel): MessageFlow<I> {
+    private connectInboundAdapter(
+        adapter: InboundChannelAdapter
+    ): SubscribableMessageChannel {
+        const channel = new DirectChannel();
+
+        this.resources.push(adapter);
+        adapter.setOutputChannel(channel);
+
+        return channel;
+    }
+
+    public to(channel: MessageChannel): IntermediateMessagePipeline<AC, I> {
         if (this.outputChannel) {
             throw new Error("output channel already set");
         }
@@ -68,7 +142,7 @@ export class MessageFlow<I> extends BaseLifecycle {
 
     public filter(
         filter: MessageFilter<I> | MessageFilterFunction<I>
-    ): MessageFlow<I> {
+    ): IntermediateMessagePipeline<AC, I> {
         const filterPipe = Pipe.from<I, I>((m, { next }) => {
             if (typeof filter === "function") {
                 filter = { select: filter };
@@ -87,20 +161,38 @@ export class MessageFlow<I> extends BaseLifecycle {
         transformer: O extends void
             ? never
             : MessageHandler<I, O> | MessageHandlerFunction<I, O>
-    ): MessageFlow<O> {
+    ): IntermediateMessagePipeline<AC, O> {
         this.handle(transformer);
         return this as any;
     }
 
     public handle<O>(
-        handler: MessageHandler<I, O> | MessageHandlerFunction<I, O>
-    ): MessageFlow<O> {
-        const handlerPipe = Pipe.from<I, O>(async (m, { next }) => {
-            if (typeof handler === "function") {
-                handler = { handle: handler };
-            }
+        handler: MessageHandler<I, O> | MessageHandlerFunction<I, O>,
+        config?: HandlerConfig<I, O, AC>
+    ): IntermediateMessagePipeline<AC, O> {
+        this.applicationContextInjector.addCandidate(handler);
 
-            return next(await handler.handle(m));
+        const handle = this.resolveHandler(handler);
+        const template = this.resolveTemplate(config?.template);
+
+        const handlerPipe = Pipe.from<I, O>(async (message, { next }) => {
+            const ctx: MessageHandlingContext<I, O> = {
+                message,
+                applicationContext: this.applicationContext,
+                handle: () => handle(message),
+                next: (message: O) => {
+                    return next(message);
+                },
+                reject: async (error: Error) => {
+                    throw error;
+                },
+            };
+
+            if (template) {
+                await template(ctx);
+            } else {
+                await next(await handle(message));
+            }
         });
 
         this.pipe = this.pipe.extend(handlerPipe);
@@ -108,18 +200,64 @@ export class MessageFlow<I> extends BaseLifecycle {
         return this as any;
     }
 
-    public settle(): Lifecycle {
+    private resolveHandler(
+        handler: MessageHandler<any, any> | MessageHandlerFunction<any, any>
+    ): MessageHandlerFunction<any, any> {
+        if (typeof handler === "function") {
+            return handler;
+        }
+
+        return handler.handle.bind(handler);
+    }
+
+    private resolveTemplate(
+        template?: string | AnyMessageHandlingTemplate
+    ): null | AnyMessageHandlingTemplate {
+        if (!template) {
+            return null;
+        }
+
+        if (typeof template === "string") {
+            return this.namespace.getTemplate(template);
+        }
+
+        return template;
+    }
+
+    public settle(): Lifecycle & ApplicationContextAware<AC> {
         if (!this.inputChannel) {
             throw new Error("no input channel provided");
         }
 
+        this.isSettled = true;
+        (this.namespace as any).registerPipeline(this);
+
         return this;
     }
 
-    public async start(): Promise<void> {
+    protected override async onStart(): Promise<void> {
+        if (!this.isSettled) {
+            throw new Error(
+                "message pipeline is not settled. " +
+                    "call 'settle()' method before starting the pipeline"
+            );
+        }
+
+        try {
+            this.applicationContextInjector.inject();
+        } catch (e) {
+            throw new Error(
+                "failed to inject application context into message pipeline: " +
+                    e
+            );
+        }
+
         this.startInputChannel();
-        await super.start();
         await this.startResources();
+    }
+
+    protected override async onStop(): Promise<void> {
+        await Promise.all(this.resources.map((r) => r.stop()));
     }
 
     private startInputChannel(): void {
@@ -135,4 +273,107 @@ export class MessageFlow<I> extends BaseLifecycle {
     private async startResources(): Promise<void> {
         await Promise.all(this.resources.map((r) => r.start()));
     }
+}
+
+export class MessagePipelinesNamespace<
+        AC extends BaseApplicationContext = BaseApplicationContext,
+    >
+    extends AbstractLifecycle
+    implements ApplicationContextAware<AC>
+{
+    private static namespaceRegistry: Record<
+        string,
+        MessagePipelinesNamespace
+    > = {};
+    private applicationContextInjector = new ApplicationContextInjector();
+    private pipelines: Record<string, MessagePipeline> = {};
+    private templates: Record<string, (ctx: any) => Promise<void>> = {};
+
+    public static clearRegistry(): void {
+        MessagePipelinesNamespace.namespaceRegistry = {};
+    }
+
+    constructor(private namespace: string) {
+        super();
+
+        if (!isNonEmptyString(namespace)) {
+            throw new Error("namespace must be a non-empty string");
+        }
+
+        if (MessagePipelinesNamespace.namespaceRegistry[namespace]) {
+            throw new Error(`namespace '${namespace}' already defined`);
+        }
+
+        MessagePipelinesNamespace.namespaceRegistry[namespace] = this;
+    }
+
+    public setApplicationContext(context: AC) {
+        this.applicationContextInjector.setInjectingObject(context);
+    }
+
+    protected override async onStart(): Promise<void> {
+        try {
+            this.applicationContextInjector.inject();
+        } catch (e) {
+            throw new Error(
+                "failed to inject application context into message pipelines namespace: " +
+                    e
+            );
+        }
+        await this.startAllPipelines();
+    }
+
+    private async startAllPipelines(): Promise<void> {
+        await Promise.all(Object.values(this.pipelines).map((p) => p.start()));
+    }
+
+    protected override async onStop(): Promise<void> {
+        await this.stopAllPipelines();
+    }
+
+    private async stopAllPipelines(): Promise<void> {
+        const runningPipelines = Object.values(this.pipelines).filter((p) =>
+            p.isRunning()
+        );
+        await Promise.all(runningPipelines.map((p) => p.stop()));
+    }
+
+    public define(name: string): Pick<MessagePipeline<AC>, "from"> {
+        if (!isNonEmptyString(name)) {
+            throw new Error("name must be a non-empty string");
+        }
+
+        if (this.pipelines[name]) {
+            throw new Error(`pipeline with name '${name}' already defined`);
+        }
+
+        return new (MessagePipeline as any)(this, name);
+    }
+
+    // this method is used by MessagePipeline#settle() method
+    private registerPipeline(pipeline: MessagePipeline): void {
+        this.pipelines[pipeline.getName()] = pipeline;
+        this.applicationContextInjector.addCandidate(pipeline);
+    }
+
+    public registerTemplate(
+        name: string,
+        template: (ctx: MessageHandlingContext<any, any>) => Promise<void>
+    ): MessagePipelinesNamespace<AC> {
+        this.templates[name] = template;
+
+        return this;
+    }
+
+    public getTemplate(name: string): MessageHandlingTemplate<any, any> {
+        if (!this.templates[name]) {
+            throw new Error(`template with name '${name}' not registered`);
+        }
+
+        return this.templates[name];
+    }
+}
+
+function isNonEmptyString(s: unknown): s is string {
+    return typeof s === "string" && s.length > 0;
 }

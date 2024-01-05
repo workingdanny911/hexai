@@ -1,11 +1,11 @@
 import { Message } from "@hexai/core/message";
 
-import { BaseLifecycle } from "@/helpers";
+import { AbstractLifecycle } from "@/helpers";
 import { MessageChannel } from "@/channel";
 import { InboundChannelAdapter } from "./inbound-channel-adapter";
 
 export abstract class AbstractInboundChannelAdapter
-    extends BaseLifecycle
+    extends AbstractLifecycle
     implements InboundChannelAdapter
 {
     protected outputChannel!: MessageChannel;
@@ -14,7 +14,7 @@ export abstract class AbstractInboundChannelAdapter
         this.outputChannel = channel;
     }
 
-    async start(): Promise<void> {
+    public override async start(): Promise<void> {
         if (!this.outputChannel) {
             throw new Error("output channel required");
         }

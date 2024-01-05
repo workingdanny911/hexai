@@ -4,7 +4,7 @@ import { Message } from "@hexai/core/message";
 import { waitForSeveralTicks } from "@hexai/core/test";
 
 import { FooMessage } from "@/test-fixtures";
-import { BaseLifecycle } from "@/helpers";
+import { AbstractLifecycle } from "@/helpers";
 import { MessageChannel } from "@/channel";
 import { PollingChannelAdapter } from "./polling-channel-adapter";
 import { MessageSourcePoller } from "./message-source-poller";
@@ -169,7 +169,10 @@ describe("PollingChannelAdapter", () => {
     );
 });
 
-class MessageSourceStub extends BaseLifecycle implements MessageSource {
+class MessageSourceStub extends AbstractLifecycle implements MessageSource {
+    protected override async onStart(): Promise<void> {}
+    protected override async onStop(): Promise<void> {}
+
     private doReceive!: () => Message | null;
 
     public setReceiveFunction(fn: () => Message | null): void {
@@ -182,26 +185,26 @@ class MessageSourceStub extends BaseLifecycle implements MessageSource {
 }
 
 class ImmediatelyInvokingPoller
-    extends BaseLifecycle
+    extends AbstractLifecycle
     implements MessageSourcePoller
 {
     private callback!: () => Promise<void>;
 
-    public async start(): Promise<void> {
-        await super.start();
+    protected override async onStart(): Promise<void> {
         await this.callback();
     }
 
-    public async stop(): Promise<void> {
-        await super.stop();
-    }
+    protected override async onStop(): Promise<void> {}
 
     public onPoll(callback: () => Promise<void>): void {
         this.callback = callback;
     }
 }
 
-class IntervalBasedPoller extends BaseLifecycle implements MessageSourcePoller {
+class IntervalBasedPoller
+    extends AbstractLifecycle
+    implements MessageSourcePoller
+{
     private callback!: () => Promise<void>;
     private intervalId!: NodeJS.Timeout;
 
@@ -209,13 +212,11 @@ class IntervalBasedPoller extends BaseLifecycle implements MessageSourcePoller {
         super();
     }
 
-    public async start(): Promise<void> {
-        await super.start();
+    protected override async onStart(): Promise<void> {
         this.intervalId = setInterval(this.callback, this.interval);
     }
 
-    public async stop(): Promise<void> {
-        await super.stop();
+    protected override async onStop(): Promise<void> {
         clearInterval(this.intervalId);
     }
 

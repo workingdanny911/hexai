@@ -1,2 +1,2 @@
-export * from "./base-lifecycle";
+export * from "./abstract-lifecycle";
 export * from "./inspections";

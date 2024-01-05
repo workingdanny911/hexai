@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, test, vi } from "vitest";
 import { Message } from "@hexai/core/message";
 import { waitForSeveralTicks } from "@hexai/core/test";
+import { ApplicationContextAware } from "@hexai/core/injection";
+import { BaseApplicationContext } from "@hexai/core/application";
 
 import {
     DirectChannel,
@@ -9,161 +11,342 @@ import {
     SubscribableMessageChannel,
 } from "@/channel";
 import { BarMessage, BazMessage, FooMessage } from "@/test-fixtures";
-import { AbstractInboundChannelAdapter } from "@/endpoint";
-import { MessageFlow } from "@/message-pipeline";
+import { AbstractInboundChannelAdapter, MessageHandler } from "@/endpoint";
+import {
+    MessageHandlingContext,
+    MessagePipeline,
+    MessagePipelinesNamespace,
+} from "@/message-pipeline";
 
-const outputChannel: MessageChannel = {
+let defaultInputChannel: SubscribableMessageChannel;
+const defaultOutputChannel: MessageChannel = {
     send: vi.fn(),
 };
+const dummyApplicationContext: BaseApplicationContext = {
+    getUnitOfWork: vi.fn(),
+    getOutboxEventPublisher: vi.fn(),
+};
+let testNamespace: MessagePipelinesNamespace;
 
-beforeEach(() => {
+beforeEach(async () => {
+    MessagePipelinesNamespace.clearRegistry();
+    testNamespace = new MessagePipelinesNamespace("test-namespace");
+    testNamespace.setApplicationContext(dummyApplicationContext);
+
+    defaultInputChannel = new DirectChannel();
     vi.resetAllMocks();
+    vi.restoreAllMocks();
 });
 
 function expectMessagesSentToBe(messages: Message[]): void {
-    expect(outputChannel.send).toHaveBeenCalledTimes(messages.length);
+    expect(defaultOutputChannel.send).toHaveBeenCalledTimes(messages.length);
     for (let i = 0; i < messages.length; i++) {
-        expect(outputChannel.send).toHaveBeenNthCalledWith(i + 1, messages[i]);
+        expect(defaultOutputChannel.send).toHaveBeenNthCalledWith(
+            i + 1,
+            messages[i]
+        );
     }
 }
 
-describe("channel A->B", () => {
-    let inputChannel: SubscribableMessageChannel;
-    const message = FooMessage.create();
+describe("namespace & initialization", () => {
+    const invalidNames = [undefined, null, 1, {}, [], () => {}, ""];
 
-    beforeEach(() => {
-        inputChannel = new DirectChannel();
+    test.each(invalidNames)(
+        "namespace should be non-empty string",
+        (invalidName) => {
+            expect(
+                // @ts-expect-error
+                () => new MessagePipelinesNamespace(invalidName)
+            ).toThrowError("namespace must be a non-empty string");
+        }
+    );
+
+    test("namespace cannot be duplicated", () => {
+        new MessagePipelinesNamespace("duplicate");
+        expect(() => new MessagePipelinesNamespace("duplicate")).toThrowError(
+            "already defined"
+        );
+    });
+
+    test.each(invalidNames)(
+        "cannot create pipeline with invalid name",
+        (invalidName) => {
+            // @ts-expect-error
+            expect(() => testNamespace.define(invalidName)).toThrowError(
+                "name must be a non-empty string"
+            );
+        }
+    );
+
+    test("cannot define pipeline if name is already taken", () => {
+        testNamespace
+            .define("duplicate")
+            .from(defaultInputChannel)
+            .to(defaultOutputChannel)
+            .settle();
+
+        expect(() => testNamespace.define("duplicate")).toThrowError(
+            "already defined"
+        );
+    });
+
+    test("can use the same name in different namespaces", () => {
+        testNamespace
+            .define("duplicate")
+            .from(defaultInputChannel)
+            .to(defaultOutputChannel)
+            .settle();
+
+        expect(() =>
+            new MessagePipelinesNamespace("another-namespace")
+                .define("duplicate")
+                .from(defaultInputChannel)
+                .to(defaultOutputChannel)
+                .settle()
+        ).not.toThrowError();
+    });
+
+    test("cannot settle if no input channel", () => {
+        const settle = () =>
+            testNamespace
+                .define("pipeline-for-test")
+                // @ts-expect-error
+                .to(defaultOutputChannel)
+                .settle();
+
+        expect(settle).toThrowError("no input channel");
     });
 
     test("cannot set output channel twice", () => {
-        const build = () =>
-            MessageFlow.from(inputChannel).to(outputChannel).to(outputChannel);
+        const settle = () =>
+            testNamespace
+                .define("pipeline-for-test")
+                .from(defaultInputChannel)
+                .to(defaultOutputChannel)
+                .to(defaultOutputChannel);
 
-        expect(build).toThrowError("output channel already set");
+        expect(settle).toThrowError("output channel already set");
     });
 
     test("cannot settle if input channel is not subscribable", () => {
         const pollableChannel: PollableMessageChannel = {
             send: async () => true,
-            receive: async () => message,
+            receive: async () => FooMessage.create(),
         };
+
         const settle = () =>
-            // @ts-expect-error
-            MessageFlow.from(pollableChannel).to(outputChannel).settle();
+            testNamespace
+                .define("pipeline-for-test")
+                // @ts-expect-error
+                .from(pollableChannel)
+                .to(defaultOutputChannel)
+                .settle();
 
         expect(settle).toThrowError("is not a subscribable");
     });
 
-    it("does not connect the channels until the flow is started", async () => {
-        const flow = MessageFlow.from(inputChannel).to(outputChannel).settle();
+    test("cannot start if not settled", async () => {
+        const pipeline = testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .to(defaultOutputChannel);
 
-        await expect(inputChannel.send(message)).rejects.toThrowError(
+        // @ts-expect-error
+        await expect(pipeline.start()).rejects.toThrowError("not settled");
+    });
+
+    test("stopping", async () => {
+        const pipeline = testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .to(defaultOutputChannel)
+            .settle();
+
+        await pipeline.start();
+        await pipeline.stop();
+
+        await defaultInputChannel.send(FooMessage.create());
+        expect(defaultOutputChannel.send).not.toHaveBeenCalled();
+    });
+
+    test("namespace cannot be started when application context is not set", async () => {
+        const namespace = new MessagePipelinesNamespace("new");
+        namespace.define("pipeline").from(defaultInputChannel).settle();
+
+        await expect(namespace.start()).rejects.toThrowError(
+            "Injecting object is not set"
+        );
+    });
+
+    test("can be started and stopped at once", async () => {
+        const inputChannel1 = new DirectChannel();
+        const message1 = FooMessage.create();
+        const pipeline1 = testNamespace
+            .define("pipeline1")
+            .from(inputChannel1)
+            .to(defaultOutputChannel)
+            .settle();
+
+        const inputChannel2 = new DirectChannel();
+        const message2 = BarMessage.create();
+        const pipeline2 = testNamespace
+            .define("pipeline2")
+            .from(inputChannel2)
+            .to(defaultOutputChannel)
+            .settle();
+
+        await testNamespace.start();
+
+        expect(pipeline1.isRunning()).toBe(true);
+        await inputChannel1.send(message1);
+        expectMessagesSentToBe([message1]);
+
+        expect(pipeline2.isRunning()).toBe(true);
+        await inputChannel2.send(message2);
+        expectMessagesSentToBe([message1, message2]);
+
+        await testNamespace.stop();
+
+        vi.resetAllMocks();
+        expect(pipeline1.isRunning()).toBe(false);
+        await inputChannel1.send(message1);
+        expect(defaultOutputChannel.send).not.toHaveBeenCalled();
+
+        expect(pipeline2.isRunning()).toBe(false);
+        await inputChannel2.send(message2);
+        expect(defaultOutputChannel.send).not.toHaveBeenCalled();
+    });
+});
+
+describe("channel A->B", () => {
+    const message = FooMessage.create();
+
+    it("does not connect the channels until the pipeline is started", async () => {
+        const pipeline = testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .to(defaultOutputChannel)
+            .settle();
+
+        await expect(defaultInputChannel.send(message)).rejects.toThrowError(
             "no subscriber"
         );
 
-        await flow.start();
-        await inputChannel.send(message);
-        expect(outputChannel.send).toHaveBeenCalledWith(message);
+        await pipeline.start();
+        await defaultInputChannel.send(message);
+        expect(defaultOutputChannel.send).toHaveBeenCalledWith(message);
     });
 
     test("channel A->B", async () => {
-        await MessageFlow.from(inputChannel).to(outputChannel).settle().start();
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .to(defaultOutputChannel)
+            .settle()
+            .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expectMessagesSentToBe([message]);
     });
 });
 
 describe("with filters & transformers", () => {
-    let inputChannel: SubscribableMessageChannel;
     const message = FooMessage.create();
 
-    beforeEach(() => {
-        inputChannel = new DirectChannel();
-    });
-
     test("with single filter - accept", async () => {
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .filter(() => true)
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expectMessagesSentToBe([message]);
     });
 
     test("with single filter - reject", async () => {
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .filter(() => false)
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expectMessagesSentToBe([]);
     });
 
     test("with multiple filters", async () => {
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .filter(() => true)
             .filter(() => false)
             .filter(() => true)
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expectMessagesSentToBe([]);
     });
 
     test("with single transformer", async () => {
         const transformedMessage = BarMessage.create();
 
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .transform((message) => {
                 expect(message.getMessageType()).toBe(FooMessage.type);
 
                 return transformedMessage;
             })
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expectMessagesSentToBe([transformedMessage]);
     });
 
     test("with multiple transformers", async () => {
         const finalMessage = BazMessage.create();
 
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .transform(() => BarMessage.create())
             .transform((message) => {
                 expect(message.getMessageType()).toBe(BarMessage.type);
 
                 return finalMessage;
             })
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expectMessagesSentToBe([finalMessage]);
     });
 
     test("applied in order", async () => {
         const barMessage = BarMessage.create();
 
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .filter((message) => message.getMessageType() === FooMessage.type)
             .transform(() => barMessage)
             .filter((message) => message.getMessageType() === BarMessage.type)
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expectMessagesSentToBe([barMessage]);
     });
 });
@@ -176,11 +359,11 @@ class InboundChannelAdapterStub extends AbstractInboundChannelAdapter {
         this.messages = [...messages];
     }
 
-    async start(): Promise<void> {
-        await super.start();
-
+    protected override async onStart(): Promise<void> {
         while (await this.processMessage()) {}
     }
+
+    protected override async onStop(): Promise<void> {}
 
     protected async receiveMessage(): Promise<Message | null> {
         return this.messages.shift() ?? null;
@@ -188,21 +371,27 @@ class InboundChannelAdapterStub extends AbstractInboundChannelAdapter {
 }
 
 describe("with inbound channel adapter", () => {
-    it("starts the adapter when the flow is started", async () => {
+    it("starts the adapter when the pipeline is started", async () => {
         const adapter = new InboundChannelAdapterStub([]);
         const spy = vi.spyOn(adapter, "start");
 
-        const flow = MessageFlow.from(adapter).to(outputChannel).settle();
+        const pipeline = testNamespace
+            .define("pipeline-for-test")
+            .from(adapter)
+            .to(defaultOutputChannel)
+            .settle();
         expect(spy).not.toHaveBeenCalled();
-        await flow.start();
+        await pipeline.start();
         expect(spy).toHaveBeenCalled();
     });
 
     test("adapter -> channel A", async () => {
         const messages = [FooMessage.create(), BarMessage.create()];
 
-        await MessageFlow.from(new InboundChannelAdapterStub(messages))
-            .to(outputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(new InboundChannelAdapterStub(messages))
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
@@ -212,19 +401,18 @@ describe("with inbound channel adapter", () => {
 });
 
 describe("with message handler", () => {
-    let inputChannel: SubscribableMessageChannel;
-
-    beforeEach(() => {
-        inputChannel = new DirectChannel();
-    });
-
     test("channel A->handler", async () => {
         const message = FooMessage.create();
         const handler = vi.fn();
 
-        await MessageFlow.from(inputChannel).handle(handler).settle().start();
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .handle(handler)
+            .settle()
+            .start();
 
-        await inputChannel.send(message);
+        await defaultInputChannel.send(message);
         expect(handler).toHaveBeenCalledWith(message);
     });
 
@@ -232,13 +420,15 @@ describe("with message handler", () => {
         const messageBeforeHandler = FooMessage.create();
         const messageAfterHandler = BarMessage.create();
 
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .handle(async () => messageAfterHandler)
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(messageBeforeHandler);
+        await defaultInputChannel.send(messageBeforeHandler);
         expectMessagesSentToBe([messageAfterHandler]);
     });
 
@@ -246,29 +436,191 @@ describe("with message handler", () => {
         const messageBeforeHandler = FooMessage.create();
         const messageAfterHandler = BarMessage.create();
 
-        await MessageFlow.from(inputChannel)
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
             .handle(async () => messageAfterHandler)
             .filter(() => false)
-            .to(outputChannel)
+            .to(defaultOutputChannel)
             .settle()
             .start();
 
-        await inputChannel.send(messageBeforeHandler);
+        await defaultInputChannel.send(messageBeforeHandler);
         expectMessagesSentToBe([]);
+    });
+
+    test("can select message handling template", async () => {
+        const message = FooMessage.create();
+        const handler = vi.fn();
+
+        await testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .handle(handler)
+            .settle()
+            .start();
+
+        await defaultInputChannel.send(message);
+        expect(handler).toHaveBeenCalledWith(message);
     });
 });
 
-describe.todo("branching, routing messages", () => {
-    /* channel A->B if message type is "test"
-                ->C if message type is "test2" */
-    // builder
+describe("template", () => {
+    const message = FooMessage.create();
+    const handler = vi.fn();
+
+    function withTemplate(
+        template:
+            | string
+            | ((ctx: MessageHandlingContext<Message, any>) => Promise<void>)
+    ): MessagePipeline {
+        return testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .handle(handler, {
+                template,
+            }) as any;
+    }
+
+    test("context.message", async () => {
+        let messageTemplateReceived: Message | null = null;
+        const template = async (ctx: MessageHandlingContext<Message, any>) => {
+            messageTemplateReceived = ctx.message;
+        };
+
+        await withTemplate(template).settle().start();
+        await defaultInputChannel.send(message);
+
+        expect(messageTemplateReceived).toBe(message);
+    });
+
+    test("does not execute if ctx.handle() is not called", async () => {
+        const template = async () => {};
+
+        await withTemplate(template).settle().start();
+        await defaultInputChannel.send(message);
+
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    test("ctx.handle() returns the result", async () => {
+        const result = BarMessage.create();
+        handler.mockImplementation(() => result);
+        let resultTemplateReceived: Message | null = null;
+        const template = async (ctx: MessageHandlingContext<Message, any>) => {
+            resultTemplateReceived = await ctx.handle();
+        };
+
+        await withTemplate(template).settle().start();
+        await defaultInputChannel.send(message);
+
+        expect(handler).toHaveBeenCalledWith(message);
+        expect(resultTemplateReceived).toBe(result);
+    });
+
+    test("ctx.next() forwards the message to the next handler", async () => {
+        const messageToForward = BarMessage.create();
+        handler.mockImplementation(() => null);
+        const handlerAfter = vi.fn();
+        const template = async (ctx: MessageHandlingContext<Message, any>) => {
+            await ctx.next(messageToForward);
+        };
+
+        await withTemplate(template).handle(handlerAfter).settle().start();
+        await defaultInputChannel.send(message);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(handlerAfter).toHaveBeenCalledWith(messageToForward);
+    });
+
+    test("can refer template registered in the namespace by name", async () => {
+        const outputMessage = BarMessage.create();
+        testNamespace.registerTemplate(
+            "my-template",
+            (ctx: MessageHandlingContext<Message, any>) =>
+                ctx.next(outputMessage)
+        );
+
+        await withTemplate("my-template")
+            .to(defaultOutputChannel)
+            .settle()
+            .start();
+        await defaultInputChannel.send(message);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(defaultOutputChannel.send).toHaveBeenCalledWith(outputMessage);
+    });
+
+    test("cannot refer non-existing template", async () => {
+        expect(() => withTemplate("non-existing-template")).toThrowError(
+            "not registered"
+        );
+    });
+});
+
+describe("injection", () => {
+    function makeHandler(): MessageHandler<any, void> &
+        ApplicationContextAware {
+        return {
+            handle: vi.fn(),
+            setApplicationContext: vi.fn(),
+        };
+    }
+
+    test("injects the application context into pipelines", async () => {
+        const pipelineSetApplicationContext = vi.spyOn(
+            MessagePipeline.prototype,
+            "setApplicationContext"
+        );
+        testNamespace.define("pipeline1").from(new DirectChannel()).settle();
+        testNamespace.define("pipeline2").from(new DirectChannel()).settle();
+
+        testNamespace.setApplicationContext(dummyApplicationContext);
+        expect(pipelineSetApplicationContext).not.toHaveBeenCalled();
+
+        await testNamespace.start();
+        expect(pipelineSetApplicationContext).toHaveBeenCalledTimes(2);
+        for (const call of pipelineSetApplicationContext.mock.calls) {
+            expect(call[0]).toBe(dummyApplicationContext);
+        }
+    });
+
+    it("cannot start when the handler is ApplicationContextAware but no context is provided", async () => {
+        const namespaceWithNoContextSet = new MessagePipelinesNamespace("new");
+        namespaceWithNoContextSet
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .handle(makeHandler())
+            .settle();
+
+        await expect(namespaceWithNoContextSet.start()).rejects.toThrowError(
+            "failed to inject"
+        );
+    });
+
+    test("injects the application context into handlers", async () => {
+        const handlers = [makeHandler(), makeHandler()];
+        const pipeline = testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .handle(handlers[0])
+            .handle(handlers[1])
+            .settle();
+
+        pipeline.setApplicationContext(dummyApplicationContext);
+        await pipeline.start();
+
+        for (const handler of handlers) {
+            expect(handler.setApplicationContext).toHaveBeenCalledWith(
+                dummyApplicationContext
+            );
+        }
+    });
+});
+
+describe.todo("branching & routing messages", () => {
+    // MessagePipeline.define("routing-example")
     //     .from(A)
-    //     .configureRoute('->B')
-    //         .filter((message) => message.type === "test")
-    //         .to(B)
-    //     .configureRoute('->C')
-    //         .filter((message) => message.type === "test2")
-    //         .to(C)
     //     .route((message) => {
     //         if (message.type === "test") {
     //             return "->B";
@@ -276,28 +628,50 @@ describe.todo("branching, routing messages", () => {
     //             return "->C";
     //         }
     //     })
-    //     .build();
+    //     .branch('->B')
+    //         .filter((message) => message.type === "test")
+    //         .to(B)
+    //     .branch('->C')
+    //         .filter((message) => message.type === "test2")
+    //         .to(C)
+    //     .settle();
 });
 
 describe.todo("wiretapping", () => {
-    /* wiretap */
-    // builder.from(A).wiretap((message) => console.log(message)).to(B).build();
+    // MessagePipeline.define("wiretapping-example")
     //     .from(A)
-    //     .wiretap((message) => console.log('any', message))
-    //     .branch('->B')
-    //         .wiretap((message) => console.log('B', message))
-    //         .to(B)
-    //     .branch('->C')
-    //         .wiretap((message) => console.log('C', message))
-    //         .to(C)
-    //     .route((message) => {
-    //         if (message.type === "test") {
-    //             return "->B";
-    //         } else if (message.type === "test2") {
-    //             return "->C";
-    //         }
-    //     })
-    //     .build();
+    //         .wiretap((message) => console.log('A'))
+    //     .transform(transformer)
+    //         .wiretap((message) => console.log('A->handler'))
+    //     .handle(handler)
+    //         .wiretap((message) => console.log('A->handler->B'))
+    //     .to(B)
+    //     .settle();
 });
 
-describe.todo("observability");
+describe.todo("error handling", () => {
+    // const customErrorChannel = new DirectChannel();
+    // MessagePipeline.setGlobalErrorChannel(customErrorChannel);
+    //
+    // MessagePipeline.define("global-error-channel-example")
+    //     .from(A)
+    //     .handler(failingHandler)
+    //     .to(B)
+    //
+    // MessagePipeline.define("local-error-channel-example")
+    //     .from(A)
+    //     .handler(failingHandler)
+    //     .channelErrorsTo(customErrorChannel)
+    //     .to(B)
+    //
+    // MessagePipeline.getGlobalErrorChannel().subscribe((error) => {
+    //     // handle error
+    // });
+    //
+    // MessagePipeline.select("*").observe(event => {
+    //    // handle event
+    // });
+    // interface MessagingComponent {
+    //     getMessagingComponentType(): string;
+    // }
+});

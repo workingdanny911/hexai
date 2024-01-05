@@ -16,8 +16,7 @@ export class PollingChannelAdapter extends AbstractInboundChannelAdapter {
         this.maxMessagesPerPoll = maxMessagesPerPoll;
     }
 
-    async start(): Promise<void> {
-        await super.start();
+    public override async onStart(): Promise<void> {
         await this.messageSource.start();
 
         this.poller.onPoll(() => this.onPoll());
@@ -55,12 +54,11 @@ export class PollingChannelAdapter extends AbstractInboundChannelAdapter {
         }
     }
 
-    protected async receiveMessage(): Promise<Message | null> {
+    protected override async receiveMessage(): Promise<Message | null> {
         return this.messageSource.receive();
     }
 
-    async stop(): Promise<void> {
-        await super.stop();
+    public override async onStop(): Promise<void> {
         await this.poller.stop();
         await this.messageSource.stop();
     }
