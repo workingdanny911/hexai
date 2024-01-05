@@ -76,16 +76,4 @@ describe("Injector", () => {
 
         expect(target.setFoo).toHaveBeenCalledWith("foo");
     });
-
-    it("does not inject twice", () => {
-        injector.setInjectingObject("foo");
-        injector.addCandidate(target);
-        injector.inject();
-
-        injector.setInjectingObject("bar");
-        injector.inject();
-
-        expect(target.setFoo).toHaveBeenCalledTimes(1);
-        expect(target.setFoo).toHaveBeenCalledWith("foo");
-    });
 });

@@ -30,7 +30,6 @@ export abstract class AbstractInjector<O, T extends object> {
         this.targets.forEach((target) =>
             this.doInject(target, this.injectingObject!)
         );
-        this.targets = [];
     }
 
     public isInjectingObjectSet(): boolean {
