@@ -20,7 +20,8 @@ import {
     InboundChannelAdapter,
     MessageFilter,
     MessageHandler,
-    MessageHandlerFunction,
+    MessageHandlerTemplate,
+    toHandlerFunction,
 } from "@/endpoint";
 import { Lifecycle } from "@/lifecycle";
 
@@ -31,15 +32,9 @@ type IntermediateMessagePipeline<
     I = Message,
 > = OmitLifecycleMethods<MessagePipeline<AC, I>>;
 
-interface HandlerConfig<
-    AC extends BaseApplicationContext,
-    I = unknown,
-    O = unknown,
-> {
+interface HandlerConfig {
     name?: string;
-    template?:
-        | string
-        | ((ctx: MessageHandlingContext<AC, I, O>) => Promise<void>);
+    template?: string | MessageHandlerTemplate;
 }
 
 export interface MessageHandlingTemplate<
@@ -64,8 +59,6 @@ export interface MessageHandlingContext<
     next(message: O): Promise<void>;
     reject(error: Error): Promise<void>;
 }
-
-type AnyMessageHandlingTemplate = MessageHandlingTemplate<any, any, any>;
 
 type InboundChannel = SubscribableMessageChannel | InboundChannelAdapter;
 
@@ -174,31 +167,20 @@ export class MessagePipeline<
 
     public handle<O>(
         handler: MessageHandler<I, O>,
-        config?: HandlerConfig<AC, I, O>
+        config?: HandlerConfig
     ): IntermediateMessagePipeline<AC, O> {
-        this.applicationContextInjector.addCandidate(handler);
+        this.markToInjectApplicationContext(handler);
 
-        const handle = this.toHandlerFunction(handler);
+        const handle = toHandlerFunction(handler);
         const template = this.resolveTemplate(config?.template);
-        const handlerName = this.resolveHandlerName(handler, config?.name);
+        if (template) {
+            this.markToInjectApplicationContext(template);
+        }
 
         const handlerPipe = Pipe.from<I, O>(async (message, { next }) => {
-            const ctx: MessageHandlingContext<AC, I, O> = {
-                message,
-                pipelineName: this.name,
-                handlerName,
-                applicationContext: this.applicationContext,
-                handle: () => handle(message),
-                next: (message: O) => {
-                    return next(message);
-                },
-                reject: async (error: Error) => {
-                    throw error;
-                },
-            };
-
             if (template) {
-                await template(ctx);
+                template.setMessageHandler(handler);
+                await next(await template.handle(message));
             } else {
                 await next(await handle(message));
             }
@@ -209,19 +191,13 @@ export class MessagePipeline<
         return this as any;
     }
 
-    private toHandlerFunction(
-        handler: MessageHandler<any, any>
-    ): MessageHandlerFunction<any, any> {
-        if (typeof handler === "function") {
-            return handler;
-        } else {
-            return handler.handle.bind(handler);
-        }
+    private markToInjectApplicationContext(obj: unknown): void {
+        this.applicationContextInjector.addCandidate(obj);
     }
 
     private resolveTemplate(
-        template?: string | AnyMessageHandlingTemplate
-    ): null | AnyMessageHandlingTemplate {
+        template?: string | MessageHandlerTemplate
+    ): null | MessageHandlerTemplate {
         if (!template) {
             return null;
         }
@@ -231,21 +207,6 @@ export class MessagePipeline<
         }
 
         return template;
-    }
-
-    private resolveHandlerName(
-        handler: MessageHandler<any, any>,
-        name?: string
-    ): string {
-        if (name) {
-            return name;
-        }
-
-        if (typeof handler === "function") {
-            return handler?.name ?? "anonymous";
-        }
-
-        return handler.constructor.name;
     }
 
     public settle(): Lifecycle & ApplicationContextAware<AC> {
@@ -286,12 +247,20 @@ export class MessagePipeline<
 
     private startInputChannel(): void {
         this.inputChannel.subscribe(async (message) => {
-            await this.pipe
-                .extend((message) => {
-                    this.outputChannel!.send(message);
-                })
-                .send(message);
+            if (this.outputChannel) {
+                await this.getPipeToOutputChannel().send(message);
+            } else {
+                await this.pipe.send(message);
+            }
         });
+    }
+
+    private getPipeToOutputChannel(): Pipe<Message, void> {
+        return this.pipe.extend(
+            Pipe.from<Message, void>(async (message, { next }) => {
+                await this.outputChannel!.send(message);
+            })
+        );
     }
 
     private async startResources(): Promise<void> {
@@ -311,7 +280,7 @@ export class MessagePipelinesNamespace<
     > = {};
     private applicationContextInjector = new ApplicationContextInjector();
     private pipelines: Record<string, MessagePipeline> = {};
-    private templates: Record<string, (ctx: any) => Promise<void>> = {};
+    private templates: Record<string, MessageHandlerTemplate> = {};
 
     public static clearRegistry(): void {
         MessagePipelinesNamespace.namespaceRegistry = {};
@@ -385,14 +354,14 @@ export class MessagePipelinesNamespace<
 
     public registerTemplate(
         name: string,
-        template: (ctx: MessageHandlingContext) => Promise<void>
+        template: MessageHandlerTemplate
     ): MessagePipelinesNamespace<AC> {
         this.templates[name] = template;
 
         return this;
     }
 
-    public getTemplate(name: string): MessageHandlingTemplate {
+    public getTemplate(name: string): MessageHandlerTemplate {
         if (!this.templates[name]) {
             throw new Error(`template with name '${name}' not registered`);
         }

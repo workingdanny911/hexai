@@ -7,16 +7,15 @@ import { BaseApplicationContext } from "@hexai/core/application";
 import {
     DirectChannel,
     MessageChannel,
-    PollableMessageChannel,
     SubscribableMessageChannel,
 } from "@/channel";
 import { BarMessage, BazMessage, FooMessage } from "@/test-fixtures";
-import { AbstractInboundChannelAdapter, MessageHandler } from "@/endpoint";
 import {
-    MessageHandlingContext,
-    MessagePipeline,
-    MessagePipelinesNamespace,
-} from "@/message-pipeline";
+    AbstractInboundChannelAdapter,
+    MessageHandler,
+    MessageHandlerTemplate,
+} from "@/endpoint";
+import { MessagePipeline, MessagePipelinesNamespace } from "@/message-pipeline";
 
 let defaultInputChannel: SubscribableMessageChannel;
 const defaultOutputChannel: MessageChannel = {
@@ -26,12 +25,20 @@ const dummyApplicationContext: BaseApplicationContext = {
     getUnitOfWork: vi.fn(),
     getOutboxEventPublisher: vi.fn(),
 };
+class MessageHandlerTemplateStub extends MessageHandlerTemplate {
+    public handle(message: Message): Promise<Message> {
+        return this.handler(message);
+    }
+}
 let testNamespace: MessagePipelinesNamespace;
+let template: MessageHandlerTemplate;
 
 beforeEach(async () => {
     MessagePipelinesNamespace.clearRegistry();
     testNamespace = new MessagePipelinesNamespace("test-namespace");
     testNamespace.setApplicationContext(dummyApplicationContext);
+
+    template = new MessageHandlerTemplateStub();
 
     defaultInputChannel = new DirectChannel();
     vi.resetAllMocks();
@@ -129,30 +136,42 @@ describe("namespace & initialization", () => {
     });
 
     test("cannot settle if input channel is not subscribable", () => {
-        const pollableChannel: PollableMessageChannel = {
-            send: async () => true,
-            receive: async () => FooMessage.create(),
+        const notSubscribableChannel: MessageChannel = {
+            async send(message: Message): Promise<void> {},
         };
 
         const settle = () =>
             testNamespace
                 .define("pipeline-for-test")
                 // @ts-expect-error
-                .from(pollableChannel)
+                .from(notSubscribableChannel)
                 .to(defaultOutputChannel)
                 .settle();
 
         expect(settle).toThrowError("is not a subscribable");
     });
 
-    test("cannot start if not settled", async () => {
+    test("does not get registered if not settled", async () => {
         const pipeline = testNamespace
             .define("pipeline-for-test")
             .from(defaultInputChannel)
             .to(defaultOutputChannel);
 
-        // @ts-expect-error
-        await expect(pipeline.start()).rejects.toThrowError("not settled");
+        await testNamespace.start();
+
+        expect((pipeline as MessagePipeline).isRunning()).toBe(false);
+    });
+
+    test("starting", async () => {
+        const pipeline = testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .to(defaultOutputChannel)
+            .settle();
+
+        await testNamespace.start();
+
+        expect((pipeline as MessagePipeline).isRunning()).toBe(true);
     });
 
     test("stopping", async () => {
@@ -162,11 +181,10 @@ describe("namespace & initialization", () => {
             .to(defaultOutputChannel)
             .settle();
 
-        await pipeline.start();
-        await pipeline.stop();
+        await testNamespace.start();
+        await testNamespace.stop();
 
-        await defaultInputChannel.send(FooMessage.create());
-        expect(defaultOutputChannel.send).not.toHaveBeenCalled();
+        expect((pipeline as MessagePipeline).isRunning()).toBe(false);
     });
 
     test("namespace cannot be started when application context is not set", async () => {
@@ -470,85 +488,46 @@ describe("template", () => {
     const handler = vi.fn();
 
     function withTemplate(
-        template:
-            | string
-            | ((ctx: MessageHandlingContext<Message, any>) => Promise<void>)
+        template: MessageHandlerTemplate | string
     ): MessagePipeline {
         return testNamespace
             .define("pipeline-for-test")
             .from(defaultInputChannel)
             .handle(handler, {
                 template,
-            }) as any;
+            })
+            .to(defaultOutputChannel) as any;
     }
 
-    test("context.message", async () => {
-        let messageTemplateReceived: Message | null = null;
-        const template = async (ctx: MessageHandlingContext<Message, any>) => {
-            messageTemplateReceived = ctx.message;
-        };
+    test("message received", async () => {
+        withTemplate(template).settle();
+        await testNamespace.start();
 
-        await withTemplate(template).settle().start();
-        await defaultInputChannel.send(message);
-
-        expect(messageTemplateReceived).toBe(message);
-    });
-
-    test("does not execute if ctx.handle() is not called", async () => {
-        const template = async () => {};
-
-        await withTemplate(template).settle().start();
-        await defaultInputChannel.send(message);
-
-        expect(handler).not.toHaveBeenCalled();
-    });
-
-    test("ctx.handle() returns the result", async () => {
-        const result = BarMessage.create();
-        handler.mockImplementation(() => result);
-        let resultTemplateReceived: Message | null = null;
-        const template = async (ctx: MessageHandlingContext<Message, any>) => {
-            resultTemplateReceived = await ctx.handle();
-        };
-
-        await withTemplate(template).settle().start();
         await defaultInputChannel.send(message);
 
         expect(handler).toHaveBeenCalledWith(message);
-        expect(resultTemplateReceived).toBe(result);
     });
 
-    test("ctx.next() forwards the message to the next handler", async () => {
-        const messageToForward = BarMessage.create();
-        handler.mockImplementation(() => null);
-        const handlerAfter = vi.fn();
-        const template = async (ctx: MessageHandlingContext<Message, any>) => {
-            await ctx.next(messageToForward);
-        };
+    test("returns the result", async () => {
+        const result = BarMessage.create();
+        handler.mockImplementation(() => result);
 
-        await withTemplate(template).handle(handlerAfter).settle().start();
+        withTemplate(template).settle();
+        await testNamespace.start();
         await defaultInputChannel.send(message);
 
-        expect(handler).not.toHaveBeenCalled();
-        expect(handlerAfter).toHaveBeenCalledWith(messageToForward);
+        expect(defaultOutputChannel.send).toHaveBeenCalledWith(result);
     });
 
     test("can refer template registered in the namespace by name", async () => {
-        const outputMessage = BarMessage.create();
-        testNamespace.registerTemplate(
-            "my-template",
-            (ctx: MessageHandlingContext<Message, any>) =>
-                ctx.next(outputMessage)
-        );
+        const spy = vi.spyOn(template, "handle");
+        testNamespace.registerTemplate("my-template", template);
 
-        await withTemplate("my-template")
-            .to(defaultOutputChannel)
-            .settle()
-            .start();
+        withTemplate("my-template").settle();
+        await testNamespace.start();
         await defaultInputChannel.send(message);
 
-        expect(handler).not.toHaveBeenCalled();
-        expect(defaultOutputChannel.send).toHaveBeenCalledWith(outputMessage);
+        expect(spy).toHaveBeenCalledWith(message);
     });
 
     test("cannot refer non-existing template", async () => {
@@ -559,7 +538,7 @@ describe("template", () => {
 });
 
 describe("injection", () => {
-    function makeHandler(): MessageHandler<any, void> &
+    function makeAppContextAwareHandler(): MessageHandler<any, void> &
         ApplicationContextAware {
         return {
             handle: vi.fn(),
@@ -567,30 +546,12 @@ describe("injection", () => {
         };
     }
 
-    test("injects the application context into pipelines", async () => {
-        const pipelineSetApplicationContext = vi.spyOn(
-            MessagePipeline.prototype,
-            "setApplicationContext"
-        );
-        testNamespace.define("pipeline1").from(new DirectChannel()).settle();
-        testNamespace.define("pipeline2").from(new DirectChannel()).settle();
-
-        testNamespace.setApplicationContext(dummyApplicationContext);
-        expect(pipelineSetApplicationContext).not.toHaveBeenCalled();
-
-        await testNamespace.start();
-        expect(pipelineSetApplicationContext).toHaveBeenCalledTimes(2);
-        for (const call of pipelineSetApplicationContext.mock.calls) {
-            expect(call[0]).toBe(dummyApplicationContext);
-        }
-    });
-
-    it("cannot start when the handler is ApplicationContextAware but no context is provided", async () => {
+    test("pipeline fails to start when the handler is ApplicationContextAware but no context is provided", async () => {
         const namespaceWithNoContextSet = new MessagePipelinesNamespace("new");
         namespaceWithNoContextSet
             .define("pipeline-for-test")
             .from(defaultInputChannel)
-            .handle(makeHandler())
+            .handle(makeAppContextAwareHandler())
             .settle();
 
         await expect(namespaceWithNoContextSet.start()).rejects.toThrowError(
@@ -598,23 +559,37 @@ describe("injection", () => {
         );
     });
 
-    test("injects the application context into handlers", async () => {
-        const handlers = [makeHandler(), makeHandler()];
-        const pipeline = testNamespace
+    test("templates are injected with the application context", async () => {
+        vi.spyOn(template, "setApplicationContext");
+
+        testNamespace
             .define("pipeline-for-test")
             .from(defaultInputChannel)
-            .handle(handlers[0])
-            .handle(handlers[1])
+            .handle(makeAppContextAwareHandler(), {
+                template,
+            })
             .settle();
 
-        pipeline.setApplicationContext(dummyApplicationContext);
-        await pipeline.start();
+        await testNamespace.start();
 
-        for (const handler of handlers) {
-            expect(handler.setApplicationContext).toHaveBeenCalledWith(
-                dummyApplicationContext
-            );
-        }
+        expect(template.setApplicationContext).toHaveBeenCalledWith(
+            dummyApplicationContext
+        );
+    });
+
+    test("message handlers are injected with the application context", async () => {
+        const handler = makeAppContextAwareHandler();
+        testNamespace
+            .define("pipeline-for-test")
+            .from(defaultInputChannel)
+            .handle(handler)
+            .settle();
+
+        await testNamespace.start();
+
+        expect(handler.setApplicationContext).toHaveBeenCalledWith(
+            dummyApplicationContext
+        );
     });
 });
 

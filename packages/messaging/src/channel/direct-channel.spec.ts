@@ -47,15 +47,4 @@ describe("DirectChannel", () => {
 
         expect(handlerCompleted).toBe(true);
     });
-
-    test("returns false if the subscriber throws an error", async () => {
-        const handler = async () => {
-            throw new Error("test error");
-        };
-
-        channel.subscribe(handler);
-        const result = await channel.send(message);
-
-        expect(result).toBe(false);
-    });
 });

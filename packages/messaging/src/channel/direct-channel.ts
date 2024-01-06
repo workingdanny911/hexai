@@ -15,16 +15,11 @@ export class DirectChannel implements SubscribableMessageChannel {
         this.callback = callback;
     }
 
-    async send(message: Message): Promise<boolean> {
+    async send(message: Message): Promise<void> {
         if (!this.callback) {
             throw new Error("no subscriber to send message to");
         }
 
-        try {
-            await this.callback(message);
-            return true;
-        } catch {
-            return false;
-        }
+        await this.callback(message);
     }
 }
