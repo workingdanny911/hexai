@@ -137,6 +137,19 @@ describe("Application", () => {
         expectSystemErrorResponse(response, "handler error");
     });
 
+    test("handler errors can be observed", async () => {
+        const onError = vi.fn();
+        defaultApp.withHandler("foo", handler);
+        defaultApp.onError(onError);
+
+        const error = new Error("handler error");
+        (handler.execute as Mock).mockRejectedValue(error);
+
+        await defaultApp.handle({ type: "foo" });
+
+        expect(onError).toHaveBeenCalledWith({ type: "foo" }, error);
+    });
+
     it("injects context to application context aware message handlers", async () => {
         const contextAwareHandler: CommandExecutor<any, any> &
             ApplicationContextAware = {

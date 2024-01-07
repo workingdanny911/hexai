@@ -20,6 +20,10 @@ import {
 } from "./error-response";
 import { AuthError } from "./error";
 
+interface ErrorObserver<Message> {
+    (message: Message, error: Error): void | Promise<void>;
+}
+
 export abstract class AbstractApplication<
     Ctx extends CommonApplicationContext = CommonApplicationContext,
     Publisher extends ApplicationEventPublisher<
@@ -34,6 +38,7 @@ export abstract class AbstractApplication<
     protected authenticator: Auth | null = null;
     protected authFactor: FactorOf<Auth> | null = null;
     protected securityContext: SecCtx | null = null;
+    protected errorObservers: Array<ErrorObserver<Message>> = [];
 
     protected constructor(
         protected context: Ctx,
@@ -158,9 +163,19 @@ export abstract class AbstractApplication<
                 () => handler.execute(message)
             );
         } catch (e) {
+            const error = e as Error;
+            this.notifyErrorObservers(message, error);
             return systemErrorResponse((e as Error).message);
         }
     }
 
     protected abstract makeEventContext(message: Message): ContextOf<Publisher>;
+
+    public onError(observer: ErrorObserver<Message>): void {
+        this.errorObservers.push(observer);
+    }
+
+    protected notifyErrorObservers(message: Message, error: Error): void {
+        this.errorObservers.forEach((observer) => observer(message, error));
+    }
 }
