@@ -1,4 +1,4 @@
-import { Message } from "@hexai/core/message";
+import { Message } from "@hexai/core";
 
 export interface IdempotencySupport {
     isDuplicate(key: string, message: Message, ttl?: number): Promise<boolean>;

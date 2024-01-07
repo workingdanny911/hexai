@@ -1,33 +1,30 @@
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import * as pg from "pg";
 
-import { OutboxEventPublisher, PublishedEventTracker } from "@hexai/core/infra";
-import { Event } from "@hexai/core/message";
-import { DummyEvent } from "@hexai/core/test";
+import { EventPublisher, Message, PublishedMessageTracker } from "@hexai/core";
+import { DummyMessage } from "@hexai/core/test";
 
 import { DB_URL } from "./config";
 import { postgresUnitOfWork } from "./postgres-unit-of-work";
 import { DatabaseManager, replaceDatabaseName, TableManager } from "./helpers";
 import { runMigration } from "./run-migration";
 
-class PostgresEventManager
-    implements OutboxEventPublisher, PublishedEventTracker
-{
-    async publish(events: Event[]): Promise<void> {
+class PostgresEventManager implements EventPublisher, PublishedMessageTracker {
+    async publish(...events: Message[]): Promise<void> {
         if (events.length === 0) {
             return;
         }
     }
 
-    getUnpublishedEvents(
+    getUnpublishedMessages(
         batchSize?: number | undefined
-    ): Promise<[number, Event[]]> {
+    ): Promise<[number, Message[]]> {
         throw new Error("Method not implemented.");
     }
 
-    markEventsAsPublished(
+    markMessagesAsPublished(
         fromPosition: number,
-        numEvents: number
+        number: number
     ): Promise<void> {
         throw new Error("Method not implemented.");
     }
@@ -66,14 +63,14 @@ describe("event publisher", () => {
 
     test("publishing no events", async () => {
         vi.spyOn(postgresUnitOfWork, "wrap");
-        await eventManager.publish([]);
+        await eventManager.publish();
 
         expect(postgresUnitOfWork.wrap).toHaveBeenCalledTimes(0);
     });
 
     test("publishing one event", async () => {
-        const event = DummyEvent.create();
+        const event = DummyMessage.create();
 
-        await eventManager.publish([event]);
+        await eventManager.publish(event);
     });
 });

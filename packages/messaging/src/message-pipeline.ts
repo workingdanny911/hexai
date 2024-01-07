@@ -1,9 +1,9 @@
-import { Message } from "@hexai/core/message";
 import {
     ApplicationContextAware,
     ApplicationContextInjector,
-} from "@hexai/core/injection";
-import { BaseApplicationContext } from "@hexai/core/application";
+    CommonApplicationContext,
+    Message,
+} from "@hexai/core";
 
 import {
     AbstractLifecycle,
@@ -28,7 +28,7 @@ import { Lifecycle } from "@/lifecycle";
 type OmitLifecycleMethods<T> = Omit<T, keyof Lifecycle>;
 
 type IntermediateMessagePipeline<
-    AC extends BaseApplicationContext = BaseApplicationContext,
+    AC extends CommonApplicationContext = CommonApplicationContext,
     I = Message,
 > = OmitLifecycleMethods<MessagePipeline<AC, I>>;
 
@@ -38,7 +38,7 @@ interface HandlerConfig {
 }
 
 export interface MessageHandlingTemplate<
-    AC extends BaseApplicationContext = BaseApplicationContext,
+    AC extends CommonApplicationContext = CommonApplicationContext,
     I = unknown,
     O = unknown,
 > {
@@ -46,7 +46,7 @@ export interface MessageHandlingTemplate<
 }
 
 export interface MessageHandlingContext<
-    AC extends BaseApplicationContext = BaseApplicationContext,
+    AC extends CommonApplicationContext = CommonApplicationContext,
     I = unknown,
     O = unknown,
 > {
@@ -63,7 +63,7 @@ export interface MessageHandlingContext<
 type InboundChannel = SubscribableMessageChannel | InboundChannelAdapter;
 
 export class MessagePipeline<
-        AC extends BaseApplicationContext = BaseApplicationContext,
+        AC extends CommonApplicationContext = CommonApplicationContext,
         I = Message,
     >
     extends AbstractLifecycle
@@ -269,7 +269,7 @@ export class MessagePipeline<
 }
 
 export class MessagePipelinesNamespace<
-        AC extends BaseApplicationContext = BaseApplicationContext,
+        AC extends CommonApplicationContext = CommonApplicationContext,
     >
     extends AbstractLifecycle
     implements ApplicationContextAware<AC>

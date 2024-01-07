@@ -1,4 +1,4 @@
-import { Message } from "@hexai/core/message";
+import { Message } from "@hexai/core";
 
 import { AbstractLifecycle } from "@/helpers";
 import { MessageChannel } from "@/channel";

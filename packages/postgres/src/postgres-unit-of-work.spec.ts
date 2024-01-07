@@ -6,7 +6,7 @@ import {
     IsolationLevel,
     Propagation,
     UnitOfWorkAbortedError,
-} from "@hexai/core/infra";
+} from "@hexai/core";
 import { DB_URL } from "./config";
 import { postgresUnitOfWork } from "./postgres-unit-of-work";
 import { DatabaseManager, replaceDatabaseName, TableManager } from "./helpers";

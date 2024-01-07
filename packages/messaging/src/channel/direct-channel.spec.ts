@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { DummyEvent } from "@hexai/core/test";
+import { DummyMessage } from "@hexai/core/test";
 
 import { DirectChannel } from "./direct-channel";
 
 describe("DirectChannel", () => {
     let channel: DirectChannel;
-    const message = DummyEvent.create();
+    const message = DummyMessage.create();
 
     beforeEach(() => {
         channel = new DirectChannel();

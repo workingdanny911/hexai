@@ -1,6 +1,6 @@
 import * as pg from "pg";
 
-import { Propagation, UnitOfWork } from "@hexai/core/infra";
+import { Propagation, UnitOfWork } from "@hexai/core";
 import {
     ClientCleanUp,
     ClientFactory,

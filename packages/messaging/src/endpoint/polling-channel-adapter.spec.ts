@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, test, vi } from "vitest";
 import _ from "lodash";
-import { Message } from "@hexai/core/message";
+import { Message } from "@hexai/core";
 import { waitForSeveralTicks } from "@hexai/core/test";
 
 import { FooMessage } from "@/test-fixtures";

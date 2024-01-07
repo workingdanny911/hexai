@@ -1,4 +1,4 @@
-import { BaseApplicationContext } from "@hexai/core/application";
+import { CommonApplicationContext } from "@hexai/core";
 
 import {
     AnyMessageHandler,
@@ -12,7 +12,7 @@ import { toHandlerFunction } from "./helpers";
 
 export abstract class MessageHandlerTemplate<
         H extends AnyMessageHandler = AnyMessageHandler,
-        AC extends BaseApplicationContext = BaseApplicationContext,
+        AC extends CommonApplicationContext = CommonApplicationContext,
     >
     implements
         MessageHandlerObject<InputOf<H>, OutputOf<H>>,

@@ -2,14 +2,14 @@ import assert from "node:assert";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
-    BaseUnitOfWorkOptions,
+    CommonUnitOfWorkOptions,
     IsolationLevel,
     Propagation,
     UnitOfWork,
 } from "@hexai/core/infra";
 import { Prisma, PrismaClient } from "./client";
 
-export interface PrismaTransactionOptions extends BaseUnitOfWorkOptions {
+export interface PrismaTransactionOptions extends CommonUnitOfWorkOptions {
     maxWait?: number;
     timeout?: number;
     isolationLevel?: IsolationLevel;

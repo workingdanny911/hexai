@@ -1,4 +1,4 @@
-import { Message } from "@hexai/core/message";
+import { Message } from "@hexai/core";
 
 export class FooMessage extends Message<Record<never, never>> {
     public static readonly type = "foo";

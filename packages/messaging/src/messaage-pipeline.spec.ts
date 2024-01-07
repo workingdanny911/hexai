@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, test, vi } from "vitest";
-import { Message } from "@hexai/core/message";
+import {
+    ApplicationContextAware,
+    CommonApplicationContext,
+    Message,
+} from "@hexai/core";
 import { waitForSeveralTicks } from "@hexai/core/test";
-import { ApplicationContextAware } from "@hexai/core/injection";
-import { BaseApplicationContext } from "@hexai/core/application";
 
 import {
     DirectChannel,
@@ -21,9 +23,8 @@ let defaultInputChannel: SubscribableMessageChannel;
 const defaultOutputChannel: MessageChannel = {
     send: vi.fn(),
 };
-const dummyApplicationContext: BaseApplicationContext = {
+const dummyApplicationContext: CommonApplicationContext = {
     getUnitOfWork: vi.fn(),
-    getOutboxEventPublisher: vi.fn(),
 };
 class MessageHandlerTemplateStub extends MessageHandlerTemplate {
     public handle(message: Message): Promise<Message> {

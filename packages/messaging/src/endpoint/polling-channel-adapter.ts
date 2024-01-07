@@ -1,4 +1,4 @@
-import { Message } from "@hexai/core/message";
+import { Message } from "@hexai/core";
 
 import { MessageSource, MessageSourcePoller } from "@/endpoint";
 import { AbstractInboundChannelAdapter } from "./abstract-inbound-channel-adapter";
