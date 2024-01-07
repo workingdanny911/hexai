@@ -1,29 +1,51 @@
-import { UnitOfWorkHolder } from "@/helpers";
-import { OptionsOfUnitOfWork, UnitOfWork } from "@/infra";
+import { OptionsOf, UnitOfWork } from "@/infra";
+import {
+    ApplicationContextAware,
+    CommonApplicationContext,
+} from "@/application";
 
-export function Atomic<U extends UnitOfWork = UnitOfWork>(
-    options?: OptionsOfUnitOfWork<U>
+type Options<C extends CommonApplicationContext> = OptionsOf<
+    ReturnType<C["getUnitOfWork"]>
+>;
+
+export function Atomic<C extends CommonApplicationContext>(
+    options?: Options<C>
 ) {
     return function (
-        target: any,
+        target: ApplicationContextAware<C>,
         propertyKey: string,
         descriptor: PropertyDescriptor
     ) {
-        const originalMethod = descriptor.value;
+        if (typeof target.setApplicationContext !== "function") {
+            throw new Error(
+                `target '${target.constructor.name}' does not implement 'ApplicationContextAware'`
+            );
+        }
 
+        let uow!: UnitOfWork;
+        const origSetApplicationContext = target.setApplicationContext;
+        target.setApplicationContext = function (
+            this: ApplicationContextAware<C>,
+            applicationContext: C
+        ) {
+            origSetApplicationContext.call(this, applicationContext);
+            uow = applicationContext.getUnitOfWork();
+        };
+
+        const originalMethod = descriptor.value;
         descriptor.value = async function (
-            this: UnitOfWorkHolder<U>,
+            this: ApplicationContextAware<C>,
             ...args: any[]
         ) {
-            if ("getUnitOfWork" in this) {
-                const uow = this.getUnitOfWork();
-                return uow.wrap(
-                    () => originalMethod.apply(this, args),
-                    options
+            if (!uow) {
+                throw new Error(
+                    `application context not injected to '${target.constructor.name}'`
                 );
-            } else {
-                throw new Error("UnitOfWorkHolder not implemented");
             }
+
+            return await uow.wrap(async () => {
+                return await originalMethod.apply(this, args);
+            }, options);
         };
 
         return descriptor;

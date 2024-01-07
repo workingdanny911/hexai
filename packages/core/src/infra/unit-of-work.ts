@@ -11,13 +11,13 @@ export enum IsolationLevel {
     SERIALIZABLE = "serializable",
 }
 
-export interface BaseUnitOfWorkOptions {
+export interface CommonUnitOfWorkOptions {
     propagation: Propagation;
 }
 
 export interface UnitOfWork<
     Client = unknown,
-    Options extends BaseUnitOfWorkOptions = BaseUnitOfWorkOptions,
+    Options extends CommonUnitOfWorkOptions = CommonUnitOfWorkOptions,
 > {
     getClient(): Client;
     wrap<T>(
@@ -26,10 +26,7 @@ export interface UnitOfWork<
     ): Promise<T>;
 }
 
-export type OptionsOfUnitOfWork<U extends UnitOfWork> = U extends UnitOfWork<
-    any,
-    infer O
->
+export type OptionsOf<U extends UnitOfWork> = U extends UnitOfWork<any, infer O>
     ? O
     : never;
 

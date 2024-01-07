@@ -1,10 +1,5 @@
 import { v4 as uuid } from "uuid";
 
-export interface MessageMeta {
-    id: string;
-    type: string;
-}
-
 type Version = string | number | undefined;
 
 interface CommonMessageHeaders {
@@ -12,9 +7,6 @@ interface CommonMessageHeaders {
     type: string;
     schemaVersion: Version;
     createdAt: Date;
-    causation?: MessageMeta;
-    correlation?: MessageMeta;
-    returnAddress?: string;
 }
 
 export interface MessageHeaders extends CommonMessageHeaders {
@@ -95,40 +87,23 @@ export abstract class Message<
         return this.getHeader("createdAt");
     }
 
-    public setPropagation(message: Message): void {
-        this.setCausation(message);
-        this.setCorrelation(message);
-    }
-
-    private setCausation(message: Message): void {
-        this.headers.causation = {
-            id: message.getMessageId(),
-            type: message.getMessageType(),
+    public serialize(): {
+        headers: MessageHeaders;
+        payload: Record<string, unknown>;
+    } {
+        return {
+            headers: { ...this.headers },
+            payload: this.serializePayload(this.payload),
         };
     }
 
-    public getCausation(): MessageMeta | undefined {
-        return this.getHeader("causation");
-    }
-
-    private setCorrelation(message: Message): void {
-        this.headers.correlation = message.getCorrelation() ?? {
-            id: message.getMessageId(),
-            type: message.getMessageType(),
-        };
-    }
-
-    public getCorrelation(): MessageMeta | undefined {
-        return this.getHeader("correlation");
+    protected serializePayload(payload: T): Record<string, unknown> {
+        return payload;
     }
 }
 
 export type AnyMessage = Message<any>;
-export type PayloadTypeOfMessage<T extends AnyMessage> = T extends Message<
-    infer P
->
-    ? P
-    : never;
+
 export type MessageClass<T extends AnyMessage = AnyMessage> = {
     getSchemaVersion(): Version;
     getType(): string;
@@ -136,17 +111,11 @@ export type MessageClass<T extends AnyMessage = AnyMessage> = {
     new (...args: any[]): T;
 };
 
-function generateHeaderFor(
-    cls: MessageClass,
-    extra: {
-        returnAddress?: string;
-    } = {}
-): MessageHeaders {
+function generateHeaderFor(cls: MessageClass): MessageHeaders {
     return {
         id: uuid(),
         type: cls.getType(),
         schemaVersion: cls.getSchemaVersion(),
         createdAt: new Date(),
-        returnAddress: extra.returnAddress,
     };
 }

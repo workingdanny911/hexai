@@ -1,4 +1,6 @@
-export default class ValidationError extends Error {
+export class DomainError extends Error {}
+
+export class ValidationError extends DomainError {
     constructor(
         public field: string,
         public code: string,

@@ -1,10 +1,13 @@
-import { BaseApplicationContext } from "@/application";
+import {
+    ApplicationContextAware,
+    CommonApplicationContext,
+    isApplicationContextAware,
+} from "@/application";
+
 import { AbstractInjector } from "./abstract-injector";
-import { ApplicationContextAware } from "./application-context-aware";
-import { isApplicationContextAware } from "./inspection";
 
 export class ApplicationContextInjector extends AbstractInjector<
-    BaseApplicationContext,
+    CommonApplicationContext,
     ApplicationContextAware
 > {
     protected override isInjectable(
@@ -15,7 +18,7 @@ export class ApplicationContextInjector extends AbstractInjector<
 
     protected override doInject(
         target: ApplicationContextAware,
-        injectingObject: BaseApplicationContext
+        injectingObject: CommonApplicationContext
     ): void {
         target.setApplicationContext(injectingObject);
     }

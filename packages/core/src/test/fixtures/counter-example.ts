@@ -5,19 +5,19 @@ import {
     Repository,
 } from "@/domain";
 import {
-    ConsumedEventTracker,
-    OutboxEventPublisher,
-    PublishedEventTracker,
-    UnitOfWork,
-} from "@/infra";
-import {
     Atomic,
     ErrorResponse,
+    EventPublisher,
     UseCase,
     validationErrorResponse,
 } from "@/application";
+import {
+    ConsumedMessageTracker,
+    PublishedMessageTracker,
+    UnitOfWork,
+} from "@/infra";
+import { Message } from "@/message";
 import InMemoryDatabaseConcerns from "./in-memory-database-concerns";
-import { Command, Event } from "@/message";
 
 export class CounterId extends EntityId<string> {}
 
@@ -86,7 +86,7 @@ export class Counter extends AggregateRoot<CounterId> {
     }
 }
 
-export class CounterCreated extends Event<{
+export class CounterCreated extends Message<{
     id: CounterId;
 }> {
     public static type = "test.counter.counter-created";
@@ -106,7 +106,7 @@ export class CounterCreated extends Event<{
     }
 }
 
-export class CounterValueChanged extends Event<{
+export class CounterValueChanged extends Message<{
     id: CounterId;
     value: number;
 }> {
@@ -143,7 +143,7 @@ export class CounterApplicationContext {
     private static publishedEventTracker =
         this.dbConcerns.createPublishedEventTracker();
     private static consumedEventTracker =
-        this.dbConcerns.createConsumedEventTracker();
+        this.dbConcerns.createConsumedMessageTracker();
     private static counterRepository =
         this.dbConcerns.createRepository<CounterRepository>({
             namespace: "counter",
@@ -155,15 +155,15 @@ export class CounterApplicationContext {
         return CounterApplicationContext.unitOfWork;
     }
 
-    public getOutboxEventPublisher(): OutboxEventPublisher {
+    public getOutboxEventPublisher(): EventPublisher {
         return CounterApplicationContext.outboxEventPublisher;
     }
 
-    public getPublishedEventTracker(): PublishedEventTracker {
+    public getPublishedEventTracker(): PublishedMessageTracker {
         return CounterApplicationContext.publishedEventTracker;
     }
 
-    public getConsumedEventTracker(): ConsumedEventTracker {
+    public getConsumedEventTracker(): ConsumedMessageTracker {
         return CounterApplicationContext.consumedEventTracker;
     }
 
@@ -176,7 +176,7 @@ export class CounterApplicationContext {
     }
 }
 
-export class CreateCounterRequest extends Command {
+export class CreateCounterRequest extends Message {
     constructor(public readonly id: string) {
         super({
             id,
@@ -188,26 +188,18 @@ export class CreateCounter extends UseCase<
     void,
     CounterApplicationContext
 > {
-    private readonly repository: CounterRepository;
-    private readonly eventPublisher: OutboxEventPublisher;
-
-    constructor(protected readonly context: CounterApplicationContext) {
-        super(context);
-
-        this.repository = context.getCounterRepository();
-        this.eventPublisher = context.getOutboxEventPublisher();
-    }
-
     @Atomic()
     public async doExecute(request: CreateCounterRequest): Promise<void> {
+        const repository = this.applicationContext.getCounterRepository();
+
         const counter = Counter.create(CounterId.from(request.id));
 
-        await this.repository.add(counter);
-        await this.eventPublisher.publish(counter.collectEvents());
+        await repository.add(counter);
+        await this.eventPublisher.publish(...counter.collectEvents());
     }
 }
 
-export class IncreaseCounterRequest extends Command {
+export class IncreaseCounterRequest extends Message {
     constructor(public readonly id: string) {
         super({
             id,
@@ -220,26 +212,17 @@ export class IncreaseCounter extends UseCase<
     { value: number },
     CounterApplicationContext
 > {
-    private readonly repository: CounterRepository;
-    private readonly eventPublisher: OutboxEventPublisher;
-
-    constructor(protected readonly context: CounterApplicationContext) {
-        super(context);
-
-        this.repository = context.getCounterRepository();
-        this.eventPublisher = context.getOutboxEventPublisher();
-    }
-
     @Atomic()
     public async doExecute(request: IncreaseCounterRequest): Promise<{
         value: number;
     }> {
-        const counter = await this.repository.get(CounterId.from(request.id));
+        const repository = this.applicationContext.getCounterRepository();
+        const counter = await repository.get(CounterId.from(request.id));
 
         counter.increment();
 
-        await this.repository.update(counter);
-        await this.eventPublisher.publish(counter.collectEvents());
+        await repository.update(counter);
+        await this.eventPublisher.publish(...counter.collectEvents());
 
         return {
             value: counter.getValue(),

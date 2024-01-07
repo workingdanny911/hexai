@@ -5,22 +5,15 @@ import {
     expectUnknownErrorResponse,
     expectValidationErrorResponse,
 } from "@/test";
-import { Command } from "@/message";
 
 import { UseCase } from "./use-case";
 
-class DummyUseCaseRequest extends Command {
-    constructor() {
-        super({});
-    }
-}
-
-class DummyUseCase extends UseCase<DummyUseCaseRequest> {
+class DummyUseCase extends UseCase<{}> {
     protected async doExecute() {}
 }
 
 describe("use case", () => {
-    const useCase = new DummyUseCase({} as any);
+    const useCase = new DummyUseCase();
 
     beforeEach(() => {
         vi.restoreAllMocks();
@@ -36,7 +29,7 @@ describe("use case", () => {
             throw new Error("Something went wrong");
         });
 
-        const response = await useCase.execute(new DummyUseCaseRequest());
+        const response = await useCase.execute({});
 
         expectUnknownErrorResponse(response, "Something went wrong");
     });
@@ -46,7 +39,7 @@ describe("use case", () => {
             throw new ValidationError("field", "code", "message");
         });
 
-        const response = await useCase.execute(new DummyUseCaseRequest());
+        const response = await useCase.execute({});
 
         expectValidationErrorResponse(response, {
             field: "code",

@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { BaseApplicationContext } from "@/application";
+import { CommonApplicationContext } from "@/application";
 import { ApplicationContextInjector } from "./application-context-injector";
 
 describe("ApplicationContextInjector", () => {
     let injector: ApplicationContextInjector;
-    const dummyApplicationContext: BaseApplicationContext = {
+    const dummyApplicationContext: CommonApplicationContext = {
         getUnitOfWork: vi.fn(),
-        getOutboxEventPublisher: vi.fn(),
     };
 
     beforeEach(() => {

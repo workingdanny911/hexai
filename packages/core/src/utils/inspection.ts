@@ -7,7 +7,3 @@ export function isClass(obj: unknown): obj is C.Class {
         Object.hasOwn(obj.prototype, "constructor")
     );
 }
-
-export function isObject(obj: unknown): obj is object {
-    return typeof obj === "object" && obj !== null;
-}

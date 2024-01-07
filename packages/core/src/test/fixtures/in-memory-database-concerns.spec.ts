@@ -7,11 +7,15 @@ import {
     ObjectNotFoundError,
 } from "@/domain";
 import {
-    DummyEvent,
+    DummyMessage,
     expectEventsPublishedToEqual,
     InMemoryDatabaseConcerns,
 } from "@/test";
-import { Counter, CounterId, CounterRepository } from "./counter";
+import {
+    Counter,
+    CounterId,
+    CounterRepository,
+} from "src/test/fixtures/counter-example";
 
 const dbConcerns = new InMemoryDatabaseConcerns();
 const unitOfWork = dbConcerns.asUnitOfWork();
@@ -22,7 +26,7 @@ const repository = dbConcerns.createRepository<CounterRepository>({
 });
 const eventTracker = dbConcerns.createPublishedEventTracker();
 const eventPublisher = dbConcerns.createOutboxEventPublisher();
-const consumedEventTracker = dbConcerns.createConsumedEventTracker();
+const consumedMessageTracker = dbConcerns.createConsumedMessageTracker();
 
 beforeEach(() => {
     dbConcerns.clear();
@@ -138,13 +142,13 @@ describe("repository", () => {
 
 describe("event publisher and tracker", () => {
     test("publishing events", async () => {
-        const events = DummyEvent.createMany(5);
+        const events = DummyMessage.createMany(5);
 
-        await eventPublisher.publish(events);
+        await eventPublisher.publish(...events);
 
         await expectEventsPublishedToEqual(eventTracker, events);
 
-        await eventPublisher.publish(events);
+        await eventPublisher.publish(...events);
 
         await expectEventsPublishedToEqual(eventTracker, [
             ...events,
@@ -153,20 +157,20 @@ describe("event publisher and tracker", () => {
     });
 
     test("marking events as published", async () => {
-        const events = DummyEvent.createMany(5);
+        const events = DummyMessage.createMany(5);
 
-        await eventPublisher.publish(events);
-        await eventTracker.markEventsAsPublished(1, 5);
+        await eventPublisher.publish(...events);
+        await eventTracker.markMessagesAsPublished(1, 5);
 
         await expectEventsPublishedToEqual(eventTracker, []);
     });
 
     test("rolling back", async () => {
-        const events = DummyEvent.createMany(5);
+        const events = DummyMessage.createMany(5);
 
         await expect(
             unitOfWork.wrap(async () => {
-                await eventPublisher.publish(events);
+                await eventPublisher.publish(...events);
                 throw new Error("rollback");
             })
         ).rejects.toThrow("rollback");
@@ -177,21 +181,21 @@ describe("event publisher and tracker", () => {
 
 describe("consumed event tracker", () => {
     test("marking event as consumed", async () => {
-        const event = DummyEvent.create();
+        const event = DummyMessage.create();
 
-        await consumedEventTracker.markAsConsumed("consumer-name", event);
+        await consumedMessageTracker.markAsConsumed("consumer-name", event);
 
         expect(
-            consumedEventTracker.markAsConsumed("consumer-name", event)
+            consumedMessageTracker.markAsConsumed("consumer-name", event)
         ).rejects.toThrowError(Error);
     });
 
     test("rolling back", async () => {
-        const event = DummyEvent.create();
+        const event = DummyMessage.create();
 
         await expect(
             unitOfWork.wrap(async () => {
-                await consumedEventTracker.markAsConsumed(
+                await consumedMessageTracker.markAsConsumed(
                     "consumer-name",
                     event
                 );
@@ -200,7 +204,7 @@ describe("consumed event tracker", () => {
         ).rejects.toThrow("rollback");
 
         await expect(
-            consumedEventTracker.markAsConsumed("consumer-name", event)
+            consumedMessageTracker.markAsConsumed("consumer-name", event)
         ).resolves.toBeUndefined();
     });
 });
@@ -208,13 +212,13 @@ describe("consumed event tracker", () => {
 describe("transactional behavior", () => {
     test("all roles share the same transaction", async () => {
         const entity = Counter.create(CounterId.from("id"));
-        const event = DummyEvent.create();
+        const event = DummyMessage.create();
 
         await unitOfWork.wrap(async () => {
             await repository.add(entity);
             await eventPublisher.publish([event]);
-            await eventTracker.markEventsAsPublished(1, 1);
-            await consumedEventTracker.markAsConsumed("consumer-name", event);
+            await eventTracker.markMessagesAsPublished(1, 1);
+            await consumedMessageTracker.markAsConsumed("consumer-name", event);
 
             await expect(
                 unitOfWork.wrap(async () => {
@@ -228,7 +232,7 @@ describe("transactional behavior", () => {
         );
         await expectEventsPublishedToEqual(eventTracker, []);
         await expect(
-            consumedEventTracker.markAsConsumed("consumer-name", event)
+            consumedMessageTracker.markAsConsumed("consumer-name", event)
         ).resolves.toBeUndefined();
     });
 });

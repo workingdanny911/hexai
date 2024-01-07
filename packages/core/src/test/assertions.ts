@@ -6,8 +6,8 @@ import {
     UnknownErrorResponse,
     ValidationErrorResponse,
 } from "@/application";
-import { ConsumedEventTracker, PublishedEventTracker } from "@/infra";
-import { Event } from "@/message";
+import { ConsumedMessageTracker, PublishedMessageTracker } from "@/infra";
+import { Message } from "@/message";
 
 import { expect } from "./expect";
 
@@ -80,58 +80,61 @@ function assertIsErrorResponse<T extends { errorType: string }>(
 }
 
 export async function expectNoEventsPublished(
-    eventTracker: PublishedEventTracker
+    eventTracker: PublishedMessageTracker
 ): Promise<void> {
-    await expect(eventTracker.getUnpublishedEvents()).resolves.toEqual([1, []]);
+    await expect(eventTracker.getUnpublishedMessages()).resolves.toEqual([
+        1,
+        [],
+    ]);
 }
 
 export async function expectEventsPublishedToEqual(
-    eventTracker: PublishedEventTracker,
-    expectedEvents: Array<Event<any>>
+    eventTracker: PublishedMessageTracker,
+    expectedEvents: Array<Message<any>>
 ): Promise<void> {
-    const [, unpublishedEvents] = await eventTracker.getUnpublishedEvents();
+    const [, unpublishedEvents] = await eventTracker.getUnpublishedMessages();
     expectEventsToEqual(unpublishedEvents, expectedEvents);
 }
 
 export async function expectEventsPublishedToContain(
-    eventTracker: PublishedEventTracker,
-    expectedEvents: Array<Event<any>>
+    eventTracker: PublishedMessageTracker,
+    expectedEvents: Array<Message<any>>
 ): Promise<void> {
-    const [, unpublishedEvents] = await eventTracker.getUnpublishedEvents();
+    const [, unpublishedEvents] = await eventTracker.getUnpublishedMessages();
     expectEventsToContain(unpublishedEvents, expectedEvents);
 }
 
 export function expectEventsToEqual(
-    events: Array<Event<any>>,
-    expectedEvents: Array<Event<any>>
+    events: Array<Message<any>>,
+    expectedEvents: Array<Message<any>>
 ): void {
-    expect(events.map(serializeEvent)).toEqual(
-        expectedEvents.map(serializeEvent)
+    expect(events.map(serializeMessage)).toEqual(
+        expectedEvents.map(serializeMessage)
     );
 }
 
 export function expectEventsToContain(
-    events: Array<Event<any>>,
-    expectedEvents: Array<Event<any>>
+    events: Array<Message<any>>,
+    expectedEvents: Array<Message<any>>
 ): void {
-    const target = events.map(serializeEvent);
-    const expected = expectedEvents.map(serializeEvent);
+    const target = events.map(serializeMessage);
+    const expected = expectedEvents.map(serializeMessage);
 
     expect(target).toEqual(expect.arrayContaining(expected));
 }
 
-function serializeEvent(event: Event): unknown {
+function serializeMessage(message: Message): unknown {
     return [
-        event.getMessageType(),
-        event.getSchemaVersion(),
-        event.serialize().payload,
+        message.getMessageType(),
+        message.getSchemaVersion(),
+        message.serialize().payload,
     ];
 }
 
 export async function expectEventNotConsumed(
-    consumedEventTracker: ConsumedEventTracker,
+    consumedEventTracker: ConsumedMessageTracker,
     eventHandlerName: string,
-    event: Event
+    event: Message
 ): Promise<void> {
     await expect(
         consumedEventTracker.markAsConsumed(eventHandlerName, event)

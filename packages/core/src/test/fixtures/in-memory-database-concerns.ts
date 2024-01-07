@@ -5,17 +5,17 @@ import { C } from "ts-toolbelt";
 import {
     DuplicateObjectError,
     Entity,
-    IdTypeOf,
+    IdOf,
     ObjectNotFoundError,
     Repository,
 } from "@/domain";
+import { EventPublisher } from "@/application";
 import {
-    ConsumedEventTracker,
-    OutboxEventPublisher,
-    PublishedEventTracker,
+    ConsumedMessageTracker,
+    PublishedMessageTracker,
     UnitOfWork,
 } from "@/infra";
-import { Event } from "@/message";
+import { Message } from "@/message";
 
 interface EntityStore {
     [entityNamespace: string]: Record<string | number, Entity>;
@@ -26,9 +26,9 @@ interface TransactionState {
 }
 
 interface EventStore {
-    events: Event[];
+    events: Message[];
     unpublishedFrom: number;
-    consumedEvents: Record<string, Set<string>>;
+    consumedMessages: Record<string, Set<string>>;
 }
 
 type State = EntityStore & EventStore & TransactionState;
@@ -118,16 +118,16 @@ export default class InMemoryDatabaseConcerns implements UnitOfWork<void> {
         }) as any;
     }
 
-    public createOutboxEventPublisher(): OutboxEventPublisher {
+    public createOutboxEventPublisher(): EventPublisher {
         return new InMemoryOutboxPublisher(this.makeGetState());
     }
 
-    public createPublishedEventTracker(): PublishedEventTracker {
+    public createPublishedEventTracker(): PublishedMessageTracker {
         return new InMemoryPublishedEventTracker(this.makeGetState());
     }
 
-    public createConsumedEventTracker(): ConsumedEventTracker {
-        return new InMemoryConsumedEventTracker(this.makeGetState());
+    public createConsumedMessageTracker(): ConsumedMessageTracker {
+        return new InMemoryConsumedMessageTracker(this.makeGetState());
     }
 
     private makeGetState(entityNamespace?: string): () => State {
@@ -176,7 +176,7 @@ function emptyState(): State {
         transactionStatus: "open",
         events: [],
         unpublishedFrom: 1,
-        consumedEvents: {},
+        consumedMessages: {},
     } as any;
 }
 
@@ -230,7 +230,7 @@ export class InMemoryRepository<E extends Entity, M = any>
         this.getEntities()[entity.getId().getValue()] = this.dehydrate(entity);
     }
 
-    public async get(id: IdTypeOf<E>): Promise<E> {
+    public async get(id: IdOf<E>): Promise<E> {
         const raw = this.getEntities()[id.getValue()];
 
         if (!raw) {
@@ -251,19 +251,19 @@ export class InMemoryRepository<E extends Entity, M = any>
     }
 }
 
-class InMemoryOutboxPublisher implements OutboxEventPublisher {
+class InMemoryOutboxPublisher implements EventPublisher {
     constructor(private getState: () => State) {}
 
-    public async publish(events: Array<Event>): Promise<void> {
+    public async publish(...events: Message[]): Promise<void> {
         this.getState().events.push(...events);
     }
 }
 
-class InMemoryPublishedEventTracker implements PublishedEventTracker {
+class InMemoryPublishedEventTracker implements PublishedMessageTracker {
     constructor(private getState: () => State) {}
-    public async getUnpublishedEvents(
+    public async getUnpublishedMessages(
         batchSize?: number
-    ): Promise<[number, Array<Event>]> {
+    ): Promise<[number, Message[]]> {
         return [
             this.getState().unpublishedFrom,
             this.getState().events.slice(
@@ -273,7 +273,7 @@ class InMemoryPublishedEventTracker implements PublishedEventTracker {
         ];
     }
 
-    public async markEventsAsPublished(
+    public async markMessagesAsPublished(
         fromPosition: number,
         numEvents: number
     ): Promise<void> {
@@ -281,15 +281,15 @@ class InMemoryPublishedEventTracker implements PublishedEventTracker {
     }
 }
 
-class InMemoryConsumedEventTracker implements ConsumedEventTracker {
+class InMemoryConsumedMessageTracker implements ConsumedMessageTracker {
     constructor(private getState: () => State) {}
 
-    public async markAsConsumed(name: string, event: Event): Promise<void> {
-        if (!this.getState().consumedEvents[name]) {
-            this.getState().consumedEvents[name] = new Set();
+    public async markAsConsumed(name: string, event: Message): Promise<void> {
+        if (!this.getState().consumedMessages[name]) {
+            this.getState().consumedMessages[name] = new Set();
         }
 
-        const eventSet = this.getState().consumedEvents[name];
+        const eventSet = this.getState().consumedMessages[name];
         const eid = event.getMessageId();
 
         if (eventSet.has(eid)) {

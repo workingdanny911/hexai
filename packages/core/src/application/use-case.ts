@@ -1,20 +1,37 @@
 import { ValidationError } from "@/domain";
+import { EventPublisher, EventPublisherAware } from "@/application";
 import { UnitOfWork } from "@/infra";
-import { UnitOfWorkHolder } from "@/helpers";
-import { Command } from "@/message";
+import { Message } from "@/message";
 
 import {
     ErrorResponse,
     unknownErrorResponse,
     validationErrorResponse,
 } from "./error-response";
+import { ApplicationContextAware } from "./application-context-aware";
+import { CommonApplicationContext } from "./common-application-context";
+import { CommandExecutor } from "./command-executor";
 
 export abstract class UseCase<
-    I extends Command = Command,
-    O = unknown,
-    Ctx extends UnitOfWorkHolder = UnitOfWorkHolder,
-> {
-    constructor(protected readonly context: Ctx) {}
+        I = unknown,
+        O = unknown,
+        Ctx extends CommonApplicationContext = CommonApplicationContext,
+    >
+    implements
+        CommandExecutor<I, O | ErrorResponse>,
+        ApplicationContextAware<Ctx>,
+        EventPublisherAware<Message>
+{
+    protected applicationContext!: Ctx;
+    protected eventPublisher!: EventPublisher<Message>;
+
+    public setApplicationContext(applicationContext: Ctx): void {
+        this.applicationContext = applicationContext;
+    }
+
+    public setEventPublisher(eventPublisher: EventPublisher<Message>): void {
+        this.eventPublisher = eventPublisher;
+    }
 
     public async execute(command: I): Promise<O | ErrorResponse> {
         try {
@@ -26,12 +43,8 @@ export abstract class UseCase<
 
     protected abstract doExecute(command: I): Promise<O>;
 
-    protected getContext(): Ctx {
-        return this.context;
-    }
-
     protected getUnitOfWork(): UnitOfWork {
-        return this.context.getUnitOfWork();
+        return this.applicationContext.getUnitOfWork();
     }
 
     private static mapErrorToResponse(error: Error): ErrorResponse {

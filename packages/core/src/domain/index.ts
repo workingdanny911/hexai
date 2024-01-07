@@ -1,7 +1,5 @@
-export { default as AggregateRoot } from "./aggregate-root";
-export { default as Entity } from "./entity";
-export { default as Repository } from "./repository";
-export { default as ValidationError } from "./validation-error";
-
+export * from "./aggregate-root";
+export * from "./domain-error";
+export * from "./domain-event";
 export * from "./entity";
 export * from "./repository";

@@ -1,10 +1,10 @@
-import { Event } from "@/message";
-import Entity, { EntityId } from "./entity";
+import { Entity, EntityId } from "./entity";
+import { DomainEvent } from "./domain-event";
 
-export default abstract class AggregateRoot<T extends EntityId<any>>
+export abstract class AggregateRoot<T extends EntityId<any>>
     implements Entity<T>
 {
-    protected events: Array<Event> = [];
+    protected events: Array<DomainEvent> = [];
 
     protected constructor(protected readonly id: T) {}
 
@@ -12,11 +12,11 @@ export default abstract class AggregateRoot<T extends EntityId<any>>
         return this.id;
     }
 
-    protected raise(event: Event<any>): void {
+    protected raise(event: DomainEvent<any>): void {
         this.events.push(event);
     }
 
-    public collectEvents(): Array<Event> {
+    public collectEvents(): Array<DomainEvent> {
         const events = this.events;
         this.events = [];
         return events;

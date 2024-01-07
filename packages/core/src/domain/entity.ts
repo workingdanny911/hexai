@@ -17,9 +17,9 @@ export class EntityId<T extends string | number> {
     }
 }
 
-export type IdTypeOf<T> = T extends Entity<infer R> ? R : never;
+export type IdOf<T> = T extends Entity<infer Id> ? Id : never;
 
-export default interface Entity<
+export interface Entity<
     T extends EntityId<string | number> = EntityId<string>,
 > {
     getId(): T;

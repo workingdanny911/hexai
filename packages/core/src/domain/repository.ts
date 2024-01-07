@@ -1,7 +1,7 @@
-import Entity, { IdTypeOf } from "./entity";
+import { Entity, IdOf } from "./entity";
 
-export default interface Repository<T extends Entity> {
-    get(id: IdTypeOf<T>): Promise<T>;
+export interface Repository<T extends Entity> {
+    get(id: IdOf<T>): Promise<T>;
     add(entity: T): Promise<void>;
     update(entity: T): Promise<void>;
     count(): Promise<number>;

@@ -1,80 +1,89 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
 
-import { UnitOfWork } from "@/infra";
-import { Counter, CounterApplicationContext, CounterId } from "@/test";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+
+import { CommonUnitOfWorkOptions, UnitOfWork } from "@/infra";
+import {
+    ApplicationContextAware,
+    CommonApplicationContext,
+} from "@/application";
 import { Atomic } from "./atomic";
 
+class UnitOfWorkForTest implements UnitOfWork<null> {
+    als = new AsyncLocalStorage();
+    private store!: any;
+
+    public setStore(store: any): void {
+        this.store = store;
+    }
+
+    async wrap<T>(
+        fn: (client: null) => Promise<T>,
+        options?: Partial<CommonUnitOfWorkOptions>
+    ): Promise<T> {
+        return this.als.run(this.store, () => fn(null));
+    }
+
+    getClient() {
+        return null;
+    }
+}
+
 describe("atomic", () => {
-    const applicationContext = new CounterApplicationContext();
-    const counterRepo = applicationContext.getCounterRepository();
-    const unitOfWork = applicationContext.getUnitOfWork();
+    const unitOfWork = new UnitOfWorkForTest();
+    const applicationContext: CommonApplicationContext<UnitOfWorkForTest> = {
+        getUnitOfWork: () => unitOfWork,
+    };
 
     beforeEach(() => {
-        CounterApplicationContext.clear();
+        vi.resetAllMocks();
     });
 
-    test("when target instance has no unit of work", async () => {
-        class Target {
+    test("when target is not aware of application context", async () => {
+        expect(() => {
+            class InvalidTarget {
+                // @ts-expect-error
+                @Atomic()
+                async someMethod(): Promise<void> {}
+            }
+        }).toThrow("does not implement 'ApplicationContextAware'");
+    });
+
+    test("when application context is not injected", async () => {
+        class Target implements ApplicationContextAware {
             @Atomic()
-            async do(): Promise<void> {}
+            async transactionalMethod(): Promise<void> {}
+
+            setApplicationContext(
+                applicationContext: CommonApplicationContext
+            ): void {}
         }
 
-        await expect(new Target().do()).rejects.toThrowError(
-            "UnitOfWorkHolder not implemented"
+        await expect(new Target().transactionalMethod()).rejects.toThrowError(
+            "application context not injected"
         );
     });
 
-    test("when target instance has unit of work", async () => {
-        class Target {
-            getUnitOfWork(): UnitOfWork {
-                return unitOfWork;
-            }
+    test("wraps method with unit of work", async () => {
+        let storeInTrasactionalMethod!: any;
 
+        class Target implements ApplicationContextAware {
             @Atomic()
-            async do(): Promise<void> {
-                await counterRepo.add(
-                    Counter.create(CounterId.from("counter-id"))
-                );
-
-                throw new Error("rollback");
+            async transactionalMethod(): Promise<void> {
+                storeInTrasactionalMethod = unitOfWork.als.getStore();
             }
+
+            setApplicationContext(
+                applicationContext: CommonApplicationContext
+            ): void {}
         }
 
-        await expect(new Target().do()).rejects.toThrow("rollback");
-        expect(await counterRepo.count()).toBe(0);
-    });
+        const target = new Target();
+        target.setApplicationContext(applicationContext);
+        unitOfWork.setStore("store");
 
-    test("when nested", async () => {
-        class A {
-            getUnitOfWork(): UnitOfWork {
-                return unitOfWork;
-            }
+        await target.transactionalMethod();
 
-            @Atomic()
-            async do(): Promise<void> {
-                throw new Error("rollback");
-            }
-        }
-
-        class B {
-            getUnitOfWork(): UnitOfWork {
-                return unitOfWork;
-            }
-
-            @Atomic()
-            async do(): Promise<void> {
-                try {
-                    await new A().do();
-                } catch {}
-
-                await counterRepo.add(
-                    Counter.create(CounterId.from("counter-id"))
-                );
-            }
-        }
-
-        await expect(new B().do()).rejects.toThrow("closed");
-
-        expect(await counterRepo.count()).toBe(0);
+        expect(storeInTrasactionalMethod).toBe("store");
     });
 });

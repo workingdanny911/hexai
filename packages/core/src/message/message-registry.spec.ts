@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, test } from "vitest";
 
-import { DummyEvent } from "@/test";
-import { isMessageClass } from "@/helpers";
+import { DummyMessage } from "@/test";
 
 import { MessageRegistry } from "./message-registry";
 import { Message, MessageClass, MessageHeaders } from "./message";
+import { isMessageClass } from "./inspections";
 
 describe("message registry", () => {
     let messageRegistry: MessageRegistry;
@@ -62,12 +62,12 @@ describe("message registry", () => {
     });
 
     test("preserves header fields", () => {
-        const event = DummyEvent.create();
+        const event = DummyMessage.create();
         const { headers } = event.serialize();
 
-        register(DummyEvent);
+        register(DummyMessage);
 
-        const result: DummyEvent = dehydrate(headers) as any;
+        const result: DummyMessage = dehydrate(headers) as any;
 
         expect(event.serialize().headers).toEqual(result.serialize().headers);
     });
@@ -142,7 +142,7 @@ function createMessageClassForTest(
     type: string,
     version?: string | number
 ): MessageClass {
-    return class MessageForTest extends DummyEvent {
+    return class MessageForTest extends DummyMessage {
         static type = type;
         static schemaVersion = version;
 
