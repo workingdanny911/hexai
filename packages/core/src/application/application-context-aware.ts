@@ -1,7 +1,3 @@
-import { CommonApplicationContext } from "src/application/common-application-context";
-
-export interface ApplicationContextAware<
-    C extends CommonApplicationContext = CommonApplicationContext,
-> {
+export interface ApplicationContextAware<C extends object = object> {
     setApplicationContext(context: C): void;
 }

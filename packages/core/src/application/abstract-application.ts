@@ -1,14 +1,10 @@
 import _ from "lodash";
 import { C } from "ts-toolbelt";
 
-import {
-    isApplicationContextAware,
-    isEventPublisherAware,
-} from "./inspections";
-import { CommonApplicationContext } from "./common-application-context";
+import { isApplicationContextAware } from "./inspections";
 import {
     ApplicationEventPublisher,
-    ContextOf,
+    EventContextOf,
 } from "./application-event-publisher";
 import { Authenticator, AuthFilter, FactorOf } from "./auth";
 import { CommandExecutorRegistry } from "./command-executor-registry";
@@ -19,45 +15,40 @@ import {
     validationErrorResponse,
 } from "./error-response";
 import { AuthError } from "./error";
+import { CommonApplicationContext } from "./application-context";
 
-interface ErrorObserver<Message> {
+interface ErrorObserver<Message = any> {
     (message: Message, error: Error): void | Promise<void>;
 }
 
+interface ApplicationContext extends CommonApplicationContext {
+    getEventPublisher(): ApplicationEventPublisher;
+    getAuthenticator?(): Authenticator;
+}
+
+type EventPublisherOf<C extends ApplicationContext> = ReturnType<
+    C["getEventPublisher"]
+>;
+
+type AuthenticatorOf<C extends ApplicationContext> =
+    C["getAuthenticator"] extends () => Authenticator
+        ? ReturnType<C["getAuthenticator"]>
+        : never;
+
 export abstract class AbstractApplication<
-    Ctx extends CommonApplicationContext = CommonApplicationContext,
-    Publisher extends ApplicationEventPublisher<
-        any,
-        any
-    > = ApplicationEventPublisher,
-    Message extends object = object,
+    Ctx extends ApplicationContext = ApplicationContext,
+    Cmd extends object = object,
     SecCtx = any,
-    Auth extends Authenticator<any, SecCtx> = Authenticator<any, SecCtx>,
 > {
     protected authFilters = new Map();
-    protected authenticator: Auth | null = null;
-    protected authFactor: FactorOf<Auth> | null = null;
+    protected authFactor: any | null = null;
     protected securityContext: SecCtx | null = null;
-    protected errorObservers: Array<ErrorObserver<Message>> = [];
+    protected errorObservers: ErrorObserver[] = [];
 
     protected constructor(
         protected context: Ctx,
-        protected eventPublisher: Publisher,
-        protected handlers: CommandExecutorRegistry<any, Message>
+        protected executorRegistry: CommandExecutorRegistry<any, Cmd>
     ) {}
-
-    public withAuthenticator<Factor = any>(
-        authenticator: Authenticator<Factor, SecCtx>
-    ): AbstractApplication<
-        Ctx,
-        Publisher,
-        Message,
-        SecCtx,
-        Authenticator<Factor, SecCtx>
-    > {
-        this.authenticator = authenticator as any;
-        return this;
-    }
 
     public withSecurityContext(securityContext: SecCtx) {
         const newApp = this.clone();
@@ -69,13 +60,13 @@ export abstract class AbstractApplication<
         this.securityContext = securityContext;
     }
 
-    public withAuthFactor(authFactor: FactorOf<Auth>) {
+    public withAuthFactor(authFactor: FactorOf<AuthenticatorOf<Ctx>>) {
         const newApp = this.clone();
         newApp.setAuthFactor(authFactor);
         return newApp;
     }
 
-    protected setAuthFactor(authFactor: FactorOf<Auth>): void {
+    protected setAuthFactor(authFactor: FactorOf<AuthenticatorOf<Ctx>>): void {
         this.authFactor = authFactor;
     }
 
@@ -83,43 +74,43 @@ export abstract class AbstractApplication<
         return _.clone(this);
     }
 
-    public withHandler<H extends CommandExecutor<Message>>(
+    public withExecutor<E extends CommandExecutor<Cmd>>(
         key: string | object | C.Class,
-        handler: H,
-        config?: { authFilter?: AuthFilter<SecCtx, Message> }
-    ): AbstractApplication<Ctx, Publisher, Message> {
-        this.handlers.register(key, handler);
+        executor: E,
+        config?: { authFilter?: AuthFilter<SecCtx, Cmd> }
+    ): AbstractApplication<Ctx, Cmd, SecCtx> {
+        this.executorRegistry.register(key, executor);
 
         if (config?.authFilter) {
-            this.authFilters.set(handler, config.authFilter);
+            this.authFilters.set(executor, config.authFilter);
         }
 
         return this;
     }
 
-    async handle(message: Message): Promise<any> {
-        const handler = this.handlers.get(message);
-        if (!handler) {
+    async execute(command: Cmd): Promise<any> {
+        const executor = this.executorRegistry.get(command);
+        if (!executor) {
             return validationErrorResponse({
                 "*": "UNSUPPORTED_MESSAGE_TYPE",
             });
         }
 
         try {
-            await this.authenticate(message, handler);
+            await this.authenticate(command, executor);
         } catch (e) {
             if (e instanceof AuthError) {
                 return authErrorResponse(e.message);
             }
         }
 
-        this.injectDependenciesTo(handler);
+        this.injectApplicationContextTo(executor);
 
-        return await this.executeHandler(message, handler);
+        return await this.doExecute(command, executor);
     }
 
     private async authenticate(
-        message: Message,
+        command: Cmd,
         handler: CommandExecutor
     ): Promise<void> {
         const authFilter = this.authFilters.get(handler);
@@ -127,9 +118,10 @@ export abstract class AbstractApplication<
             return;
         }
 
+        const authenticator = this.context.getAuthenticator?.();
         let securityContext: SecCtx | null;
-        if (this.authenticator && this.authFactor) {
-            securityContext = await this.authenticator(this.authFactor);
+        if (authenticator && this.authFactor) {
+            securityContext = await authenticator(this.authFactor);
         } else {
             securityContext = this.securityContext;
         }
@@ -140,42 +132,41 @@ export abstract class AbstractApplication<
             );
         }
 
-        await authFilter(securityContext, message);
+        await authFilter(securityContext, command);
     }
 
-    protected injectDependenciesTo(handler: CommandExecutor): void {
+    protected injectApplicationContextTo(handler: CommandExecutor): void {
         if (isApplicationContextAware(handler)) {
             handler.setApplicationContext(this.context);
         }
-
-        if (isEventPublisherAware(handler)) {
-            handler.setEventPublisher(this.eventPublisher);
-        }
     }
 
-    protected async executeHandler(
-        message: Message,
-        handler: CommandExecutor
+    protected async doExecute(
+        command: Cmd,
+        executor: CommandExecutor
     ): Promise<any> {
         try {
-            return await this.eventPublisher.bind(
-                this.makeEventContext(message),
-                () => handler.execute(message)
-            );
+            return await this.context
+                .getEventPublisher()
+                .bindContext(this.makeEventContext(command), () =>
+                    executor.execute(command)
+                );
         } catch (e) {
             const error = e as Error;
-            this.notifyErrorObservers(message, error);
+            this.notifyErrorObservers(command, error);
             return systemErrorResponse((e as Error).message);
         }
     }
 
-    protected abstract makeEventContext(message: Message): ContextOf<Publisher>;
+    protected abstract makeEventContext(
+        command: Cmd
+    ): EventContextOf<EventPublisherOf<Ctx>>;
 
-    public onError(observer: ErrorObserver<Message>): void {
+    public onError(observer: ErrorObserver<Cmd>): void {
         this.errorObservers.push(observer);
     }
 
-    protected notifyErrorObservers(message: Message, error: Error): void {
-        this.errorObservers.forEach((observer) => observer(message, error));
+    protected notifyErrorObservers(command: Cmd, error: Error): void {
+        this.errorObservers.forEach((observer) => observer(command, error));
     }
 }

@@ -3,10 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { CommonUnitOfWorkOptions, UnitOfWork } from "@/infra";
-import {
-    ApplicationContextAware,
-    CommonApplicationContext,
-} from "@/application";
+import { ApplicationContextAware } from "@/application";
 import { Atomic } from "./atomic";
 
 class UnitOfWorkForTest implements UnitOfWork<null> {
@@ -29,9 +26,13 @@ class UnitOfWorkForTest implements UnitOfWork<null> {
     }
 }
 
+interface UoWHolder {
+    getUnitOfWork(): UnitOfWorkForTest;
+}
+
 describe("atomic", () => {
     const unitOfWork = new UnitOfWorkForTest();
-    const applicationContext: CommonApplicationContext<UnitOfWorkForTest> = {
+    const applicationContext = {
         getUnitOfWork: () => unitOfWork,
     };
 
@@ -50,13 +51,11 @@ describe("atomic", () => {
     });
 
     test("when application context is not injected", async () => {
-        class Target implements ApplicationContextAware {
+        class Target implements ApplicationContextAware<UoWHolder> {
             @Atomic()
             async transactionalMethod(): Promise<void> {}
 
-            setApplicationContext(
-                applicationContext: CommonApplicationContext
-            ): void {}
+            setApplicationContext(applicationContext: UoWHolder): void {}
         }
 
         await expect(new Target().transactionalMethod()).rejects.toThrowError(
@@ -67,15 +66,13 @@ describe("atomic", () => {
     test("wraps method with unit of work", async () => {
         let storeInTrasactionalMethod!: any;
 
-        class Target implements ApplicationContextAware {
+        class Target implements ApplicationContextAware<UoWHolder> {
             @Atomic()
             async transactionalMethod(): Promise<void> {
                 storeInTrasactionalMethod = unitOfWork.als.getStore();
             }
 
-            setApplicationContext(
-                applicationContext: CommonApplicationContext
-            ): void {}
+            setApplicationContext(applicationContext: UoWHolder): void {}
         }
 
         const target = new Target();

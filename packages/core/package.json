@@ -62,6 +62,8 @@
         "uuid": "^9.0.1"
     },
     "devDependencies": {
-        "@types/uuid": "^9.0.7"
+        "@types/uuid": "^9.0.7",
+        "sqlite": "^5.1.1",
+        "sqlite3": "^5.1.7"
     }
 }

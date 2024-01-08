@@ -6,7 +6,6 @@ import {
     UnknownErrorResponse,
     ValidationErrorResponse,
 } from "@/application";
-import { ConsumedMessageTracker, PublishedMessageTracker } from "@/infra";
 import { Message } from "@/message";
 
 import { expect } from "./expect";
@@ -79,41 +78,16 @@ function assertIsErrorResponse<T extends { errorType: string }>(
     );
 }
 
-export async function expectNoEventsPublished(
-    eventTracker: PublishedMessageTracker
-): Promise<void> {
-    await expect(eventTracker.getUnpublishedMessages()).resolves.toEqual([
-        1,
-        [],
-    ]);
-}
-
-export async function expectEventsPublishedToEqual(
-    eventTracker: PublishedMessageTracker,
-    expectedEvents: Array<Message<any>>
-): Promise<void> {
-    const [, unpublishedEvents] = await eventTracker.getUnpublishedMessages();
-    expectEventsToEqual(unpublishedEvents, expectedEvents);
-}
-
-export async function expectEventsPublishedToContain(
-    eventTracker: PublishedMessageTracker,
-    expectedEvents: Array<Message<any>>
-): Promise<void> {
-    const [, unpublishedEvents] = await eventTracker.getUnpublishedMessages();
-    expectEventsToContain(unpublishedEvents, expectedEvents);
-}
-
-export function expectEventsToEqual(
-    events: Array<Message<any>>,
-    expectedEvents: Array<Message<any>>
+export function expectMessagesToEqual(
+    messages: Array<Message<any>>,
+    expectedMessages: Array<Message<any>>
 ): void {
-    expect(events.map(serializeMessage)).toEqual(
-        expectedEvents.map(serializeMessage)
+    expect(messages.map(serializeMessage)).toEqual(
+        expectedMessages.map(serializeMessage)
     );
 }
 
-export function expectEventsToContain(
+export function expectMessagesToContain(
     events: Array<Message<any>>,
     expectedEvents: Array<Message<any>>
 ): void {
@@ -129,14 +103,4 @@ function serializeMessage(message: Message): unknown {
         message.getSchemaVersion(),
         message.serialize().payload,
     ];
-}
-
-export async function expectEventNotConsumed(
-    consumedEventTracker: ConsumedMessageTracker,
-    eventHandlerName: string,
-    event: Message
-): Promise<void> {
-    await expect(
-        consumedEventTracker.markAsConsumed(eventHandlerName, event)
-    ).resolves.toBeUndefined();
 }

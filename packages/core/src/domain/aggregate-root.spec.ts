@@ -4,7 +4,7 @@ import {
     CounterCreated,
     CounterId,
     CounterValueChanged,
-    expectEventsToEqual,
+    expectMessagesToEqual,
 } from "@/test";
 
 describe("aggregate root", () => {
@@ -17,7 +17,7 @@ describe("aggregate root", () => {
     test("raising events", () => {
         counter.increment();
 
-        expectEventsToEqual(counter.collectEvents(), [
+        expectMessagesToEqual(counter.collectEvents(), [
             new CounterCreated({ id: counter.getId() }),
             new CounterValueChanged({ id: counter.getId(), value: 1 }),
         ]);

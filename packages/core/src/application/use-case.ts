@@ -1,5 +1,5 @@
 import { ValidationError } from "@/domain";
-import { EventPublisher, EventPublisherAware } from "@/application";
+import { CommonApplicationContext, EventPublisher } from "@/application";
 import { UnitOfWork } from "@/infra";
 import { Message } from "@/message";
 
@@ -9,7 +9,6 @@ import {
     validationErrorResponse,
 } from "./error-response";
 import { ApplicationContextAware } from "./application-context-aware";
-import { CommonApplicationContext } from "./common-application-context";
 import { CommandExecutor } from "./command-executor";
 
 export abstract class UseCase<
@@ -19,18 +18,14 @@ export abstract class UseCase<
     >
     implements
         CommandExecutor<I, O | ErrorResponse>,
-        ApplicationContextAware<Ctx>,
-        EventPublisherAware<Message>
+        ApplicationContextAware<Ctx>
 {
     protected applicationContext!: Ctx;
     protected eventPublisher!: EventPublisher<Message>;
 
     public setApplicationContext(applicationContext: Ctx): void {
         this.applicationContext = applicationContext;
-    }
-
-    public setEventPublisher(eventPublisher: EventPublisher<Message>): void {
-        this.eventPublisher = eventPublisher;
+        this.eventPublisher = applicationContext.getEventPublisher();
     }
 
     public async execute(command: I): Promise<O | ErrorResponse> {

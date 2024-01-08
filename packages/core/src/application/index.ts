@@ -10,6 +10,6 @@ export * from "./error";
 export * from "./error-response";
 export * from "./event-publisher";
 export * from "./event-publisher-aware";
-export * from "./common-application-context";
+export * from "./application-context";
 export * from "./inspections";
 export * from "./use-case";

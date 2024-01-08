@@ -6,25 +6,32 @@ import {
     expectValidationErrorResponse,
 } from "@/test";
 import { EventPublisher } from "./event-publisher";
-import { EventPublisherAware } from "./event-publisher-aware";
 import { ApplicationContextAware } from "./application-context-aware";
-import { CommonApplicationContext } from "./common-application-context";
 import { ApplicationEventPublisher } from "./application-event-publisher";
 import { CommandExecutor } from "./command-executor";
 import { CommandExecutorRegistry } from "./command-executor-registry";
 import { Authenticator, AuthFilter } from "./auth";
 import { AuthError } from "./error";
 import { AbstractApplication } from "./abstract-application";
+import { CommonApplicationContext } from "./application-context";
 
 interface ApplicationEventContextForTest {
     trigger: object;
+}
+
+interface ApplicationContextForTest extends CommonApplicationContext {
+    getEventPublisher(): ApplicationEventPublisher<
+        object,
+        ApplicationEventContextForTest
+    >;
+    getAuthenticator(): Authenticator<string, SecurityContextForTest>;
 }
 
 interface SecurityContextForTest {
     userId?: string;
 }
 
-class MessageHandlerRegistryForTest
+class CommandExecutorRegistryForTest
     implements CommandExecutorRegistry<string, object>
 {
     private handlers: Record<string, CommandExecutor<object, any>> = {};
@@ -43,43 +50,31 @@ class MessageHandlerRegistryForTest
 }
 
 class ApplicationForTest extends AbstractApplication<
-    CommonApplicationContext,
-    ApplicationEventPublisher<object, ApplicationEventContextForTest>,
-    any,
+    ApplicationContextForTest,
+    object,
     SecurityContextForTest
 > {
     constructor(
-        context: CommonApplicationContext,
-        eventPublisher: ApplicationEventPublisher<
-            object,
-            ApplicationEventContextForTest
-        >,
+        context: ApplicationContextForTest,
         handlers: CommandExecutorRegistry<
             string,
             object
-        > = new MessageHandlerRegistryForTest()
+        > = new CommandExecutorRegistryForTest()
     ) {
-        super(context, eventPublisher, handlers);
+        super(context, handlers);
     }
 
-    protected makeEventContext(
-        message: object
-    ): ApplicationEventContextForTest {
+    protected makeEventContext(command: object) {
         return {
-            trigger: message,
+            trigger: command,
         };
     }
 }
 
 describe("Application", () => {
     let defaultApp: ApplicationForTest;
-    const applicationContext: CommonApplicationContext = {
-        getUnitOfWork: vi.fn(),
-    };
-    let eventPublisher: ApplicationEventPublisher<
-        object,
-        ApplicationEventContextForTest
-    >;
+    let eventPublisher: ApplicationEventPublisher;
+    let applicationContext: ApplicationContextForTest;
 
     const handler: CommandExecutor<any, any> = {
         execute: vi.fn(),
@@ -87,17 +82,23 @@ describe("Application", () => {
 
     beforeEach(() => {
         eventPublisher = new ApplicationEventPublisher();
+        applicationContext = {
+            getEventPublisher: () => eventPublisher,
+            getAuthenticator: vi.fn(),
+            getUnitOfWork: vi.fn(),
+        };
         defaultApp = makeApp();
 
+        vi.resetAllMocks();
         vi.resetAllMocks();
     });
 
     function makeApp() {
-        return new ApplicationForTest(applicationContext, eventPublisher);
+        return new ApplicationForTest(applicationContext);
     }
 
     test("when no handler registered", async () => {
-        const response = await defaultApp.handle({ type: "foo" });
+        const response = await defaultApp.execute({ type: "foo" });
 
         expectValidationErrorResponse(response, {
             "*": "UNSUPPORTED_MESSAGE_TYPE",
@@ -105,9 +106,9 @@ describe("Application", () => {
     });
 
     it("handles messages", async () => {
-        defaultApp.withHandler("foo", handler);
+        defaultApp.withExecutor("foo", handler);
 
-        await defaultApp.handle({ type: "foo" });
+        await defaultApp.execute({ type: "foo" });
 
         expect(handler.execute).toHaveBeenCalledWith({
             type: "foo",
@@ -118,9 +119,9 @@ describe("Application", () => {
         const handler2: CommandExecutor<any, any> = {
             execute: vi.fn(),
         };
-        defaultApp.withHandler("foo", handler).withHandler("bar", handler2);
+        defaultApp.withExecutor("foo", handler).withExecutor("bar", handler2);
 
-        await defaultApp.handle({ type: "bar" });
+        await defaultApp.execute({ type: "bar" });
 
         expect(handler.execute).not.toHaveBeenCalled();
         expect(handler2.execute).toHaveBeenCalledWith({
@@ -130,22 +131,22 @@ describe("Application", () => {
 
     it("returns system error response when handler throws", async () => {
         (handler.execute as Mock).mockRejectedValue(new Error("handler error"));
-        defaultApp.withHandler("foo", handler);
+        defaultApp.withExecutor("foo", handler);
 
-        const response = await defaultApp.handle({ type: "foo" });
+        const response = await defaultApp.execute({ type: "foo" });
 
         expectSystemErrorResponse(response, "handler error");
     });
 
     test("handler errors can be observed", async () => {
         const onError = vi.fn();
-        defaultApp.withHandler("foo", handler);
+        defaultApp.withExecutor("foo", handler);
         defaultApp.onError(onError);
 
         const error = new Error("handler error");
         (handler.execute as Mock).mockRejectedValue(error);
 
-        await defaultApp.handle({ type: "foo" });
+        await defaultApp.execute({ type: "foo" });
 
         expect(onError).toHaveBeenCalledWith({ type: "foo" }, error);
     });
@@ -156,9 +157,9 @@ describe("Application", () => {
             execute: vi.fn(),
             setApplicationContext: vi.fn(),
         };
-        defaultApp.withHandler("some-message", contextAwareHandler);
+        defaultApp.withExecutor("some-message", contextAwareHandler);
 
-        await defaultApp.handle({
+        await defaultApp.execute({
             type: "some-message",
         });
 
@@ -167,36 +168,23 @@ describe("Application", () => {
         );
     });
 
-    it("injects event publisher to message handlers", async () => {
-        const eventPublisherAwareHandler: CommandExecutor<any, any> &
-            EventPublisherAware = {
-            execute: vi.fn(),
-            setEventPublisher: vi.fn(),
-        };
-        defaultApp.withHandler("some-message", eventPublisherAwareHandler);
-
-        await defaultApp.handle({
-            type: "some-message",
-        });
-
-        expect(
-            eventPublisherAwareHandler.setEventPublisher
-        ).toHaveBeenCalledWith(eventPublisher);
-    });
-
     class EventPublishingHandler
-        implements CommandExecutor<unknown, void>, EventPublisherAware
+        implements
+            CommandExecutor<unknown, void>,
+            ApplicationContextAware<ApplicationContextForTest>
     {
         private eventPublisher!: EventPublisher;
 
         async execute(): Promise<void> {
-            await this.eventPublisher.publish({
-                type: "published-event",
-            });
+            await this.eventPublisher.publish([
+                {
+                    type: "published-event",
+                },
+            ]);
         }
 
-        setEventPublisher(publisher: EventPublisher): void {
-            this.eventPublisher = publisher;
+        setApplicationContext(context: ApplicationContextForTest): void {
+            this.eventPublisher = context.getEventPublisher();
         }
     }
 
@@ -206,9 +194,12 @@ describe("Application", () => {
         const trigger = {
             type: "trigger-message",
         };
-        defaultApp.withHandler("trigger-message", new EventPublishingHandler());
+        defaultApp.withExecutor(
+            "trigger-message",
+            new EventPublishingHandler()
+        );
 
-        await defaultApp.handle(trigger);
+        await defaultApp.execute(trigger);
 
         expect(eventSubscriber).toHaveBeenCalledWith(
             { type: "published-event" },
@@ -241,13 +232,11 @@ describe("Application", () => {
         };
 
         beforeEach(() => {
-            defaultApp
-                .withAuthenticator(authenticator)
-                .withHandler("auth-only", handler, { authFilter });
+            defaultApp.withExecutor("auth-only", handler, { authFilter });
         });
 
         test("applying auth filter, but with no security context or auth factor", async () => {
-            const response = await defaultApp.handle({ type: "auth-only" });
+            const response = await defaultApp.execute({ type: "auth-only" });
 
             expectAuthErrorResponse(response, /.*no authentication.*/);
         });
@@ -257,16 +246,19 @@ describe("Application", () => {
                 .withSecurityContext({
                     userId: "authenticated-user-id",
                 })
-                .handle({ type: "auth-only" });
+                .execute({ type: "auth-only" });
 
             expect(response).toBeUndefined();
             expect(handler.execute).toHaveBeenCalled();
         });
 
         test("applying auth filter with auth factor", async () => {
+            (applicationContext.getAuthenticator as Mock).mockReturnValue(
+                authenticator
+            );
             const response = await defaultApp
                 .withAuthFactor("valid")
-                .handle({ type: "auth-only" });
+                .execute({ type: "auth-only" });
 
             expect(response).toBeUndefined();
             expect(handler.execute).toHaveBeenCalled();

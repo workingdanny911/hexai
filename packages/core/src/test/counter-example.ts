@@ -11,13 +11,8 @@ import {
     UseCase,
     validationErrorResponse,
 } from "@/application";
-import {
-    ConsumedMessageTracker,
-    PublishedMessageTracker,
-    UnitOfWork,
-} from "@/infra";
 import { Message } from "@/message";
-import InMemoryDatabaseConcerns from "./in-memory-database-concerns";
+import { UnitOfWork } from "@/infra";
 
 export class CounterId extends EntityId<string> {}
 
@@ -135,45 +130,10 @@ export class CounterValueChanged extends Message<{
 
 export interface CounterRepository extends Repository<Counter> {}
 
-export class CounterApplicationContext {
-    private static dbConcerns = new InMemoryDatabaseConcerns();
-    private static unitOfWork = this.dbConcerns.asUnitOfWork();
-    private static outboxEventPublisher =
-        this.dbConcerns.createOutboxEventPublisher();
-    private static publishedEventTracker =
-        this.dbConcerns.createPublishedEventTracker();
-    private static consumedEventTracker =
-        this.dbConcerns.createConsumedMessageTracker();
-    private static counterRepository =
-        this.dbConcerns.createRepository<CounterRepository>({
-            namespace: "counter",
-            hydrate: (memento) => Counter.fromMemento(memento),
-            dehydrate: (entity) => entity.toMemento(),
-        });
-
-    public getUnitOfWork(): UnitOfWork {
-        return CounterApplicationContext.unitOfWork;
-    }
-
-    public getOutboxEventPublisher(): EventPublisher {
-        return CounterApplicationContext.outboxEventPublisher;
-    }
-
-    public getPublishedEventTracker(): PublishedMessageTracker {
-        return CounterApplicationContext.publishedEventTracker;
-    }
-
-    public getConsumedEventTracker(): ConsumedMessageTracker {
-        return CounterApplicationContext.consumedEventTracker;
-    }
-
-    public getCounterRepository(): CounterRepository {
-        return CounterApplicationContext.counterRepository;
-    }
-
-    public static clear(): void {
-        this.dbConcerns.clear();
-    }
+export interface CounterApplicationContext {
+    getUnitOfWork(): UnitOfWork;
+    getCounterRepository(): CounterRepository;
+    getEventPublisher(): EventPublisher;
 }
 
 export class CreateCounterRequest extends Message {
@@ -195,7 +155,7 @@ export class CreateCounter extends UseCase<
         const counter = Counter.create(CounterId.from(request.id));
 
         await repository.add(counter);
-        await this.eventPublisher.publish(...counter.collectEvents());
+        await this.eventPublisher.publish(counter.collectEvents());
     }
 }
 
@@ -222,7 +182,7 @@ export class IncreaseCounter extends UseCase<
         counter.increment();
 
         await repository.update(counter);
-        await this.eventPublisher.publish(...counter.collectEvents());
+        await this.eventPublisher.publish(counter.collectEvents());
 
         return {
             value: counter.getValue(),

@@ -1,16 +1,11 @@
 import { OptionsOf, UnitOfWork } from "@/infra";
-import {
-    ApplicationContextAware,
-    CommonApplicationContext,
-} from "@/application";
+import { ApplicationContextAware, UnitOfWorkHolder } from "@/application";
 
-type Options<C extends CommonApplicationContext> = OptionsOf<
+type Options<C extends UnitOfWorkHolder> = OptionsOf<
     ReturnType<C["getUnitOfWork"]>
 >;
 
-export function Atomic<C extends CommonApplicationContext>(
-    options?: Options<C>
-) {
+export function Atomic<C extends UnitOfWorkHolder>(options?: Options<C>) {
     return function (
         target: ApplicationContextAware<C>,
         propertyKey: string,

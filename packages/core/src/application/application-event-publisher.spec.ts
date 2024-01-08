@@ -15,12 +15,16 @@ describe("application event publisher", () => {
     test("subscribing", async () => {
         publisher.onPublish(subscriber);
 
-        await publisher.publish({
-            type: "test-1",
-        });
-        await publisher.publish({
-            type: "test-2",
-        });
+        await publisher.publish([
+            {
+                type: "test-1",
+            },
+        ]);
+        await publisher.publish([
+            {
+                type: "test-2",
+            },
+        ]);
 
         expect(subscriber.mock.calls).toEqual([
             [{ type: "test-1" }, null],
@@ -32,9 +36,11 @@ describe("application event publisher", () => {
         publisher.onPublish(subscriber);
         publisher.onPublish(subscriber);
 
-        await publisher.publish({
-            type: "test-1",
-        });
+        await publisher.publish([
+            {
+                type: "test-1",
+            },
+        ]);
 
         expect(subscriber).toHaveBeenCalledTimes(1);
     });
@@ -47,12 +53,16 @@ describe("application event publisher", () => {
         publisher.onPublish(() => wait(50));
 
         const tStart = Date.now();
-        await publisher.publish({
-            type: "test-1",
-        });
-        await publisher.publish({
-            type: "test-2",
-        });
+        await publisher.publish([
+            {
+                type: "test-1",
+            },
+        ]);
+        await publisher.publish([
+            {
+                type: "test-2",
+            },
+        ]);
         const tEnd = Date.now();
 
         expect(tEnd - tStart).toBeGreaterThanOrEqual(50 * 2);
@@ -61,10 +71,12 @@ describe("application event publisher", () => {
     test("context - %s", async () => {
         publisher.onPublish(subscriber);
 
-        await publisher.bind({ foo: "bar" }, async () => {
-            await publisher.publish({
-                type: "test",
-            });
+        await publisher.bindContext({ foo: "bar" }, async () => {
+            await publisher.publish([
+                {
+                    type: "test",
+                },
+            ]);
         });
 
         expect(subscriber).toHaveBeenCalledWith(
@@ -79,9 +91,11 @@ describe("application event publisher", () => {
         });
 
         await expect(
-            publisher.publish({
-                type: "test",
-            })
+            publisher.publish([
+                {
+                    type: "test",
+                },
+            ])
         ).rejects.toThrowError("test");
     });
 });

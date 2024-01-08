@@ -7,14 +7,14 @@ interface PublishCallback<E extends object, C extends object> {
 }
 
 export class ApplicationEventPublisher<
-    E extends object = object,
-    C extends object = object,
+    E extends object = any,
+    C extends object = any,
 > implements EventPublisher
 {
     private callbacks: Array<PublishCallback<E, C>> = [];
     private contextStorage = new AsyncLocalStorage<C>();
 
-    async bind<R>(context: C, callback: () => Promise<R>): Promise<R> {
+    async bindContext<R>(context: C, callback: () => Promise<R>): Promise<R> {
         return await this.contextStorage.run(context, callback);
     }
 
@@ -26,7 +26,7 @@ export class ApplicationEventPublisher<
         this.callbacks.push(callback);
     }
 
-    public async publish(...events: E[]): Promise<void> {
+    public async publish(events: E[]): Promise<void> {
         for (const event of events) {
             await this.runCallbacks(event);
         }
@@ -43,6 +43,9 @@ export class ApplicationEventPublisher<
     }
 }
 
-export type ContextOf<P> = P extends ApplicationEventPublisher<any, infer C>
+export type EventContextOf<P> = P extends ApplicationEventPublisher<
+    any,
+    infer C
+>
     ? C
     : never;
