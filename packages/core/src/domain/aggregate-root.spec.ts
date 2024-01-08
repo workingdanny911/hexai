@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, test } from "vitest";
 import {
     Counter,
     CounterCreated,
@@ -21,13 +21,5 @@ describe("aggregate root", () => {
             new CounterCreated({ id: counter.getId() }),
             new CounterValueChanged({ id: counter.getId(), value: 1 }),
         ]);
-    });
-
-    test("events are cleared after collection", () => {
-        counter.increment();
-
-        counter.collectEvents();
-
-        expect(counter.collectEvents()).toHaveLength(0);
     });
 });

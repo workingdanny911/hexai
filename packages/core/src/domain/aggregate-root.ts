@@ -17,8 +17,6 @@ export abstract class AggregateRoot<T extends EntityId<any>>
     }
 
     public collectEvents(): Array<DomainEvent> {
-        const events = this.events;
-        this.events = [];
-        return events;
+        return [...this.events];
     }
 }
