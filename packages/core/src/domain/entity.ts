@@ -1,5 +1,5 @@
 export class EntityId<T extends string | number> {
-    protected constructor(private readonly value: T) {}
+    public constructor(private readonly value: T) {}
 
     public static from<T extends string | number>(value: T): EntityId<T> {
         return new (this as any)(value);

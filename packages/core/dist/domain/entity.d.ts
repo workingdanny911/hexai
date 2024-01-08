@@ -1,6 +1,6 @@
 export declare class EntityId<T extends string | number> {
     private readonly value;
-    protected constructor(value: T);
+    constructor(value: T);
     static from<T extends string | number>(value: T): EntityId<T>;
     getValue(): T;
     equals(other: EntityId<T>): boolean;
