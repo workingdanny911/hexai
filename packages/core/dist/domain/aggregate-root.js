@@ -14,9 +14,7 @@ class AggregateRoot {
         this.events.push(event);
     }
     collectEvents() {
-        const events = this.events;
-        this.events = [];
-        return events;
+        return [...this.events];
     }
 }
 exports.AggregateRoot = AggregateRoot;

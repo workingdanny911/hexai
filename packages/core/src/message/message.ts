@@ -5,7 +5,7 @@ type Version = string | number | undefined;
 interface CommonMessageHeaders {
     id: string;
     type: string;
-    schemaVersion: Version;
+    schemaVersion?: Version;
     createdAt: Date;
 }
 
@@ -79,7 +79,7 @@ export abstract class Message<
         return this.getHeader("type");
     }
 
-    public getSchemaVersion(): Version {
+    public getSchemaVersion(): Version | undefined {
         return this.getHeader("schemaVersion");
     }
 

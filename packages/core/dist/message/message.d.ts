@@ -2,7 +2,7 @@ type Version = string | number | undefined;
 interface CommonMessageHeaders {
     id: string;
     type: string;
-    schemaVersion: Version;
+    schemaVersion?: Version;
     createdAt: Date;
 }
 export interface MessageHeaders extends CommonMessageHeaders {
@@ -24,7 +24,7 @@ export declare abstract class Message<T extends Record<string, any> = Record<str
     getPayload(): T;
     getMessageId(): string;
     getMessageType(): string;
-    getSchemaVersion(): Version;
+    getSchemaVersion(): Version | undefined;
     getTimestamp(): Date;
     serialize(): {
         headers: MessageHeaders;
