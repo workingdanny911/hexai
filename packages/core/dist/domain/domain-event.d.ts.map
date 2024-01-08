@@ -1,0 +1,1 @@
+{"version":3,"file":"domain-event.d.ts","sourceRoot":"","sources":["../../src/domain/domain-event.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,OAAO,EAAE,MAAM,WAAW,CAAC;AAEpC,8BAAsB,WAAW,CAC7B,CAAC,SAAS,MAAM,CAAC,MAAM,EAAE,GAAG,CAAC,GAAG,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CACzD,SAAQ,OAAO,CAAC,CAAC,CAAC;CAAG"}
