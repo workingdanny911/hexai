@@ -4,7 +4,6 @@ export interface Repository<T extends Entity<any>> {
     get(id: IdOf<T>): Promise<T>;
     add(entity: T): Promise<void>;
     update(entity: T): Promise<void>;
-    count(): Promise<number>;
 }
 
 export class RepositoryError extends Error {

@@ -136,3 +136,5 @@ function generateHeaderFor(cls: MessageClass): MessageHeaders {
 
     return headers;
 }
+
+export type PayloadOf<M> = M extends Message<infer P> ? P : never;
