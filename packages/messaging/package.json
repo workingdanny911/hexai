@@ -1,0 +1,37 @@
+{
+    "name": "@hexai/messaging",
+    "version": "0.1.0",
+    "description": "Messaging module for heaxi",
+    "author": "Sangwoo Hyun <workingdanny@naver.com>",
+    "license": "ISC",
+    "files": [
+        "dist",
+        "package.json"
+    ],
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "require": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./test": {
+            "import": "./dist/test/index.js",
+            "require": "./dist/test/index.js",
+            "types": "./dist/test/index.d.ts"
+        },
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "test": "vitest",
+        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+    },
+    "dependencies": {
+        "@hexai/core": "workspace:*",
+        "lodash": "^4.17.21"
+    },
+    "devDependencies": {
+        "@types/lodash": "^4.14.202",
+        "sqlite": "^5.1.1",
+        "sqlite3": "^5.1.7"
+    }
+}

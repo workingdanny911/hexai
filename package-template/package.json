@@ -1,0 +1,22 @@
+{
+    "name": "template-for-hexai-packages",
+    "version": "0.1.0",
+    "description": "Template for hexai packages",
+    "author": "Sangwoo Hyun <workingdanny@naver.com>",
+    "license": "ISC",
+    "files": [
+        "dist",
+        "package.json"
+    ],
+    "exports": {
+        ".": "./dist/index.js",
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "test": "vitest",
+        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+    },
+    "dependencies": {
+        "@hexai/core": "workspace:*"
+    }
+}
