@@ -541,6 +541,35 @@ describe("injection", () => {
         };
     }
 
+    function makeAppContextAwareChannel(): SubscribableMessageChannel &
+        ApplicationContextAware {
+        return {
+            send: vi.fn(),
+            subscribe: vi.fn(),
+            setApplicationContext: vi.fn(),
+        };
+    }
+
+    test("input channel and output channel are injected with the application context", async () => {
+        const inputChannel = makeAppContextAwareChannel();
+        const outputChannel = makeAppContextAwareChannel();
+
+        const pipeline = testNamespace
+            .define("pipeline-for-test")
+            .from(inputChannel)
+            .to(outputChannel)
+            .settle();
+
+        await testNamespace.start();
+
+        expect(inputChannel.setApplicationContext).toHaveBeenCalledWith(
+            dummyApplicationContext
+        );
+        expect(outputChannel.setApplicationContext).toHaveBeenCalledWith(
+            dummyApplicationContext
+        );
+    });
+
     test("pipeline fails to start when the handler is ApplicationContextAware but no context is provided", async () => {
         const namespaceWithNoContextSet = new MessagePipelinesNamespace("new");
         namespaceWithNoContextSet

@@ -33,12 +33,10 @@ export abstract class AbstractInboundChannelAdapter
             return false;
         }
 
-        await this.sendToOutputChannel(message);
-
-        return true;
+        return await this.sendToOutputChannel(message);
     }
 
-    protected async sendToOutputChannel(message: Message): Promise<void> {
+    protected async sendToOutputChannel(message: Message): Promise<boolean> {
         await this.beforeSend(message);
 
         let error: Error | undefined;
@@ -49,6 +47,8 @@ export abstract class AbstractInboundChannelAdapter
         }
 
         await this.afterSend(message, error);
+
+        return !error;
     }
 
     protected async beforeSend(message: Message): Promise<void> {}

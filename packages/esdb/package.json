@@ -1,5 +1,5 @@
 {
-    "name": "esdb",
+    "name": "@hexai/esdb",
     "version": "0.1.0",
     "description": "EventStore support for hexai",
     "author": "Sangwoo Hyun <workingdanny@naver.com>",

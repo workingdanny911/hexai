@@ -90,6 +90,8 @@ export class MessagePipeline<AC extends object = object, I = Message>
             );
         }
 
+        this.applicationContextInjector.addCandidate(channelOrAdapter);
+
         return this as any;
     }
 
@@ -105,6 +107,8 @@ export class MessagePipeline<AC extends object = object, I = Message>
     }
 
     public to(channel: MessageChannel): IntermediateMessagePipeline<AC, I> {
+        this.applicationContextInjector.addCandidate(channel);
+
         if (this.outputChannel) {
             throw new Error("output channel already set");
         }

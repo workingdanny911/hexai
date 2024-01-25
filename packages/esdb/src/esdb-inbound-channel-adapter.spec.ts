@@ -19,8 +19,8 @@ import { esdbClient } from "@/test-fixtures";
 import { EsdbHelper } from "@/esdb-helper";
 import { EsdbInboundChannelAdapter } from "./esdb-inbound-channel-adapter";
 
-const STREAM = "test-stream";
-const GROUP = "test-group";
+const STREAM = "test-stream-inbound";
+const GROUP = "test-group-inbound";
 
 describe("ESDBInboundChannelAdapter", () => {
     let defaultAdapter: EsdbInboundChannelAdapter;
@@ -43,6 +43,12 @@ describe("ESDBInboundChannelAdapter", () => {
 
         defaultAdapter = makeAdapter();
         defaultAdapter.setOutputChannel(outputChannel);
+
+        return async () => {
+            if (defaultAdapter.isRunning()) {
+                await defaultAdapter.stop();
+            }
+        };
     });
 
     test("cannot start if no output channel is set", async () => {

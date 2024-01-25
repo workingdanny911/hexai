@@ -5,7 +5,10 @@ import { EsdbHelper } from "@/esdb-helper";
 import { EsdbOutboundChannel } from "@/esdb-outbound-channel";
 
 describe("EsdbOutboundChannel", () => {
-    const channel = new EsdbOutboundChannel(esdbClient, "test-pub-stream");
+    const channel = new EsdbOutboundChannel("test-pub-stream");
+    channel.setApplicationContext({
+        getEsdbClient: () => esdbClient,
+    });
 
     beforeEach(async () => {
         await esdbClient.deleteStream("test-pub-stream");
