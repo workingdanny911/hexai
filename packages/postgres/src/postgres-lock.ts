@@ -1,7 +1,7 @@
 import { Client, DatabaseError } from "pg";
 
 export class PostgresLock {
-    private client: Client | null = null;
+    private client!: Client;
     private lockId: number | null = null;
 
     constructor(
@@ -14,24 +14,22 @@ export class PostgresLock {
     }
 
     async acquire(): Promise<boolean> {
-        if (!this.client) {
-            throw new Error("client not set");
+        this.assertClient();
+
+        if (this.hasLock()) {
+            await this.extendExpiration();
+            return true;
         }
 
-        await this.client.query(
-            "DELETE FROM hexai__locks WHERE expires_at < NOW()"
-        );
+        await this.removeExpiredLocks();
 
         try {
-            const result = await this.client.query(
-                "INSERT INTO hexai__locks (name, expires_at) VALUES ($1, $2) RETURNING id",
-                [this.name, this.getExpiry()]
-            );
-
-            this.lockId = result.rows[0].id;
+            this.lockId = await this.tryToAcquire();
             return true;
         } catch (e) {
-            if (e instanceof DatabaseError && e.code === "23505") {
+            const isAlreadyAcquired =
+                e instanceof DatabaseError && e.code === "23505";
+            if (isAlreadyAcquired) {
                 return false;
             }
 
@@ -39,19 +37,49 @@ export class PostgresLock {
         }
     }
 
-    private getExpiry(): Date {
-        return new Date(Date.now() + this.expiry);
-    }
-
-    async release(): Promise<void> {
+    private assertClient() {
         if (!this.client) {
             throw new Error("client not set");
         }
+    }
 
-        if (!this.lockId) {
+    private async tryToAcquire(): Promise<number> {
+        const result = await this.client.query(
+            `INSERT INTO hexai__locks (name, expires_at) VALUES ($1, (NOW() + INTERVAL '${this.expiry} milliseconds')) RETURNING id`,
+            [this.name]
+        );
+
+        return result.rows[0].id;
+    }
+
+    private async removeExpiredLocks() {
+        await this.client.query(
+            "DELETE FROM hexai__locks WHERE expires_at < NOW()"
+        );
+    }
+
+    private async extendExpiration() {
+        await this.client.query(
+            `UPDATE hexai__locks SET expires_at = NOW() + INTERVAL '${this.expiry} milliseconds' WHERE id = $1`,
+            [this.lockId]
+        );
+    }
+
+    private hasLock(): boolean {
+        return this.lockId !== null;
+    }
+
+    async release(): Promise<void> {
+        this.assertClient();
+
+        if (!this.hasLock()) {
             throw new Error("lock not acquired");
         }
 
+        await this.doRelease();
+    }
+
+    private async doRelease(): Promise<void> {
         await this.client.query("DELETE FROM hexai__locks WHERE id = $1", [
             this.lockId,
         ]);

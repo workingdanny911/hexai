@@ -14,6 +14,7 @@ import { PostgresOutbox } from "@/postgres-outbox";
 import { PostgresUnitOfWork } from "@/postgres-unit-of-work";
 import { createTestContext } from "@/test";
 import { PostgresOutboxInboundChannelAdapter } from "./postgres-outbox-inbound-channel-adapter";
+import { Client } from "pg";
 
 setExpect(expect);
 
@@ -23,11 +24,17 @@ describe("PostgresOutboxInboundChannelAdapter", () => {
     );
     const client = testContext.client;
     const outbox = new PostgresOutbox(client);
+
     let adapter: PostgresOutboxInboundChannelAdapter;
     let outputChannel: MessageChannel & {
         messages: Message[];
         clear(): void;
     };
+
+    let registeredClients: Client[];
+    let registeredAdapters: PostgresOutboxInboundChannelAdapter[];
+
+    const timeoutWithJitter = 200;
 
     beforeAll(async () => {
         await testContext.setup();
@@ -40,7 +47,28 @@ describe("PostgresOutboxInboundChannelAdapter", () => {
     beforeEach(async () => {
         await testContext.tableManager.truncateTable("hexai__outbox");
 
-        outputChannel = {
+        registeredClients = [];
+        registeredAdapters = [];
+        outputChannel = createOutputChannel();
+        adapter = createAdapter(outputChannel);
+
+        return async () => {
+            await Promise.all(
+                registeredAdapters.map(async (a) => {
+                    if (a.isRunning()) {
+                        await a.stop();
+                    }
+                })
+            );
+            await Promise.all(registeredClients.map((c) => c.end()));
+        };
+    });
+
+    function createOutputChannel(): MessageChannel & {
+        messages: Message[];
+        clear(): void;
+    } {
+        return {
             messages: [],
             async send(message) {
                 this.messages.push(message);
@@ -49,23 +77,42 @@ describe("PostgresOutboxInboundChannelAdapter", () => {
                 this.messages = [];
             },
         };
-        adapter = new PostgresOutboxInboundChannelAdapter();
-        adapter.setApplicationContext({
+    }
+
+    function createAdapter(
+        channel: MessageChannel
+    ): PostgresOutboxInboundChannelAdapter {
+        const channelAdapter = new PostgresOutboxInboundChannelAdapter();
+        const client = createClient();
+        channelAdapter.setApplicationContext({
             getUnitOfWork: () => new PostgresUnitOfWork(() => client),
         });
-        adapter.setOutputChannel(outputChannel);
+        channelAdapter.setOutputChannel(channel);
+        registeredAdapters.push(channelAdapter);
+        return channelAdapter;
+    }
 
-        return async () => {
-            if (adapter.isRunning()) {
-                await adapter.stop();
-            }
-        };
-    });
+    function createClient(): Client {
+        const client = testContext.newClient();
+        registeredClients.push(client);
+        return client;
+    }
+
+    async function storeMessagesInOutbox(messages: Message[]): Promise<void> {
+        for (const message of messages) {
+            await outbox.store(message);
+        }
+    }
+
+    function expectMessagesDelivered(messages: Message[]): void {
+        expectMessagesToEqual(outputChannel.messages, messages);
+        outputChannel.clear();
+    }
 
     test("when there is no message in the outbox", async () => {
         await adapter.start();
 
-        expectMessagesToEqual([], outputChannel.messages);
+        expectMessagesDelivered([]);
     });
 
     test("delivering a single message in the outbox", async () => {
@@ -74,7 +121,7 @@ describe("PostgresOutboxInboundChannelAdapter", () => {
 
         await adapter.start();
 
-        expectMessagesToEqual([message], outputChannel.messages);
+        expectMessagesDelivered([message]);
     });
 
     test("marks when output channel succeeds", async () => {
@@ -106,36 +153,54 @@ describe("PostgresOutboxInboundChannelAdapter", () => {
 
         await adapter.start();
 
-        expectMessagesToEqual(messages, outputChannel.messages);
+        expectMessagesDelivered(messages);
     });
 
-    async function storeMessagesInOutbox(messages: Message[]): Promise<void> {
-        for (const message of messages) {
-            await outbox.store(message);
-        }
-    }
-
-    function expectMessagesDelivered(messages: Message[]): void {
-        expectMessagesToEqual(messages, outputChannel.messages);
-        outputChannel.clear();
-    }
-
     test("times out for configured amount of time, and resumes polling", async () => {
-        const timeout = 100;
-        const jitter = 10;
         const messages = DummyMessage.createMany(6);
         await adapter.start();
 
         await storeMessagesInOutbox(messages.slice(0, 2));
-        await waitForMs(timeout + jitter);
+        await waitForMs(timeoutWithJitter);
         expectMessagesDelivered(messages.slice(0, 2));
 
         await storeMessagesInOutbox(messages.slice(2, 4));
-        await waitForMs(timeout + jitter);
+        await waitForMs(timeoutWithJitter);
         expectMessagesDelivered(messages.slice(2, 4));
 
         await adapter.stop();
-        await waitForMs(timeout + jitter);
+        await waitForMs(timeoutWithJitter);
         expectMessagesToEqual([], outputChannel.messages);
+    });
+
+    test("locking", async () => {
+        const anotherOutputChannel = createOutputChannel();
+        await storeMessagesInOutbox(DummyMessage.createMany(5));
+
+        const anotherAdapter = createAdapter(anotherOutputChannel);
+
+        await Promise.all([adapter.start(), anotherAdapter.start()]);
+
+        if (outputChannel.messages.length > 0) {
+            expect(anotherOutputChannel.messages).toHaveLength(0);
+            expect(outputChannel.messages).toHaveLength(5);
+            outputChannel.clear();
+
+            await storeMessagesInOutbox(DummyMessage.createMany(5));
+            await waitForMs(timeoutWithJitter * 2);
+
+            expect(anotherOutputChannel.messages).toHaveLength(0);
+            expect(outputChannel.messages).toHaveLength(5);
+        } else {
+            expect(outputChannel.messages).toHaveLength(0);
+            expect(anotherOutputChannel.messages).toHaveLength(5);
+            anotherOutputChannel.clear();
+
+            await storeMessagesInOutbox(DummyMessage.createMany(5));
+            await waitForMs(timeoutWithJitter * 2);
+
+            expect(outputChannel.messages).toHaveLength(0);
+            expect(anotherOutputChannel.messages).toHaveLength(5);
+        }
     });
 });

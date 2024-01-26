@@ -4,7 +4,7 @@ import {
     replaceDatabaseNameIn,
 } from "@hexai/core/utils";
 import { runHexaiMigrations } from "@/index";
-import { DatabaseError } from "pg";
+import { DatabaseError, Client } from "pg";
 
 export function createTestContext(dbUrl: string) {
     const dbName = parseDatabaseNameFrom(dbUrl);
@@ -36,7 +36,7 @@ export function createTestContext(dbUrl: string) {
 
     return {
         client: tableManager.getClient(),
-        databaseManager,
+        newClient: () => new Client(dbUrl),
         tableManager,
         setup,
         teardown,

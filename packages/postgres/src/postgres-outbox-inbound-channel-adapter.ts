@@ -1,8 +1,8 @@
-import { ApplicationContextAware } from "@hexai/core";
+import { ApplicationContextAware, Message } from "@hexai/core";
 import { AbstractInboundChannelAdapter } from "@hexai/messaging";
-import { Message } from "@hexai/core";
 import { PostgresUnitOfWork } from "@/postgres-unit-of-work";
 import { PostgresOutbox } from "@/postgres-outbox";
+import { PostgresLock } from "@/postgres-lock";
 
 export class PostgresOutboxInboundChannelAdapter
     extends AbstractInboundChannelAdapter
@@ -11,6 +11,7 @@ export class PostgresOutboxInboundChannelAdapter
     private uow!: PostgresUnitOfWork;
     private currentPosition = -1;
     private messages: Message[] = [];
+    private lock = new PostgresLock("hexai__outbox_lock");
 
     constructor(private pollingInterval = 100) {
         super();
@@ -35,16 +36,29 @@ export class PostgresOutboxInboundChannelAdapter
     }
 
     private async poll(): Promise<void> {
-        const [position, messages] = await this.uow.wrap(() =>
-            this.getOutbox().getUnpublishedMessages()
-        );
+        if (!(await this.acquireLock())) {
+            return;
+        }
 
-        this.currentPosition = position;
-        this.messages = messages;
+        [this.currentPosition, this.messages] =
+            await this.getUnpublishedMessages();
 
         while (this.messages.length > 0) {
             await this.processMessage();
         }
+    }
+
+    private async acquireLock(): Promise<boolean> {
+        return await this.uow.wrap(async (client) => {
+            this.lock.setClient(client);
+            return await this.lock.acquire();
+        });
+    }
+
+    private async getUnpublishedMessages(): Promise<[number, Message[]]> {
+        return await this.uow.wrap(() =>
+            this.getOutbox().getUnpublishedMessages()
+        );
     }
 
     protected async processMessage(): Promise<boolean> {
@@ -71,5 +85,11 @@ export class PostgresOutboxInboundChannelAdapter
         getUnitOfWork(): PostgresUnitOfWork;
     }): void {
         this.uow = context.getUnitOfWork();
+    }
+
+    public async onStop(): Promise<void> {
+        if (await this.acquireLock()) {
+            await this.lock.release();
+        }
     }
 }
