@@ -15,8 +15,6 @@ describe("PostgresLock", () => {
 
     beforeAll(async () => {
         await testContext.setup();
-        lock = new PostgresLock("test_lock", 1000);
-        lock.setClient(client);
 
         return async () => {
             await testContext.teardown();
@@ -24,6 +22,7 @@ describe("PostgresLock", () => {
     });
 
     beforeEach(async () => {
+        lock = createLock();
         await testContext.tableManager.truncateTable("hexai__locks");
     });
 
@@ -48,18 +47,44 @@ describe("PostgresLock", () => {
         expect(await hasLock()).toBe(true);
     });
 
+    function createLock() {
+        const lock = new PostgresLock("test_lock", 1000);
+        lock.setClient(client);
+        return lock;
+    }
+
     test("acquiring when lock is already acquired", async () => {
+        const anotherLock = createLock();
+
+        expect(await lock.acquire()).toBe(true);
+        expect(await anotherLock.acquire()).toBe(false);
+    });
+
+    test("acquiring the same lock when lock is already acquired", async () => {
         await lock.acquire();
 
         const acquired = await lock.acquire();
 
-        expect(acquired).toBe(false);
+        expect(acquired).toBe(true);
+    });
+
+    test("extends expiry when lock is already acquired", async () => {
+        const anotherLock = createLock();
+        await lock.acquire();
+        await waitForMs(500);
+
+        expect(await lock.acquire()).toBe(true);
+
+        await waitForMs(900);
+        expect(await anotherLock.acquire()).toBe(false);
+
+        await waitForMs(500);
+        expect(await anotherLock.acquire()).toBe(true);
     });
 
     test("removes expired lock", async () => {
         await lock.acquire();
-        const anotherLock = new PostgresLock("test_lock", 1000);
-        anotherLock.setClient(client);
+        const anotherLock = createLock();
 
         expect(await anotherLock.acquire()).toBe(false);
         await waitForMs(1000);
