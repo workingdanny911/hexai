@@ -1,4 +1,4 @@
-import { Lifecycle } from "@/lifecycle";
+import { Lifecycle } from "./lifecycle";
 
 export abstract class AbstractLifecycle implements Lifecycle {
     private _isRunning = false;

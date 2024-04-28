@@ -5,7 +5,7 @@ import { DummyMessage } from "@hexai/core/test";
 import { esdbClient, EventWithData } from "@/test-fixtures";
 import { EsdbHelper, RawEventInStream } from "@/esdb-helper";
 
-const esdbManager = new EsdbHelper(esdbClient);
+const wrapper = new EsdbHelper(esdbClient);
 
 async function deleteStream() {
     try {
@@ -48,12 +48,17 @@ describe("reading events", () => {
         return initialPosition! + 1;
     }
 
+    test("reading non-existing stream", async () => {
+        const events = await wrapper.readStream("non-exsiting-stream");
+        expectEventsToFullyEqual(events, []);
+    });
+
     test("reading events", async () => {
         const events = DummyMessage.createMany(10);
 
         await esdbClient.appendToStream("test", events.map(toESDBEvent));
 
-        const eventsFetched = await esdbManager.readStream("test");
+        const eventsFetched = await wrapper.readStream("test");
         expectEventsToFullyEqual(eventsFetched, events);
     });
 
@@ -71,7 +76,7 @@ describe("reading events", () => {
 
         await esdbClient.appendToStream("test", [toESDBEvent(event)]);
 
-        const [eventFetched] = await esdbManager.readStream("test");
+        const [eventFetched] = await wrapper.readStream("test");
         expectEventsToFullyEqual([eventFetched], [event]);
     });
 
@@ -80,7 +85,7 @@ describe("reading events", () => {
         const events = DummyMessage.createMany(10);
         await esdbClient.appendToStream("test", events.map(toESDBEvent));
 
-        const eventsFetched = await esdbManager.readStream("test", {
+        const eventsFetched = await wrapper.readStream("test", {
             fromPosition: initialPosition + 5,
         });
 
@@ -91,7 +96,7 @@ describe("reading events", () => {
         const events = DummyMessage.createMany(10);
         await esdbClient.appendToStream("test", events.map(toESDBEvent));
 
-        const eventsFetched = await esdbManager.readStream("test", {
+        const eventsFetched = await wrapper.readStream("test", {
             numberOfEvents: 5,
         });
 
@@ -103,7 +108,7 @@ describe("reading events", () => {
         const events = DummyMessage.createMany(10);
         await esdbClient.appendToStream("test", events.map(toESDBEvent));
 
-        const eventsFetched = await esdbManager.readStream("test", {
+        const eventsFetched = await wrapper.readStream("test", {
             fromPosition: initialPosition,
             numberOfEvents: 1,
         });
@@ -113,26 +118,12 @@ describe("reading events", () => {
 });
 
 describe("publishing events to event store db", () => {
-    const deserialize = (event: RawEventInStream) =>
-        EsdbHelper.deserialize(event);
-
-    async function readEvents(stream: string): Promise<Array<Message>> {
-        const events: Array<Message> = [];
-        for await (const data of esdbClient.readStream<RawEventInStream>(
-            stream
-        )) {
-            events.push(deserialize(data.event!));
-        }
-
-        return events;
-    }
-
     test("publishing - empty events", async () => {
         const events = DummyMessage.createMany(10);
 
-        await esdbManager.publishToStream("test", events);
+        await wrapper.publishToStream("test", events);
 
-        const eventsRead = await readEvents("test");
+        const eventsRead = await wrapper.readStream("test");
         expectEventsToFullyEqual(eventsRead, events);
     });
 
@@ -160,9 +151,26 @@ describe("publishing events to event store db", () => {
             }),
         ];
 
-        await esdbManager.publishToStream("test", events);
+        await wrapper.publishToStream("test", events);
 
-        const eventsRead = await readEvents("test");
+        const eventsRead = await wrapper.readStream("test");
         expectEventsToFullyEqual(eventsRead, events);
+    });
+});
+
+describe("deleting a stream", () => {
+    test("deleting a stream", async () => {
+        const events = DummyMessage.createMany(10);
+
+        await wrapper.publishToStream("test", events);
+        await wrapper.deleteStream("test");
+
+        const eventsRead = await wrapper.readStream("test");
+        expectEventsToFullyEqual(eventsRead, []);
+    });
+
+    test("deleting a non-existing stream", async () => {
+        // should not throw
+        await wrapper.deleteStream("non-existing-stream");
     });
 });

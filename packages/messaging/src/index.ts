@@ -5,3 +5,5 @@ export * from "./lifecycle";
 export * from "./lifecycle";
 export * from "./helpers";
 export * from "./types";
+export * from "./position-tracker";
+export * from "./sqlite-support";

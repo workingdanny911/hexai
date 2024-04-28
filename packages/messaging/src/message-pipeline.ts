@@ -1,20 +1,11 @@
 import {
+    AbstractLifecycle,
     ApplicationContextAware,
     ApplicationContextInjector,
     Message,
 } from "@hexai/core";
 
-import {
-    AbstractLifecycle,
-    isInboundChannelAdapter,
-    isSubscribableChannel,
-} from "@/helpers";
-import { Pipe } from "@/pipe";
-import {
-    DirectChannel,
-    MessageChannel,
-    SubscribableMessageChannel,
-} from "@/channel";
+import { MessageChannel, SubscribableMessageChannel } from "@/channel";
 import {
     InboundChannelAdapter,
     MessageFilter,
@@ -22,7 +13,9 @@ import {
     MessageHandlerTemplate,
     toHandlerFunction,
 } from "@/endpoint";
+import { isSubscribableChannel } from "@/helpers";
 import { Lifecycle } from "@/lifecycle";
+import { Pipe } from "@/pipe";
 
 type OmitLifecycleMethods<T> = Omit<T, keyof Lifecycle>;
 
@@ -77,12 +70,10 @@ export class MessagePipeline<AC extends object = object, I = Message>
     ): IntermediateMessagePipeline<AC>;
 
     public from(
-        channelOrAdapter: InboundChannel
+        inboundChannel: InboundChannel
     ): IntermediateMessagePipeline<AC> {
-        if (isSubscribableChannel(channelOrAdapter)) {
-            this.inputChannel = channelOrAdapter;
-        } else if (isInboundChannelAdapter(channelOrAdapter)) {
-            this.inputChannel = this.connectInboundAdapter(channelOrAdapter);
+        if (isSubscribableChannel(inboundChannel)) {
+            this.inputChannel = inboundChannel;
         } else {
             throw new Error(
                 "the provided argument is not " +
@@ -90,20 +81,9 @@ export class MessagePipeline<AC extends object = object, I = Message>
             );
         }
 
-        this.applicationContextInjector.addCandidate(channelOrAdapter);
+        this.applicationContextInjector.addCandidate(inboundChannel);
 
         return this as any;
-    }
-
-    private connectInboundAdapter(
-        adapter: InboundChannelAdapter
-    ): SubscribableMessageChannel {
-        const channel = new DirectChannel();
-
-        this.resources.push(adapter);
-        adapter.setOutputChannel(channel);
-
-        return channel;
     }
 
     public to(channel: MessageChannel): IntermediateMessagePipeline<AC, I> {

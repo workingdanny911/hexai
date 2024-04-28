@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, test } from "vitest";
 import * as sqlite from "sqlite";
 import { Message } from "@hexai/core";
 import { DummyMessage } from "@hexai/core/test";
-import { SqliteOutbox } from "@/test/sqlite-outbox";
+
+import { SqliteOutbox } from "./sqlite-outbox";
 
 describe("SqliteOutbox", () => {
     let db: sqlite.Database;

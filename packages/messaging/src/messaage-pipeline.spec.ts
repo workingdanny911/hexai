@@ -364,55 +364,6 @@ describe("with filters & transformers", () => {
     });
 });
 
-class InboundChannelAdapterStub extends AbstractInboundChannelAdapter {
-    private messages: Message[];
-
-    constructor(messages: Message[]) {
-        super();
-        this.messages = [...messages];
-    }
-
-    protected override async onStart(): Promise<void> {
-        while (await this.processMessage()) {}
-    }
-
-    protected override async onStop(): Promise<void> {}
-
-    protected async receiveMessage(): Promise<Message | null> {
-        return this.messages.shift() ?? null;
-    }
-}
-
-describe("with inbound channel adapter", () => {
-    it("starts the adapter when the pipeline is started", async () => {
-        const adapter = new InboundChannelAdapterStub([]);
-        const spy = vi.spyOn(adapter, "start");
-
-        const pipeline = testNamespace
-            .define("pipeline-for-test")
-            .from(adapter)
-            .to(defaultOutputChannel)
-            .settle();
-        expect(spy).not.toHaveBeenCalled();
-        await pipeline.start();
-        expect(spy).toHaveBeenCalled();
-    });
-
-    test("adapter -> channel A", async () => {
-        const messages = [FooMessage.create(), BarMessage.create()];
-
-        await testNamespace
-            .define("pipeline-for-test")
-            .from(new InboundChannelAdapterStub(messages))
-            .to(defaultOutputChannel)
-            .settle()
-            .start();
-
-        await waitForTicks();
-        expectMessagesSentToBe(messages);
-    });
-});
-
 describe("with message handler", () => {
     test("channel A->handler", async () => {
         const message = FooMessage.create();

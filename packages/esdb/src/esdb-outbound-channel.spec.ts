@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { esdbClient } from "@/test-fixtures";
 import { DummyMessage } from "@hexai/core/test";
+
+import { esdbClient } from "@/test-fixtures";
 import { EsdbHelper } from "@/esdb-helper";
 import { EsdbOutboundChannel } from "@/esdb-outbound-channel";
+
+const esdb = new EsdbHelper(esdbClient);
 
 describe("EsdbOutboundChannel", () => {
     const channel = new EsdbOutboundChannel("test-pub-stream");
@@ -11,11 +14,11 @@ describe("EsdbOutboundChannel", () => {
     });
 
     beforeEach(async () => {
-        await esdbClient.deleteStream("test-pub-stream");
+        await esdb.deleteStream("test-pub-stream");
     });
 
     async function readStream() {
-        return new EsdbHelper(esdbClient).readStream("test-pub-stream");
+        return esdb.readStream("test-pub-stream");
     }
 
     it("appends received message to stream", async () => {

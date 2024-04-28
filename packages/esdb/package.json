@@ -24,6 +24,11 @@
         "@eventstore/db-client": "^6.1.0",
         "@hexai/core": "workspace:^",
         "@hexai/messaging": "workspace:^",
-        "lodash": "^4.17.21"
+        "lodash": "^4.17.21",
+        "uuidv4": "^6.2.13"
+    },
+    "devDependencies": {
+        "sqlite": "^5.1.1",
+        "sqlite3": "^5.1.7"
     }
 }

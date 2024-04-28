@@ -25,6 +25,6 @@
         "tsc-alias": "^1.8.8",
         "typescript": "^5.2.2",
         "vite-tsconfig-paths": "^4.2.1",
-        "vitest": "0.34.6"
+        "vitest": "1.5.2"
     }
 }

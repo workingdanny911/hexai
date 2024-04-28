@@ -5,8 +5,24 @@ import {
     JSONEventType,
     JSONRecordedEvent,
     START,
+    StreamNotFoundError,
+    WrongExpectedVersionError,
 } from "@eventstore/db-client";
 import { Message, MessageHeaders, MessageRegistry } from "@hexai/core";
+
+function isNonExistentStreamError(e: unknown): boolean {
+    if (e instanceof StreamNotFoundError) {
+        return true;
+    }
+
+    if (e instanceof WrongExpectedVersionError) {
+        return (
+            e.actualVersion === BigInt(-1) && e.expectedVersion === BigInt(-2)
+        );
+    }
+
+    return false;
+}
 
 export class EsdbHelper {
     private static messageRegistry: MessageRegistry;
@@ -17,7 +33,7 @@ export class EsdbHelper {
 
     constructor(private client: EventStoreDBClient) {}
 
-    async publishToStream(
+    public async publishToStream(
         stream: string,
         events: Array<Message>
     ): Promise<void> {
@@ -41,7 +57,7 @@ export class EsdbHelper {
         });
     }
 
-    async readStream(
+    public async readStream(
         stream: string,
         {
             fromPosition,
@@ -51,20 +67,40 @@ export class EsdbHelper {
             numberOfEvents?: number;
         } = {}
     ): Promise<Array<Message>> {
-        const events: Array<Message> = [];
-        const fromRevision = fromPosition ? BigInt(fromPosition) : START;
+        try {
+            const events: Array<Message> = [];
+            const fromRevision = fromPosition ? BigInt(fromPosition) : START;
 
-        for await (const data of this.client.readStream<RawEventInStream>(
-            stream,
-            {
-                fromRevision,
-                maxCount: numberOfEvents,
+            for await (const data of this.client.readStream<RawEventInStream>(
+                stream,
+                {
+                    fromRevision,
+                    maxCount: numberOfEvents,
+                }
+            )) {
+                events.push(EsdbHelper.deserialize(data.event!));
             }
-        )) {
-            events.push(EsdbHelper.deserialize(data.event!));
-        }
 
-        return events;
+            return events;
+        } catch (e) {
+            if (e instanceof StreamNotFoundError) {
+                return [];
+            }
+
+            throw e;
+        }
+    }
+
+    public async deleteStream(stream: string): Promise<void> {
+        try {
+            await this.client.deleteStream(stream);
+        } catch (e) {
+            if (isNonExistentStreamError(e)) {
+                return;
+            }
+
+            throw e;
+        }
     }
 
     public static deserialize(rawEvent: RawEventInStream): Message {

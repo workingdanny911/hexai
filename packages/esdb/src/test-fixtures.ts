@@ -35,7 +35,7 @@ messageRegistry.register(EventWithData);
 
 export const esdbClient = new EventStoreDBClient(
     {
-        endpoint: "localhost:2113",
+        endpoint: "127.0.0.1:2113",
     },
     {
         insecure: true,
