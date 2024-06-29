@@ -36,7 +36,7 @@ describe("SqliteRepository", () => {
     it.each([
         {
             description: "get()",
-            operation: () => repository.get(CounterId.from("counter")),
+            operation: () => repository.get(new CounterId("counter")),
         },
         {
             description: "add()",
@@ -117,7 +117,7 @@ describe("SqliteRepository", () => {
             Counter.fromMemento({ id: "counter-id", value: 0 })
         );
 
-        const result = await repository.get(CounterId.from("counter-id"));
+        const result = await repository.get(new CounterId("counter-id"));
 
         expect(result.getId().getValue()).toBe("counter-id");
         expect(result.getValue()).toBe(0);
@@ -125,7 +125,7 @@ describe("SqliteRepository", () => {
 
     test("getting non-existing", async () => {
         await expect(
-            repository.get(CounterId.from("counter-id"))
+            repository.get(new CounterId("counter-id"))
         ).rejects.toThrowError();
     });
 

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { EventPublisher } from "./event-publisher";
+import { EventPublisher } from "@/event-publisher";
 
 interface PublishCallback<E extends object, C extends object> {
     (event: E, context: C | null): void | Promise<void>;
@@ -18,18 +18,27 @@ export class ApplicationEventPublisher<
         return await this.contextStorage.run(context, callback);
     }
 
-    public onPublish(callback: PublishCallback<E, C>): void {
-        if (this.callbacks.includes(callback)) {
+    public onPublish(callback: PublishCallback<E, C>): () => void {
+        const unsubscribe = () => this.unsubscribe(callback);
+
+        if (!this.callbacks.includes(callback)) {
+            this.callbacks.push(callback);
+        }
+
+        return unsubscribe;
+    }
+
+    private unsubscribe(callback: PublishCallback<E, C>): void {
+        const index = this.callbacks.indexOf(callback);
+        if (index === -1) {
             return;
         }
 
-        this.callbacks.push(callback);
+        this.callbacks.splice(index, 1);
     }
 
-    public async publish(events: E[]): Promise<void> {
-        for (const event of events) {
-            await this.runCallbacks(event);
-        }
+    public async publish(event: E): Promise<void> {
+        await this.runCallbacks(event);
     }
 
     private async runCallbacks(event: E): Promise<void> {

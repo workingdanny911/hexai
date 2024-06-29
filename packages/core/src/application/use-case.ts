@@ -1,5 +1,5 @@
 import { ValidationError } from "@/domain";
-import { EventPublisher } from "@/application";
+import { EventPublisher } from "@/event-publisher";
 import { UnitOfWork } from "@/infra";
 
 import {

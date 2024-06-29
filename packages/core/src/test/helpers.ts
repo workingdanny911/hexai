@@ -14,8 +14,8 @@ export class TrackableEventPublisher<
         this.events = [];
     }
 
-    public override async publish(events: I[]): Promise<void> {
-        await super.publish(events);
-        this.events.push(...events);
+    public override async publish(event: I): Promise<void> {
+        await super.publish(event);
+        this.events.push(event);
     }
 }

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApplicationEventPublisher } from "./application-event-publisher";
+import { waitForMs } from "@/utils";
+import { DomainEvent } from "@/domain";
+
+class FooEvent extends DomainEvent {}
 
 describe("application event publisher", () => {
     let publisher: ApplicationEventPublisher;
@@ -15,16 +19,12 @@ describe("application event publisher", () => {
     test("subscribing", async () => {
         publisher.onPublish(subscriber);
 
-        await publisher.publish([
-            {
-                type: "test-1",
-            },
-        ]);
-        await publisher.publish([
-            {
-                type: "test-2",
-            },
-        ]);
+        await publisher.publish({
+            type: "test-1",
+        });
+        await publisher.publish({
+            type: "test-2",
+        });
 
         expect(subscriber.mock.calls).toEqual([
             [{ type: "test-1" }, null],
@@ -36,11 +36,9 @@ describe("application event publisher", () => {
         publisher.onPublish(subscriber);
         publisher.onPublish(subscriber);
 
-        await publisher.publish([
-            {
-                type: "test-1",
-            },
-        ]);
+        await publisher.publish({
+            type: "test-1",
+        });
 
         expect(subscriber).toHaveBeenCalledTimes(1);
     });
@@ -53,16 +51,12 @@ describe("application event publisher", () => {
         publisher.onPublish(() => wait(50));
 
         const tStart = Date.now();
-        await publisher.publish([
-            {
-                type: "test-1",
-            },
-        ]);
-        await publisher.publish([
-            {
-                type: "test-2",
-            },
-        ]);
+        await publisher.publish({
+            type: "test-1",
+        });
+        await publisher.publish({
+            type: "test-2",
+        });
         const tEnd = Date.now();
 
         expect(tEnd - tStart).toBeGreaterThanOrEqual(50 * 2);
@@ -72,11 +66,9 @@ describe("application event publisher", () => {
         publisher.onPublish(subscriber);
 
         await publisher.bindContext({ foo: "bar" }, async () => {
-            await publisher.publish([
-                {
-                    type: "test",
-                },
-            ]);
+            await publisher.publish({
+                type: "test",
+            });
         });
 
         expect(subscriber).toHaveBeenCalledWith(
@@ -91,11 +83,29 @@ describe("application event publisher", () => {
         });
 
         await expect(
-            publisher.publish([
-                {
-                    type: "test",
-                },
-            ])
+            publisher.publish({
+                type: "test",
+            })
         ).rejects.toThrowError("test");
+    });
+
+    test("unsubscribing", async () => {
+        const subscriber2 = vi.fn();
+
+        const unsubscribe = publisher.onPublish(subscriber);
+        publisher.onPublish(subscriber2);
+
+        await publisher.publish({
+            type: "test-1",
+        });
+
+        unsubscribe();
+
+        await publisher.publish({
+            type: "test-2",
+        });
+
+        expect(subscriber).toHaveBeenCalledTimes(1);
+        expect(subscriber2).toHaveBeenCalledTimes(2);
     });
 });

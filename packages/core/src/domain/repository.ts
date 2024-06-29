@@ -1,6 +1,6 @@
-import { Entity, IdOf } from "./entity";
+import { Identifiable, IdOf } from "./identifiable";
 
-export interface Repository<T extends Entity<any>> {
+export interface Repository<T extends Identifiable<any>> {
     get(id: IdOf<T>): Promise<T>;
     add(entity: T): Promise<void>;
     update(entity: T): Promise<void>;

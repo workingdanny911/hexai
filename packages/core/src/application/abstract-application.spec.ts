@@ -5,14 +5,14 @@ import {
     expectSystemErrorResponse,
     expectValidationErrorResponse,
 } from "@/test";
-import { EventPublisher } from "./event-publisher";
+import { EventPublisher } from "@/event-publisher";
 import { ApplicationContextAware } from "./application-context-aware";
 import { ApplicationEventPublisher } from "./application-event-publisher";
 import { CommandExecutor } from "./command-executor";
 import { CommandExecutorRegistry } from "./command-executor-registry";
 import { AbstractApplication } from "./abstract-application";
 import { CommonApplicationContext } from "./application-context";
-import { CommandExecutorRegistryForTest } from "@/application/test-fixtures";
+import { CommandExecutorRegistryForTest } from "./test-fixtures";
 
 interface EventPublishingContextForTest {
     trigger: object;
@@ -151,11 +151,9 @@ describe("Application", () => {
         private eventPublisher!: EventPublisher;
 
         async execute(): Promise<void> {
-            await this.eventPublisher.publish([
-                {
-                    type: "published-event",
-                },
-            ]);
+            await this.eventPublisher.publish({
+                type: "published-event",
+            });
         }
 
         setApplicationContext(context: ApplicationContextForTest): void {

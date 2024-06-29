@@ -2,13 +2,13 @@ import { Database } from "sqlite";
 
 import {
     DuplicateObjectError,
-    Entity,
+    Identifiable,
     IdOf,
     ObjectNotFoundError,
     Repository,
 } from "@/domain";
 
-export class SqliteRepository<E extends Entity<any>, M>
+export class SqliteRepository<E extends Identifiable<any>, M>
     implements Repository<E>
 {
     protected namespace: string;

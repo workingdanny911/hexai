@@ -10,6 +10,6 @@ if (RUNNING_HEXAI_TEST) {
     });
 }
 
-export function setExpect(expectStatic: ExpectStatic) {
+export function setExpect(expectStatic: any) {
     expect = expectStatic;
 }

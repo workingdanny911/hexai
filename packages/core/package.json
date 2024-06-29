@@ -1,6 +1,6 @@
 {
     "name": "@hexai/core",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Hexai is a lightweight hexagonal architecture library.",
     "author": "Sangwoo Hyun <workingdanny@naver.com>",
     "license": "ISC",

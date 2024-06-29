@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 
-import { waitForMs, waitForTicks } from "@/utils";
+import { waitForMs, waitForTicks } from "./wait";
 import { IntervalBasedExecutor } from "./executor";
 
 describe("IntervalBasedExecutor", () => {
@@ -49,10 +49,7 @@ describe("IntervalBasedExecutor", () => {
         });
 
         await executor.start();
-        // 100ms for the first execution
-        // 100ms for waiting
-        // 100ms for the second execution
-        // 10ms is added as jitter
+        // 100ms(first execution) + 100ms(second execution) + 100ms(third execution) + 10ms(overhead)
         await waitForMs(100 + 100 + 100 + 10);
 
         expect(executed).toBe(2);

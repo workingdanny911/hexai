@@ -1,5 +1,5 @@
 import { UnitOfWork } from "@/infra";
-import { EventPublisher } from "./event-publisher";
+import { EventPublisher } from "@/event-publisher";
 import { ApplicationEventPublisher } from "./application-event-publisher";
 
 export interface UnitOfWorkHolder<U extends UnitOfWork = UnitOfWork> {

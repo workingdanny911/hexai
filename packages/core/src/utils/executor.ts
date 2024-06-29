@@ -1,4 +1,4 @@
-import { waitForMs } from "@/utils";
+import { waitForMs } from "./wait";
 import { AbstractLifecycle } from "./abstract-lifecycle";
 
 export class Executor extends AbstractLifecycle {

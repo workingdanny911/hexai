@@ -3,4 +3,5 @@ export * from "./domain";
 export * from "./infra";
 export * from "./injection";
 export * from "./message";
-export * from "./helpers";
+export * from "./utils";
+export * from "./event-publisher";

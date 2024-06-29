@@ -1,13 +1,12 @@
-import assert from "node:assert";
-
 import {
     AuthErrorResponse,
     SystemErrorResponse,
     UnknownErrorResponse,
     ValidationErrorResponse,
 } from "@/application";
-import { Message } from "@/message";
+import { Message, MessageClass } from "@/message";
 
+import { partialMatch } from "@/utils";
 import { expect } from "./expect";
 
 export function expectAuthErrorResponse(
@@ -69,38 +68,93 @@ function assertIsErrorResponse<T extends { errorType: string }>(
     response: unknown,
     errorType: string
 ): asserts response is T {
-    assert(
-        (response as T)?.errorType === errorType,
+    expect(
+        (response as T)?.errorType,
         `
         Expected response to be a ${errorType}, but it was not.
         Response: ${JSON.stringify(response, null, 2)}
         `
-    );
+    ).toBe(errorType);
 }
 
-export function expectMessagesToEqual(
+export function expectMessagesToBeFullyEqual(
     messages: Array<Message<any>>,
     expectedMessages: Array<Message<any>>
 ): void {
-    expect(messages.map(serializeMessage)).toEqual(
-        expectedMessages.map(serializeMessage)
-    );
+    expect(messages.length, "message length").toEqual(expectedMessages.length);
+
+    for (let i = 0; i < messages.length; i++) {
+        expect(messages[i].getMessageId(), `message[${i}] id`).toBe(
+            expectedMessages[i].getMessageId()
+        );
+    }
+
+    expectMessagesToBeEqual(messages, expectedMessages);
+}
+
+export function expectMessagesToBeEqual(
+    messages: Array<Message<any>>,
+    expectedMessages: Array<Message<any>>
+): void {
+    for (let i = 0; i < messages.length; i++) {
+        expect(messages[i].getMessageType(), `message[${i}] type`).toBe(
+            expectedMessages[i].getMessageType()
+        );
+        expect(
+            messages[i].serialize().payload,
+            `message[${i}] payload`
+        ).toEqual(expectedMessages[i].serialize().payload);
+    }
 }
 
 export function expectMessagesToContain(
-    events: Array<Message<any>>,
-    expectedEvents: Array<Message<any>>
+    messages: Array<Message<any>>,
+    expectedMessages: Array<Message<any>>
 ): void {
-    const target = events.map(serializeMessage);
-    const expected = expectedEvents.map(serializeMessage);
-
-    expect(target).toEqual(expect.arrayContaining(expected));
+    for (const message of expectedMessages) {
+        expectMessageToMatch(
+            messages,
+            message.getMessageType(),
+            message.getPayload()
+        );
+    }
 }
 
-function serializeMessage(message: Message): unknown {
-    return [
-        message.getMessageType(),
-        message.getSchemaVersion(),
-        message.serialize().payload,
-    ];
+export function expectMessageToMatch(
+    messages: Message[],
+    messageType: string | MessageClass<any>,
+    payload: Record<string, unknown> = {}
+): void {
+    const sameTypeOfEvents = messages.filter(
+        (event) =>
+            messageType === event.getMessageType() ||
+            messageType === event.constructor
+    );
+
+    expect(
+        sameTypeOfEvents,
+        `Event not found: ${messageType}
+${reprMessages(messages)}
+`
+    ).not.toHaveLength(0);
+
+    const found = sameTypeOfEvents.find((event) =>
+        partialMatch(event.getPayload(), payload)
+    );
+
+    expect(
+        found,
+        `Same type of events found, but payload did not match:
+payload: ${JSON.stringify(payload, null, 2)}
+events found: ${reprMessages(sameTypeOfEvents)}
+`
+    ).toBeTruthy();
+}
+
+function reprMessages(messages: Message[]): string {
+    return JSON.stringify(
+        messages.map((event) => event.getPayload()),
+        null,
+        2
+    );
 }
