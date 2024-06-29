@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApplicationEventPublisher } from "./application-event-publisher";
-import { waitForMs } from "@/utils";
-import { DomainEvent } from "@/domain";
-
-class FooEvent extends DomainEvent {}
 
 describe("application event publisher", () => {
     let publisher: ApplicationEventPublisher;
@@ -107,5 +103,16 @@ describe("application event publisher", () => {
 
         expect(subscriber).toHaveBeenCalledTimes(1);
         expect(subscriber2).toHaveBeenCalledTimes(2);
+    });
+
+    test("publishing multiple events", async () => {
+        publisher.onPublish(subscriber);
+
+        await publisher.publish({ id: 1 }, { id: 2 });
+
+        expect(subscriber.mock.calls).toEqual([
+            [{ id: 1 }, null],
+            [{ id: 2 }, null],
+        ]);
     });
 });

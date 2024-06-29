@@ -37,8 +37,10 @@ export class ApplicationEventPublisher<
         this.callbacks.splice(index, 1);
     }
 
-    public async publish(event: E): Promise<void> {
-        await this.runCallbacks(event);
+    public async publish(...events: E[]): Promise<void> {
+        for (const event of events) {
+            await this.runCallbacks(event);
+        }
     }
 
     private async runCallbacks(event: E): Promise<void> {

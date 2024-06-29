@@ -13,4 +13,3 @@ export * from "./event-publisher-aware";
 export * from "./application-context";
 export * from "./inspections";
 export * from "./use-case";
-export * from "./async-domain-event-publisher";

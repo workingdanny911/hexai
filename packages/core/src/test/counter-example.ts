@@ -1,14 +1,13 @@
-import { AggregateRoot, Id, ObjectNotFoundError, Repository } from "@/domain";
 import {
-    AsyncDomainEventPublisher,
     Atomic,
     ErrorResponse,
     UseCase,
     validationErrorResponse,
 } from "@/application";
+import { AggregateRoot, Id, ObjectNotFoundError, Repository } from "@/domain";
 import { EventPublisher } from "@/event-publisher";
-import { Message } from "@/message";
 import { UnitOfWork } from "@/infra";
+import { Message } from "@/message";
 import { SqliteRepository } from "./sqlite";
 
 export class CounterId extends Id<string> {}
@@ -147,7 +146,6 @@ abstract class CounterUseCase<Input, Output> extends UseCase<
     CounterApplicationContext
 > {
     protected repository!: CounterRepository;
-    protected domainEventPublisher!: AsyncDomainEventPublisher;
 
     public setApplicationContext(
         applicationContext: CounterApplicationContext
@@ -155,13 +153,6 @@ abstract class CounterUseCase<Input, Output> extends UseCase<
         super.setApplicationContext(applicationContext);
 
         this.repository = applicationContext.getCounterRepository();
-        this.domainEventPublisher = new AsyncDomainEventPublisher(
-            this.eventPublisher
-        );
-    }
-
-    protected async waitForEventsToBePublished(): Promise<void> {
-        await this.domainEventPublisher.waitForCompletion();
     }
 }
 
@@ -169,12 +160,9 @@ export class CreateCounter extends CounterUseCase<CreateCounterRequest, void> {
     @Atomic()
     public async doExecute(request: CreateCounterRequest): Promise<void> {
         const counter = Counter.create(new CounterId(request.id));
-        counter.setDomainEventPublisher(
-            new AsyncDomainEventPublisher(this.eventPublisher)
-        );
 
         await this.repository.add(counter);
-        await this.waitForEventsToBePublished();
+        await this.eventPublisher.publish(...counter.getEventsOccurred());
     }
 }
 
@@ -195,12 +183,11 @@ export class IncreaseCounter extends CounterUseCase<
         value: number;
     }> {
         const counter = await this.repository.get(new CounterId(request.id));
-        counter.setDomainEventPublisher(this.eventPublisher);
 
         counter.increment();
 
         await this.repository.update(counter);
-        await this.waitForEventsToBePublished();
+        await this.eventPublisher.publish(...counter.getEventsOccurred());
 
         return {
             value: counter.getValue(),
