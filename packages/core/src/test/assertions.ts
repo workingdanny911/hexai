@@ -125,11 +125,13 @@ export function expectMessageToMatch(
     messageType: string | MessageClass<any>,
     payload: Record<string, unknown> = {}
 ): void {
-    const sameTypeOfEvents = messages.filter(
-        (event) =>
-            messageType === event.getMessageType() ||
-            messageType === event.constructor
-    );
+    const sameTypeOfEvents = messages.filter((event) => {
+        if (typeof messageType === "string") {
+            return event.getMessageType() === messageType;
+        } else {
+            return event.getMessageType() === messageType.getType();
+        }
+    });
 
     expect(
         sameTypeOfEvents,
