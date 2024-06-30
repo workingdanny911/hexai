@@ -11,7 +11,6 @@ export {
 } from "./helpers";
 export * from "./postgres-idempotency-support";
 export * from "./postgres-outbox";
-export * from "./postgres-outbox-inbound-channel-adapter";
 
 export async function runHexaiMigrations(dbUrl: string) {
     await runMigrations({
