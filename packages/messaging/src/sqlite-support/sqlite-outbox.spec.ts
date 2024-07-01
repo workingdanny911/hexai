@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, test } from "vitest";
 import * as sqlite from "sqlite";
 import { Message } from "@hexai/core";
-import { DummyMessage } from "@hexai/core/test";
+import { DummyMessage, expectMessagesToBeFullyEqual } from "@hexai/core/test";
 
 import { SqliteOutbox } from "./sqlite-outbox";
 
@@ -56,12 +56,14 @@ describe("SqliteOutbox", () => {
         }
     );
 
-    function expectMessagesToEqual(a: Message[], b: Message[]): void {
-        expect(a.map((m) => serialize(m))).toEqual(b.map((m) => serialize(m)));
-    }
-
     function serialize(m: Message): Record<string, unknown> {
         return JSON.parse(JSON.stringify(m.serialize()));
+    }
+
+    async function storeMessages(...messages: Message[]): Promise<void> {
+        for (const message of messages) {
+            await outbox.store(message);
+        }
     }
 
     test("store() - stores a message", async () => {
@@ -96,22 +98,17 @@ describe("SqliteOutbox", () => {
 
     test("getUnpublishedMessages() - returns unpublished messages", async () => {
         const messages = DummyMessage.createMany(5);
-        for (const message of messages) {
-            await outbox.store(message);
-        }
+        await storeMessages(...messages);
         await db.run("UPDATE outbox SET published = TRUE WHERE position < 3");
 
         const [position, result] = await outbox.getUnpublishedMessages();
         expect(position).toBe(2);
-        expectMessagesToEqual(result, messages.slice(2));
+        expectMessagesToBeFullyEqual(result, messages.slice(2));
     });
 
     test("markMessagesAsPublished() - marks messages as published", async () => {
         const messages = DummyMessage.createMany(5);
-        for (const message of messages) {
-            await outbox.store(message);
-        }
-
+        await storeMessages(...messages);
         await outbox.markMessagesAsPublished(0, 3);
 
         const result = await db.all(
@@ -119,5 +116,18 @@ describe("SqliteOutbox", () => {
         );
         expect(result.length).toBe(3);
         expect(result.map((r) => r.published)).toEqual([1, 1, 1]);
+    });
+
+    test("in action", async () => {
+        const messages = DummyMessage.createMany(5);
+        await storeMessages(...messages);
+
+        for (let i = 0; i < 5; i++) {
+            let [fromPosition, result] = await outbox.getUnpublishedMessages();
+            expect(fromPosition).toBe(i);
+            expectMessagesToBeFullyEqual(result, messages.slice(i));
+
+            await outbox.markMessagesAsPublished(fromPosition, 1);
+        }
     });
 });
