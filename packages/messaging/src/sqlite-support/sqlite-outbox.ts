@@ -49,7 +49,7 @@ export class SqliteOutbox implements Outbox {
 
         await this.db.run(
             "UPDATE outbox SET published = TRUE WHERE position > ? AND position <= ?",
-            [fromPosition, number]
+            [fromPosition, fromPosition + number]
         );
     }
 
