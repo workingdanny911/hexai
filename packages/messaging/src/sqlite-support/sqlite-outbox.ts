@@ -42,7 +42,6 @@ export class SqliteOutbox implements Outbox {
 
                 const nextPosition =
                     this.physicalPositionToLogicalPosition(result.position) + 1;
-                console.log("result.position", result.position);
                 return [nextPosition, []];
             }
 
