@@ -13,7 +13,7 @@ describe("application event publisher", () => {
     });
 
     test("subscribing", async () => {
-        publisher.onPublish(subscriber);
+        publisher.subscribe(subscriber);
 
         await publisher.publish({
             type: "test-1",
@@ -29,8 +29,8 @@ describe("application event publisher", () => {
     });
 
     test("subscribing twice", async () => {
-        publisher.onPublish(subscriber);
-        publisher.onPublish(subscriber);
+        publisher.subscribe(subscriber);
+        publisher.subscribe(subscriber);
 
         await publisher.publish({
             type: "test-1",
@@ -44,7 +44,7 @@ describe("application event publisher", () => {
     }
 
     test("callbacks run event by event", async () => {
-        publisher.onPublish(() => wait(50));
+        publisher.subscribe(() => wait(50));
 
         const tStart = Date.now();
         await publisher.publish({
@@ -59,7 +59,7 @@ describe("application event publisher", () => {
     });
 
     test("context", async () => {
-        publisher.onPublish(subscriber);
+        publisher.subscribe(subscriber);
 
         await publisher.bindContext({ foo: "bar" }, async () => {
             await publisher.publish({
@@ -74,7 +74,7 @@ describe("application event publisher", () => {
     });
 
     test("publishing fails when subscriber throws", async () => {
-        publisher.onPublish(() => {
+        publisher.subscribe(() => {
             throw new Error("test");
         });
 
@@ -88,8 +88,8 @@ describe("application event publisher", () => {
     test("unsubscribing", async () => {
         const subscriber2 = vi.fn();
 
-        const unsubscribe = publisher.onPublish(subscriber);
-        publisher.onPublish(subscriber2);
+        const unsubscribe = publisher.subscribe(subscriber);
+        publisher.subscribe(subscriber2);
 
         await publisher.publish({
             type: "test-1",
@@ -106,7 +106,7 @@ describe("application event publisher", () => {
     });
 
     test("publishing multiple events", async () => {
-        publisher.onPublish(subscriber);
+        publisher.subscribe(subscriber);
 
         await publisher.publish({ id: 1 }, { id: 2 });
 

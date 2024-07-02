@@ -18,12 +18,9 @@ export class ApplicationEventPublisher<
         return await this.contextStorage.run(context, callback);
     }
 
-    public onPublish(callback: PublishCallback<E, C>): () => void {
-        const unsubscribe = () => this.unsubscribe(callback);
-
+    public subscribe(callback: PublishCallback<E, C>): () => void {
         this.callbacks.add(callback);
-
-        return unsubscribe;
+        return () => this.unsubscribe(callback);
     }
 
     private unsubscribe(callback: PublishCallback<E, C>): void {

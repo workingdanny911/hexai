@@ -163,7 +163,7 @@ describe("Application", () => {
 
     it("binds event publishing context", async () => {
         const eventSubscriber = vi.fn();
-        eventPublisher.onPublish(eventSubscriber);
+        eventPublisher.subscribe(eventSubscriber);
         const trigger = {
             type: "trigger-message",
         };
