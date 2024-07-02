@@ -1,7 +1,7 @@
 import { Message } from "@hexai/core";
 
 export interface Outbox {
-    store(message: Message): Promise<void>;
+    store(...messages: Message[]): Promise<void>;
 
     getUnpublishedMessages(
         batchSize?: number

@@ -1,60 +1,85 @@
-import * as sqlite from "sqlite";
 import { Message } from "@hexai/core";
+import { SqliteUnitOfWork } from "@hexai/core/test";
 
 import { Outbox } from "@/endpoint";
 
 export class SqliteOutbox implements Outbox {
-    constructor(private db: sqlite.Database) {}
+    constructor(private uow: SqliteUnitOfWork) {}
 
-    async store(message: Message<Record<string, unknown>>): Promise<void> {
-        await this.ensureTableExists();
+    async store(...messages: Message[]): Promise<void> {
+        await this.uow.wrap(async (db) => {
+            await this.ensureTableExists();
 
-        await this.db.run(
-            "INSERT INTO outbox (message_id, data) VALUES (?, ?)",
-            [message.getMessageId(), JSON.stringify(message.serialize())]
-        );
+            for (const message of messages) {
+                await db.run(
+                    "INSERT INTO outbox (message_id, data) VALUES (?, ?)",
+                    [
+                        message.getMessageId(),
+                        JSON.stringify(message.serialize()),
+                    ]
+                );
+            }
+        });
     }
 
     async getUnpublishedMessages(batchSize = 10): Promise<[number, Message[]]> {
-        await this.ensureTableExists();
+        return this.uow.wrap(async (db) => {
+            await this.ensureTableExists();
 
-        const result = await this.db.get(
-            "SELECT position FROM outbox WHERE published = FALSE ORDER BY position LIMIT 1"
-        );
+            const rawMessages = await db.all(
+                "SELECT * FROM outbox WHERE published = FALSE ORDER BY position LIMIT ?",
+                [batchSize]
+            );
 
-        if (!result) {
-            return [0, []];
-        }
+            if (rawMessages.length === 0) {
+                const result = await db.get(
+                    "SELECT MAX(position) AS position FROM outbox"
+                );
 
-        const position = result.position - 1;
-        const rawMessages = await this.db.all(
-            "SELECT data FROM outbox WHERE position > ? ORDER BY position LIMIT ?",
-            [position, batchSize]
-        );
+                if (!result.position) {
+                    return [0, []];
+                }
 
-        return [
-            position,
-            rawMessages.map((raw) => {
-                const data = JSON.parse(raw.data);
-                return Message.from(data.payload, data.headers);
-            }),
-        ];
+                const nextPosition =
+                    this.physicalPositionToLogicalPosition(result.position) + 1;
+                console.log("result.position", result.position);
+                return [nextPosition, []];
+            }
+
+            return [
+                this.physicalPositionToLogicalPosition(rawMessages[0].position),
+                rawMessages.map((raw) => {
+                    const data = JSON.parse(raw.data);
+                    return Message.from(data.payload, data.headers);
+                }),
+            ];
+        });
+    }
+
+    // primary key is 1-based, but position is 0-based
+    private physicalPositionToLogicalPosition(
+        physicalPosition: number
+    ): number {
+        return physicalPosition - 1;
     }
 
     async markMessagesAsPublished(
         fromPosition: number,
         number: number
     ): Promise<void> {
-        await this.ensureTableExists();
+        await this.uow.wrap(async (db) => {
+            await this.ensureTableExists();
 
-        await this.db.run(
-            "UPDATE outbox SET published = TRUE WHERE position > ? AND position <= ?",
-            [fromPosition, fromPosition + number]
-        );
+            await db.run(
+                "UPDATE outbox SET published = TRUE WHERE position > ? AND position <= ?",
+                [fromPosition, fromPosition + number]
+            );
+        });
     }
 
     protected async ensureTableExists(): Promise<void> {
-        await this.db.exec(`
+        await this.uow.wrap(async (db) => {
+            await db.exec(`
             CREATE TABLE IF NOT EXISTS outbox
             (
                 position
@@ -78,5 +103,6 @@ export class SqliteOutbox implements Outbox {
                 NULL
             );
         `);
+        });
     }
 }

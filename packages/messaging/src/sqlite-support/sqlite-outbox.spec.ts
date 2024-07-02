@@ -1,64 +1,60 @@
-import { beforeEach, describe, expect, it, test } from "vitest";
-import * as sqlite from "sqlite";
+import { beforeEach, describe, expect, it, test, vi } from "vitest";
 import { Message } from "@hexai/core";
-import { DummyMessage, expectMessagesToBeFullyEqual } from "@hexai/core/test";
+import {
+    DummyMessage,
+    expectMessagesToBeFullyEqual,
+    getSqliteConnection,
+    SqliteUnitOfWork,
+} from "@hexai/core/test";
 
 import { SqliteOutbox } from "./sqlite-outbox";
 
 describe("SqliteOutbox", () => {
-    let db: sqlite.Database;
     let outbox: SqliteOutbox;
 
     beforeEach(async () => {
-        db = await sqlite.open({
-            filename: ":memory:",
-            driver: require("sqlite3").Database,
-        });
-        outbox = new SqliteOutbox(db);
-
-        return async () => {
-            await db.close();
-        };
+        outbox = new SqliteOutbox(
+            new SqliteUnitOfWork(await getSqliteConnection())
+        );
     });
 
-    async function isTableCreated(name: string): Promise<boolean> {
-        const row = await db.get(
-            "SELECT * FROM sqlite_master WHERE name = $1 AND type = 'table'",
-            [name]
-        );
+    test("fetching unpublished messages - when no messages stored", async () => {
+        const [position, messages] = await outbox.getUnpublishedMessages();
 
-        return !!row;
-    }
+        expect(position).toBe(0);
+        expect(messages).toEqual([]);
+    });
 
-    it.each([
-        {
-            description: "store()",
-            operation: () => outbox.store(DummyMessage.create()),
-        },
-        {
-            description: "getUnpublishedMessages()",
-            operation: () => outbox.getUnpublishedMessages(),
-        },
-        {
-            description: "markMessagesAsPublished()",
-            operation: () => outbox.markMessagesAsPublished(0, 1),
-        },
-    ])(
-        "creates a new table if it does not exist - $description",
-        async ({ operation }) => {
-            await expect(isTableCreated("outbox")).resolves.toBe(false);
+    test("storing and fetching a single message", async () => {
+        const message = DummyMessage.create();
 
-            try {
-                await operation();
-            } catch {}
+        await outbox.store(message);
 
-            await expect(isTableCreated("outbox")).resolves.toBe(true);
-        }
-    );
+        const [position, result] = await outbox.getUnpublishedMessages();
+        expect(position).toBe(0);
+        expectMessagesToBeFullyEqual(result, [message]);
+    });
 
-    function serialize(m: Message): Record<string, unknown> {
-        return JSON.parse(JSON.stringify(m.serialize()));
-    }
+    test("storing and fetching multiple messages", async () => {
+        const messages = DummyMessage.createMany(5);
+
+        await outbox.store(...messages);
+
+        const [position, result] = await outbox.getUnpublishedMessages();
+        expect(position).toBe(0);
+        expectMessagesToBeFullyEqual(result, messages);
+    });
+
+    test("marking a single message as published", async () => {
+        const message = DummyMessage.create();
+        await storeMessages(message);
+
+        await outbox.markMessagesAsPublished(0, 1);
+
+        const [position, result] = await outbox.getUnpublishedMessages();
+        expect(position).toBe(1);
+        expect(result).toEqual([]);
+    });
 
     async function storeMessages(...messages: Message[]): Promise<void> {
         for (const message of messages) {
@@ -66,68 +62,33 @@ describe("SqliteOutbox", () => {
         }
     }
 
-    test("store() - stores a message", async () => {
-        const message = DummyMessage.create();
-
-        await outbox.store(message);
-
-        const row = await db.get("SELECT * FROM outbox WHERE message_id = $1", [
-            message.getMessageId(),
-        ]);
-        expect(row.position).toBe(1);
-        expect(JSON.parse(row.data)).toEqual(serialize(message));
-    });
-
-    test("position is auto-incremented", async () => {
-        const message = DummyMessage.create();
-
-        await outbox.store(message);
-        await outbox.store(message);
-
-        const [row1, row2] = await db.all("SELECT * FROM outbox");
-        expect(row1.position).toBe(1);
-        expect(row2.position).toBe(2);
-    });
-
-    test("getUnpublishedMessages() - when there are no unpublished messages", async () => {
-        const [position, messages] = await outbox.getUnpublishedMessages();
-
-        expect(position).toBe(0);
-        expect(messages).toEqual([]);
-    });
-
-    test("getUnpublishedMessages() - returns unpublished messages", async () => {
+    test("storing multiple messages is transactional", async () => {
         const messages = DummyMessage.createMany(5);
-        await storeMessages(...messages);
-        await db.run("UPDATE outbox SET published = TRUE WHERE position < 3");
+        messages[4].getMessageId = () => {
+            throw new Error("Simulated error");
+        };
+
+        await expect(outbox.store(...messages)).rejects.toThrow();
 
         const [position, result] = await outbox.getUnpublishedMessages();
-        expect(position).toBe(2);
-        expectMessagesToBeFullyEqual(result, messages.slice(2));
-    });
-
-    test("markMessagesAsPublished() - marks messages as published", async () => {
-        const messages = DummyMessage.createMany(5);
-        await storeMessages(...messages);
-        await outbox.markMessagesAsPublished(0, 3);
-
-        const result = await db.all(
-            "SELECT published FROM outbox WHERE position > 0 LIMIT 3"
-        );
-        expect(result.length).toBe(3);
-        expect(result.map((r) => r.published)).toEqual([1, 1, 1]);
+        expect(position).toBe(0);
+        expect(result).toEqual([]);
     });
 
     test("in action", async () => {
         const messages = DummyMessage.createMany(5);
-        await storeMessages(...messages);
+        await outbox.store(...messages);
 
-        for (let i = 0; i < 5; i++) {
-            let [fromPosition, result] = await outbox.getUnpublishedMessages();
-            expect(fromPosition).toBe(i);
-            expectMessagesToBeFullyEqual(result, messages.slice(i));
+        for (let i = 0; i < messages.length; i++) {
+            await outbox.markMessagesAsPublished(i, 1);
 
-            await outbox.markMessagesAsPublished(fromPosition, 1);
+            const [fromPosition, unpublishedMessages] =
+                await outbox.getUnpublishedMessages();
+            expect(fromPosition).toBe(i + 1);
+            expectMessagesToBeFullyEqual(
+                unpublishedMessages,
+                messages.slice(fromPosition)
+            );
         }
     });
 });
