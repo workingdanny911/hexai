@@ -11,30 +11,20 @@ export class ApplicationEventPublisher<
     C extends object = any,
 > implements EventPublisher<E>
 {
-    private callbacks: Array<PublishCallback<E, C>> = [];
+    private callbacks: Set<PublishCallback<E, C>> = new Set();
     private contextStorage = new AsyncLocalStorage<C>();
 
     async bindContext<R>(context: C, callback: () => Promise<R>): Promise<R> {
         return await this.contextStorage.run(context, callback);
     }
 
-    public onPublish(callback: PublishCallback<E, C>): () => void {
-        const unsubscribe = () => this.unsubscribe(callback);
-
-        if (!this.callbacks.includes(callback)) {
-            this.callbacks.push(callback);
-        }
-
-        return unsubscribe;
+    public subscribe(callback: PublishCallback<E, C>): () => void {
+        this.callbacks.add(callback);
+        return () => this.unsubscribe(callback);
     }
 
     private unsubscribe(callback: PublishCallback<E, C>): void {
-        const index = this.callbacks.indexOf(callback);
-        if (index === -1) {
-            return;
-        }
-
-        this.callbacks.splice(index, 1);
+        this.callbacks.delete(callback);
     }
 
     public async publish(...events: E[]): Promise<void> {
