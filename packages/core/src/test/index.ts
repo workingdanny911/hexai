@@ -1,8 +1,8 @@
 export * from "./sqlite";
-export * as assertions from "./assertions";
+export * as matchers from "./matchers";
+export * from "./matchers";
 export * from "./counter-example";
 export * from "./dummy-message";
-export * from "./assertions";
 export { setExpect } from "./expect";
 export * from "./helpers";
 export * from "./utils";

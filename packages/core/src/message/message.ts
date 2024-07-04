@@ -2,21 +2,23 @@ import { v4 as uuid } from "uuid";
 
 type Version = string | number | undefined;
 
-interface CommonMessageHeaders {
+export interface MessageHeaders {
     id: string;
     type: string;
     schemaVersion?: Version;
     createdAt: Date;
-}
 
-export interface MessageHeaders extends CommonMessageHeaders {
     [key: string]: unknown;
 }
 
 type ExtraHeaderField = Exclude<
     keyof MessageHeaders,
-    keyof CommonMessageHeaders
+    "id" | "type" | "schemaVersion" | "createdAt"
 >;
+
+type RawMessageHeaders = Omit<MessageHeaders, "createdAt"> & {
+    createdAt: string | Date;
+};
 
 export class Message<T extends Record<string, any> = Record<string, unknown>> {
     protected headers!: MessageHeaders;
@@ -35,10 +37,13 @@ export class Message<T extends Record<string, any> = Record<string, unknown>> {
 
     public static from(
         rawPayload: Record<string, unknown>,
-        headers?: MessageHeaders
+        headers?: RawMessageHeaders
     ): Message {
         const payload = this.deserializeRawPayload(rawPayload);
-        return new this(payload, this.deserializeRawHeaders(headers));
+        return new this(
+            payload,
+            headers ? this.deserializeRawHeaders(headers) : this.newHeaders()
+        );
     }
 
     protected static deserializeRawPayload(rawPayload: any): any {
@@ -46,16 +51,11 @@ export class Message<T extends Record<string, any> = Record<string, unknown>> {
     }
 
     protected static deserializeRawHeaders(
-        headers?: MessageHeaders
+        headers: RawMessageHeaders
     ): MessageHeaders {
-        if (!headers) {
-            return this.newHeaders();
-        }
+        headers.createdAt = new Date(headers.createdAt);
 
-        return {
-            ...headers,
-            createdAt: new Date(headers.createdAt),
-        };
+        return headers as MessageHeaders;
     }
 
     constructor(
