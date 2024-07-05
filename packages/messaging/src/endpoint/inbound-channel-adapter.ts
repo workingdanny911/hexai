@@ -1,4 +1,5 @@
-import { Lifecycle } from "@/lifecycle";
+import { Lifecycle } from "@hexai/core";
+
 import { MessageChannel } from "@/channel";
 
 export interface InboundChannelAdapter extends Lifecycle {

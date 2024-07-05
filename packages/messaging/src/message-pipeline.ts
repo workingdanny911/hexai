@@ -2,6 +2,7 @@ import {
     AbstractLifecycle,
     ApplicationContextAware,
     ApplicationContextInjector,
+    Lifecycle,
     Message,
 } from "@hexai/core";
 
@@ -14,7 +15,6 @@ import {
     toHandlerFunction,
 } from "@/endpoint";
 import { isSubscribableChannel } from "@/helpers";
-import { Lifecycle } from "@/lifecycle";
 import { Pipe } from "@/pipe";
 
 type OmitLifecycleMethods<T> = Omit<T, keyof Lifecycle>;

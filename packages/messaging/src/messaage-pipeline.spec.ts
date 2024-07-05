@@ -1,19 +1,14 @@
-import { beforeEach, describe, expect, it, test, vi } from "vitest";
 import { ApplicationContextAware, Message } from "@hexai/core";
-import { waitForTicks } from "@hexai/core/test";
+import { beforeEach, describe, expect, it, test, vi } from "vitest";
 
 import {
     DirectChannel,
     MessageChannel,
     SubscribableMessageChannel,
 } from "@/channel";
-import { BarMessage, BazMessage, FooMessage } from "@/test-fixtures";
-import {
-    AbstractInboundChannelAdapter,
-    MessageHandler,
-    MessageHandlerTemplate,
-} from "@/endpoint";
+import { MessageHandler, MessageHandlerTemplate } from "@/endpoint";
 import { MessagePipeline, MessagePipelinesNamespace } from "@/message-pipeline";
+import { BarMessage, BazMessage, FooMessage } from "@/test-fixtures";
 
 let defaultInputChannel: SubscribableMessageChannel;
 const defaultOutputChannel: MessageChannel = {

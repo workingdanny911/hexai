@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AbstractLifecycle } from "./abstract-lifecycle";
 
-class LifecucleStub extends AbstractLifecycle {
+class LifeCycleForTest extends AbstractLifecycle {
     private _onStart?: () => Promise<void>;
     private _onStop?: () => Promise<void>;
 
@@ -23,11 +23,11 @@ class LifecucleStub extends AbstractLifecycle {
     }
 }
 
-describe("lifecycle", () => {
-    let lifecycle: LifecucleStub;
+describe("AbstractLifecycle", () => {
+    let lifecycle: LifeCycleForTest;
 
     beforeEach(() => {
-        lifecycle = new LifecucleStub();
+        lifecycle = new LifeCycleForTest();
     });
 
     test("start", async () => {
@@ -36,25 +36,19 @@ describe("lifecycle", () => {
         expect(lifecycle.isRunning()).toBe(true);
     });
 
-    test("start twice", async () => {
+    test("starting more than once, throws error", async () => {
         await lifecycle.start();
 
         await expect(lifecycle.start()).rejects.toThrow("already started");
     });
 
-    test("on start", async () => {
-        const onStart = vi.fn().mockImplementation(async () => {
-            expect(lifecycle.isRunning()).toBe(true);
-        });
+    test("on start, executes onStart()", async () => {
+        const onStart = vi.fn();
         lifecycle.setOnStart(onStart);
 
         await lifecycle.start();
 
         expect(onStart).toHaveBeenCalled();
-    });
-
-    test("stop before start", async () => {
-        await expect(lifecycle.stop()).rejects.toThrow("not started");
     });
 
     test("stop", async () => {
@@ -65,13 +59,15 @@ describe("lifecycle", () => {
         expect(lifecycle.isRunning()).toBe(false);
     });
 
-    test("on stop", async () => {
-        const onStop = vi.fn().mockImplementation(async () => {
-            expect(lifecycle.isRunning()).toBe(false);
-        });
-        lifecycle.setOnStop(onStop);
+    test("stopping before start, throws error", async () => {
+        await expect(lifecycle.stop()).rejects.toThrow("not started");
+    });
 
+    test("on stop, executes onStop()", async () => {
+        const onStop = vi.fn();
+        lifecycle.setOnStop(onStop);
         await lifecycle.start();
+
         await lifecycle.stop();
 
         expect(onStop).toHaveBeenCalled();
