@@ -4,6 +4,5 @@ export * from "./types";
 export * from "./inspection";
 export * from "./abstract-lifecycle";
 export * from "./lifecycle";
-export * from "./executor";
 export * from "./wait";
 export * from "./partial-match";

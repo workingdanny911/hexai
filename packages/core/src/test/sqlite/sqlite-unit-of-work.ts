@@ -21,6 +21,10 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
     }
 
     getClient(): Database {
+        const current = SqliteUnitOfWork.transactions.get(this.db);
+        if (!current || current.level === 0) {
+            throw new Error("No transaction is active");
+        }
         return this.db;
     }
 

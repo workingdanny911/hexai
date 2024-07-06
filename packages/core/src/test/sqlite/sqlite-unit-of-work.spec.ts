@@ -26,6 +26,10 @@ describe("unit of work", () => {
         };
     });
 
+    test("getClient() throws error outside of wrap", () => {
+        expect(() => uow.getClient()).toThrowError();
+    });
+
     test("when successful", async () => {
         uow = new SqliteUnitOfWork(db);
 

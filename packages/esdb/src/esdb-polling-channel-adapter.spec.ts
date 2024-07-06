@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, test } from "vitest";
 import { uuid } from "uuidv4";
 import { Message } from "@hexai/core";
-import { DummyMessage, expectMessagesToEqual } from "@hexai/core/test";
+import { DummyMessage, expectMessagesToBeEqual } from "@hexai/core/test";
 import {
     MessageChannel,
     PositionTracker,
@@ -44,7 +44,7 @@ function expectMessagesToFullyEqual(
     expectedMessages: Message[],
     messages: Message[]
 ): void {
-    expectMessagesToEqual(messages, expectedMessages);
+    expectMessagesToBeEqual(messages, expectedMessages);
 
     expect(messages.map((m) => m.getMessageId())).toEqual(
         expectedMessages.map((m) => m.getMessageId())
