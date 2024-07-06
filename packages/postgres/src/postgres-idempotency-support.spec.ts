@@ -36,7 +36,7 @@ describe("PostgresIdempotencySupport", () => {
             ["key", message.getMessageId()]
         );
 
-        expect(result.rows[0]).toContain({
+        expect(result.rows[0]).toMatchObject({
             key: "key",
             message_id: message.getMessageId(),
         });
