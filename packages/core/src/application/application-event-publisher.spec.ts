@@ -58,14 +58,14 @@ describe("application event publisher", () => {
         expect(tEnd - tStart).toBeGreaterThanOrEqual(50 * 2);
     });
 
-    test("context", async () => {
+    test("hands over event publishing context to subscriber when context is bound", async () => {
         publisher.subscribe(subscriber);
 
-        await publisher.bindContext({ foo: "bar" }, async () => {
-            await publisher.publish({
+        await publisher.withContext({ foo: "bar" }, () =>
+            publisher.publish({
                 type: "test",
-            });
-        });
+            })
+        );
 
         expect(subscriber).toHaveBeenCalledWith(
             { type: "test" },

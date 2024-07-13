@@ -9,7 +9,7 @@ import {
 import { UseCase } from "./use-case";
 
 class DummyUseCase extends UseCase<{}> {
-    protected async doExecute() {}
+    protected async doHandle() {}
 }
 
 describe("use case", () => {
@@ -19,30 +19,30 @@ describe("use case", () => {
         vi.restoreAllMocks();
     });
 
+    function throwInHandler(error: Error) {
+        vi.spyOn(useCase as any, "doHandle").mockRejectedValue(error);
+    }
+
     function patch(impl: any) {
         // @ts-ignore
-        vi.spyOn(useCase, "doExecute").mockImplementation(impl);
+        vi.spyOn(useCase, "doHandle").mockImplementation(impl);
     }
 
     it("catches error thrown in execution body and transforms to error response", async () => {
-        patch(() => {
-            throw new Error("Something went wrong");
-        });
+        throwInHandler(new Error("Something went wrong"));
 
-        const response = await useCase.execute({});
+        const response = await useCase.handle({});
 
         expectUnknownErrorResponse(response, "Something went wrong");
     });
 
     test("when ValidationError thrown", async () => {
-        patch(() => {
-            throw new ValidationError("field", "code", "message");
-        });
+        throwInHandler(new ValidationError("field", "error-code"));
 
-        const response = await useCase.execute({});
+        const response = await useCase.handle({});
 
         expectValidationErrorResponse(response, {
-            field: "code",
+            field: "error-code",
         });
     });
 });

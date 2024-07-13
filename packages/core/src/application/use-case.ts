@@ -8,7 +8,7 @@ import {
     validationErrorResponse,
 } from "./error-response";
 import { ApplicationContextAware } from "./application-context-aware";
-import { CommandExecutor } from "./command-executor";
+import { MessageHandlerObject } from "./message-handler";
 
 interface BaseUseCaseContext {
     getEventPublisher(): EventPublisher;
@@ -21,7 +21,7 @@ export abstract class UseCase<
         Ctx extends BaseUseCaseContext = BaseUseCaseContext,
     >
     implements
-        CommandExecutor<I, O | ErrorResponse>,
+        MessageHandlerObject<I, Promise<O | ErrorResponse>>,
         ApplicationContextAware<Ctx>
 {
     protected applicationContext!: Ctx;
@@ -32,15 +32,15 @@ export abstract class UseCase<
         this.eventPublisher = applicationContext.getEventPublisher();
     }
 
-    public async execute(command: I): Promise<O | ErrorResponse> {
+    public async handle(command: I): Promise<O | ErrorResponse> {
         try {
-            return await this.doExecute(command);
+            return await this.doHandle(command);
         } catch (e) {
             return (this.constructor as any).mapErrorToResponse(e);
         }
     }
 
-    protected abstract doExecute(command: I): Promise<O>;
+    protected abstract doHandle(command: I): Promise<O>;
 
     protected getUnitOfWork(): UnitOfWork {
         return this.applicationContext.getUnitOfWork();

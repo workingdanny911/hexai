@@ -7,3 +7,4 @@ export * from "./lifecycle";
 export * from "./executor";
 export * from "./wait";
 export * from "./partial-match";
+export * from "./event-emitter";

@@ -137,7 +137,10 @@ dist
 # DS_Store
 .DS_Store
 
-# transaction.todo files
+# todo files
 *.todo
 todo.txt
 todo
+
+# ignore
+.ignore/

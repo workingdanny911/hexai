@@ -158,7 +158,7 @@ abstract class CounterUseCase<Input, Output> extends UseCase<
 
 export class CreateCounter extends CounterUseCase<CreateCounterRequest, void> {
     @Atomic()
-    public async doExecute(request: CreateCounterRequest): Promise<void> {
+    public async doHandle(request: CreateCounterRequest): Promise<void> {
         const counter = Counter.create(new CounterId(request.id));
 
         await this.repository.add(counter);
@@ -179,7 +179,7 @@ export class IncreaseCounter extends CounterUseCase<
     { value: number }
 > {
     @Atomic()
-    public async doExecute(request: IncreaseCounterRequest): Promise<{
+    public async doHandle(request: IncreaseCounterRequest): Promise<{
         value: number;
     }> {
         const counter = await this.repository.get(new CounterId(request.id));

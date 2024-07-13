@@ -1,3 +1,3 @@
-export interface EventPublisher<E extends object = any> {
+export interface EventPublisher<E = any> {
     publish(...events: E[]): void;
 }
