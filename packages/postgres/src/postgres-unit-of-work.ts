@@ -1,69 +1,135 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-
 import * as pg from "pg";
-import { Propagation } from "@hexai/core";
+import {
+    AbstractTransaction,
+    AbstractUnitOfWork,
+    IsolationLevel,
+    Propagation,
+    UnitOfWorkAbortedError,
+} from "@hexai/core";
 
 import {
     ClientCleanUp,
     ClientFactory,
     PostgresTransactionOptions,
 } from "./types";
-import { Transaction } from "./transaction";
+import { ensureConnection } from "./helpers";
 
-function makeOptions(
-    options: Partial<PostgresTransactionOptions> = {}
-): PostgresTransactionOptions {
-    return {
-        propagation: Propagation.NESTED,
-        ...options,
-    };
+export class PostgresUnitOfWork extends AbstractUnitOfWork<
+    pg.Client,
+    PostgresTransactionOptions
+> {
+    constructor(
+        private clientFactory: ClientFactory,
+        private clientCleanUp?: ClientCleanUp
+    ) {
+        super();
+    }
+
+    protected override makeOptions(
+        options: Partial<PostgresTransactionOptions>
+    ): PostgresTransactionOptions {
+        return {
+            propagation: Propagation.NESTED,
+            ...options,
+        };
+    }
+
+    protected override newTransaction(): AbstractTransaction<
+        pg.Client,
+        PostgresTransactionOptions
+    > {
+        return new PostgresTransaction(this.clientFactory, this.clientCleanUp);
+    }
 }
 
-export class PostgresUnitOfWork {
-    private transactionStorage = new AsyncLocalStorage<Transaction>();
+class PostgresTransaction extends AbstractTransaction<
+    pg.Client,
+    PostgresTransactionOptions
+> {
+    private originalClient!: pg.Client;
+    private patchedClient!: pg.Client;
 
     constructor(
         private clientFactory: ClientFactory,
         private clientCleanUp?: ClientCleanUp
-    ) {}
+    ) {
+        super();
+    }
 
-    getClient(): pg.Client {
-        const current = this.getCurrent();
+    public override getClient(): pg.Client {
+        return this.patchedClient;
+    }
 
-        if (!current) {
-            throw new Error("Unit of work not started");
+    protected override async spawnNewClient(): Promise<void> {
+        const client = await this.clientFactory();
+
+        if (!(client instanceof pg.Client)) {
+            throw new Error("Client factory must return a pg.Client");
         }
 
-        return current.getClient();
+        await ensureConnection(client);
+
+        this.setClient(client);
     }
 
-    private getCurrent(): Transaction | null {
-        return this.transactionStorage.getStore() ?? null;
+    private setClient(client: pg.Client): void {
+        this.originalClient = client;
+        this.patchedClient = this.patchClient(client);
     }
 
-    async wrap<T = unknown>(
-        fn: (client: pg.Client) => Promise<T>,
-        options: Partial<PostgresTransactionOptions> = {}
-    ): Promise<T> {
-        const run = (t: Transaction) => t.run(fn, makeOptions(options));
+    private patchClient(client: pg.Client): pg.Client {
+        const isAborted = () => this.isAborted();
 
-        if (options?.propagation === Propagation.NEW) {
-            return this.apply(this.newTransaction(), run);
+        return new Proxy(client, {
+            get(target, prop, receiver) {
+                if (prop === "query") {
+                    if (isAborted()) {
+                        throw new UnitOfWorkAbortedError(
+                            "This unit of work is aborted"
+                        );
+                    }
+
+                    return target.query.bind(target);
+                }
+
+                return Reflect.get(target, prop, receiver);
+            },
+        });
+    }
+
+    protected override async begin(): Promise<void> {
+        const client = this.getClient();
+        await client.query("BEGIN");
+
+        if (this.getIsolationLevel() !== IsolationLevel.READ_COMMITTED) {
+            await client.query(
+                `SET TRANSACTION ISOLATION LEVEL ${this.getIsolationLevel()}`
+            );
         }
-
-        return this.apply(this.getCurrent() ?? this.newTransaction(), run);
     }
 
-    private newTransaction() {
-        return new Transaction(this.clientFactory, this.clientCleanUp);
+    protected override async enterSavepoint(level: number): Promise<void> {
+        await this.getClient().query(`SAVEPOINT savepoint_${level}`);
     }
 
-    private apply<T>(
-        transaction: Transaction,
-        callback: (transaction: Transaction) => Promise<T>
-    ): Promise<T> {
-        return this.transactionStorage.run(transaction, () =>
-            callback(transaction)
+    protected override async rollbackToSavepoint(level: number): Promise<void> {
+        await this.getClient().query(
+            `ROLLBACK TO SAVEPOINT savepoint_${level}`
         );
+    }
+
+    protected override async annihilate(): Promise<void> {
+        await this.clientCleanUp?.(this.originalClient);
+    }
+
+    protected override async rollback(): Promise<void> {
+        await this.originalClient.query("ROLLBACK");
+    }
+    protected override async commit(): Promise<void> {
+        await this.originalClient.query("COMMIT");
+    }
+
+    private getIsolationLevel(): IsolationLevel {
+        return this.options.isolationLevel ?? IsolationLevel.READ_COMMITTED;
     }
 }
