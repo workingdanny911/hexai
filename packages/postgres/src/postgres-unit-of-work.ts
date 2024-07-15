@@ -25,7 +25,7 @@ export class PostgresUnitOfWork extends AbstractUnitOfWork<
         super();
     }
 
-    protected override makeOptions(
+    protected override resolveOptions(
         options: Partial<PostgresTransactionOptions>
     ): PostgresTransactionOptions {
         return {
@@ -60,7 +60,7 @@ class PostgresTransaction extends AbstractTransaction<
         return this.patchedClient;
     }
 
-    protected override async spawnNewClient(): Promise<void> {
+    protected override async initialize(): Promise<void> {
         const client = await this.clientFactory();
 
         if (!(client instanceof pg.Client)) {
@@ -78,14 +78,15 @@ class PostgresTransaction extends AbstractTransaction<
     }
 
     private patchClient(client: pg.Client): pg.Client {
-        const isAborted = () => this.isAborted();
+        const isAbort = () => this.isAbort();
+        const isExited = () => this.isExited();
 
         return new Proxy(client, {
             get(target, prop, receiver) {
                 if (prop === "query") {
-                    if (isAborted()) {
+                    if (isAbort() || isExited()) {
                         throw new UnitOfWorkAbortedError(
-                            "This unit of work is aborted"
+                            "This unit of work is aborted or closed."
                         );
                     }
 
@@ -108,13 +109,13 @@ class PostgresTransaction extends AbstractTransaction<
         }
     }
 
-    protected override async enterSavepoint(level: number): Promise<void> {
-        await this.getClient().query(`SAVEPOINT savepoint_${level}`);
+    protected override async enterSavepoint(): Promise<void> {
+        await this.getClient().query(`SAVEPOINT sp_${this.currentLevel}`);
     }
 
-    protected override async rollbackToSavepoint(level: number): Promise<void> {
+    protected override async rollbackToSavepoint(): Promise<void> {
         await this.getClient().query(
-            `ROLLBACK TO SAVEPOINT savepoint_${level}`
+            `ROLLBACK TO SAVEPOINT sp_${this.currentLevel}`
         );
     }
 
@@ -122,10 +123,11 @@ class PostgresTransaction extends AbstractTransaction<
         await this.clientCleanUp?.(this.originalClient);
     }
 
-    protected override async rollback(): Promise<void> {
+    protected override async queryRollback(): Promise<void> {
         await this.originalClient.query("ROLLBACK");
     }
-    protected override async commit(): Promise<void> {
+
+    protected override async queryCommit(): Promise<void> {
         await this.originalClient.query("COMMIT");
     }
 

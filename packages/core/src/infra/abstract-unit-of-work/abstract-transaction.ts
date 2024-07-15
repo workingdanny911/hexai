@@ -4,8 +4,8 @@ enum TransactionState {
     NOT_STARTED = "not started",
     STARTING = "starting",
     RUNNING = "running",
-    COMMITTED = "committed",
-    ABORTED = "aborted",
+    ABORT = "abort",
+    EXITED = "exited",
 }
 
 export abstract class AbstractTransaction<
@@ -22,68 +22,52 @@ export abstract class AbstractTransaction<
             return;
         }
 
-        this.starting();
+        this.toStartingState();
 
-        await this.spawnNewClient();
+        await this.initialize();
         await this.begin();
 
-        this.running();
+        this.toRunningState();
     }
 
     public abstract getClient(): C;
 
     public async run<T>(fn: (client: C) => Promise<T>, options: O): Promise<T> {
-        this.options = options;
-
+        this.overwriteOptions(options);
         if (this.isNotStarted()) {
             await this.start();
         }
 
-        const runner =
-            this.getPropagation() === Propagation.NESTED
-                ? this.runInSavepoint
-                : this.runFn;
-
-        try {
-            return (await runner.call(this, fn)) as T;
-        } finally {
-            if (this.isRoot()) {
-                await this.commitOrRollback();
-                await this.annihilate();
-            }
+        if (
+            !this.isRoot() &&
+            this.getPropagationType() === Propagation.NESTED
+        ) {
+            return await this.runFnInSavepoint(fn);
+        } else {
+            return await this.runFn(fn);
         }
     }
 
-    protected getPropagation(): Propagation {
-        return this.options.propagation ?? Propagation.NESTED;
+    private overwriteOptions(options: O): void {
+        this.options = options;
     }
 
-    protected isRoot(): boolean {
-        return this.currentLevel === 0;
-    }
-
-    private async runInSavepoint<T>(fn: (client: C) => Promise<T>): Promise<T> {
-        try {
-            await this.enterSavepoint(this.currentLevel);
-
-            return await this.withLevelAdjustment(fn);
-        } catch (e) {
-            if (this.isRoot()) {
-                this.abort();
-            } else {
-                await this.rollbackToSavepoint(this.currentLevel);
-            }
-
-            throw e;
-        }
+    private getPropagationType(): Propagation {
+        return this.options.propagation;
     }
 
     private async runFn<T>(fn: (client: C) => Promise<T>): Promise<T> {
         try {
             return await this.withLevelAdjustment(fn);
         } catch (e) {
-            this.abort();
+            this.toAbortState();
             throw e;
+        } finally {
+            if (this.isAbort()) {
+                await this.rollback();
+            } else if (this.isRoot()) {
+                await this.commit();
+            }
         }
     }
 
@@ -98,36 +82,79 @@ export abstract class AbstractTransaction<
         }
     }
 
-    private async commitOrRollback(): Promise<void> {
-        if (this.isAborted()) {
-            await this.rollback();
-        } else {
-            await this.commit();
+    private async exit(): Promise<void> {
+        await this.annihilate();
+        this.toExitedState();
+    }
+
+    protected isRoot(): boolean {
+        return this.currentLevel === 0;
+    }
+
+    private async runFnInSavepoint<T>(
+        fn: (client: C) => Promise<T>
+    ): Promise<T> {
+        try {
+            await this.enterSavepoint();
+
+            return await this.withLevelAdjustment(fn);
+        } catch (e) {
+            await this.rollbackToSavepoint();
+
+            throw e;
         }
     }
 
     // to override
-    protected abstract spawnNewClient(): Promise<void>;
-    protected abstract begin(): Promise<void>;
-    protected abstract commit(): Promise<void>;
-    protected abstract rollback(): Promise<void>;
-    protected abstract enterSavepoint(level: number): Promise<void>;
-    protected abstract rollbackToSavepoint(level: number): Promise<void>;
+    protected abstract initialize(): Promise<void>;
+
+    protected async begin(): Promise<void> {
+        this.toRunningState();
+    }
+
+    protected async commit(): Promise<void> {
+        if (this.isExited()) {
+            return;
+        }
+
+        await this.queryCommit();
+
+        await this.exit();
+    }
+
+    protected async rollback(): Promise<void> {
+        if (this.isExited()) {
+            return;
+        }
+
+        await this.queryRollback();
+
+        await this.exit();
+    }
+
+    protected abstract queryCommit(): Promise<void>;
+    protected abstract queryRollback(): Promise<void>;
+    protected abstract enterSavepoint(): Promise<void>;
+    protected abstract rollbackToSavepoint(): Promise<void>;
     protected annihilate(): Promise<void> {
         return Promise.resolve();
     }
 
     // state mutations & queries
-    protected starting(): void {
+    protected toStartingState(): void {
         this.state = TransactionState.STARTING;
     }
 
-    protected running(): void {
+    protected toRunningState(): void {
         this.state = TransactionState.RUNNING;
     }
 
-    protected abort(): void {
-        this.state = TransactionState.ABORTED;
+    protected toAbortState(): void {
+        this.state = TransactionState.ABORT;
+    }
+
+    protected toExitedState(): void {
+        this.state = TransactionState.EXITED;
     }
 
     protected hasBeenStarted(): boolean {
@@ -138,7 +165,11 @@ export abstract class AbstractTransaction<
         return this.state === TransactionState.NOT_STARTED;
     }
 
-    protected isAborted(): boolean {
-        return this.state === TransactionState.ABORTED;
+    protected isAbort(): boolean {
+        return this.state === TransactionState.ABORT;
+    }
+
+    protected isExited(): boolean {
+        return this.state === TransactionState.EXITED;
     }
 }

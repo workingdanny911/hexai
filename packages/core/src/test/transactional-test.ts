@@ -4,7 +4,7 @@ import type { TestAPI } from "vitest";
 
 export function makeTransactionalTest(
     base: any,
-    uowFactory: () => Promise<UnitOfWork>,
+    uowFactory: () => UnitOfWork | Promise<UnitOfWork>,
     annihilate?: (uow: UnitOfWork) => Promise<void>
 ): TestAPI {
     return base.extend({
