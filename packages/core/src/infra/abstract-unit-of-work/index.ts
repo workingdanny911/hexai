@@ -18,6 +18,8 @@ export abstract class AbstractUnitOfWork<
         AbstractTransaction<C, O>
     >();
 
+    protected abstract resolveOptions(options: Partial<O>): O;
+
     public getClient(): C {
         const current = this.getCurrent();
 
@@ -36,17 +38,17 @@ export abstract class AbstractUnitOfWork<
         fn: (client: C) => Promise<T>,
         options: Partial<O> = {}
     ): Promise<T> {
-        const run = (t: AbstractTransaction<C, O>) =>
-            t.run(fn, this.makeOptions(options));
+        const resolvedOptions = this.resolveOptions(options);
 
-        if (options?.propagation === Propagation.NEW) {
+        const run = (tx: AbstractTransaction<C, O>) =>
+            tx.run(fn, resolvedOptions);
+
+        if (resolvedOptions.propagation === Propagation.NEW) {
             return this.apply(this.newTransaction(), run);
         }
 
         return this.apply(this.getCurrent() ?? this.newTransaction(), run);
     }
-
-    protected abstract makeOptions(options: Partial<O>): O;
 
     protected abstract newTransaction(): AbstractTransaction<C, O>;
 
