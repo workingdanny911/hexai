@@ -50,14 +50,10 @@ describe("PostgreSQL unit of work", () => {
     });
 
     test("client passed as argument and client from .getClient() shares the same transaction", async () => {
-        const txids = new Set<string>();
-
         await uow.wrap(async (client) => {
-            txids.add(await getTxid(client));
-            txids.add(await getTxid(uow.getClient()));
+            const txId = await getTxid(client);
+            await expect(getTxid(uow.getClient())).resolves.toBe(txId);
         });
-
-        expect(txids.size).toBe(1);
     });
 
     test("committing", async () => {
