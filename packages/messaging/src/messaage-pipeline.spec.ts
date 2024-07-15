@@ -288,17 +288,18 @@ describe("with filters & transformers", () => {
     });
 
     test("with multiple filters", async () => {
+        const barMessage = BarMessage.create();
         await testNamespace
             .define("pipeline-for-test")
             .from(defaultInputChannel)
-            .filter(() => true)
-            .filter(() => false)
-            .filter(() => true)
+            .filter((m)=> m.getMessageType() === FooMessage.type)
+            .filter((m) => m.getMessageType() === BarMessage.type)
             .to(defaultOutputChannel)
             .settle()
             .start();
 
         await defaultInputChannel.send(message);
+        await defaultInputChannel.send(barMessage);
         expectMessagesSentToBe([]);
     });
 

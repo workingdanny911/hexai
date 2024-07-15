@@ -27,11 +27,11 @@ describe("pipe", () => {
 
     test("extending", async () => {
         let result!: number;
-        const increamentAndDouble = increment.extend(double).extend((input) => {
+        const incrementAndDouble = increment.extend(double).extend((input) => {
             result = input;
         });
 
-        await increamentAndDouble.send(0);
+        await incrementAndDouble.send(0);
 
         expect(result).toBe(2);
     });
