@@ -63,7 +63,7 @@ describe("web interface", () => {
         expect(configureWithoutListenOn).toThrowError(/url.*needed/i);
     });
 
-    test("web interface configuration can be overwritten", async () => {
+    test("web interface behavior definition can be overwritten", async () => {
         const define404 = (wi: any) => {
             wi.get("*", (req: any, res: any) => {
                 res.status(404).send("not found");
