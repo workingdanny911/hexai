@@ -2,28 +2,29 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import { EventPublisher } from "@/event-publisher";
 
-interface PublishCallback<E extends object, C extends object> {
-    (event: E, context: C | null): void | Promise<void>;
+interface PublishCallback<E, EPubCtx> {
+    (event: E, context: EPubCtx | null): void | Promise<void>;
 }
 
-export class ApplicationEventPublisher<
-    E extends object = any,
-    C extends object = any,
-> implements EventPublisher<E>
+export class ApplicationEventPublisher<E = any, EPubCtx = any>
+    implements EventPublisher<E>
 {
-    private callbacks: Set<PublishCallback<E, C>> = new Set();
-    private contextStorage = new AsyncLocalStorage<C>();
+    private callbacks: Set<PublishCallback<E, EPubCtx>> = new Set();
+    private contextStorage = new AsyncLocalStorage<EPubCtx>();
 
-    async bindContext<R>(context: C, callback: () => Promise<R>): Promise<R> {
+    async withContext<R>(
+        context: EPubCtx,
+        callback: () => Promise<R>
+    ): Promise<R> {
         return await this.contextStorage.run(context, callback);
     }
 
-    public subscribe(callback: PublishCallback<E, C>): () => void {
+    public subscribe(callback: PublishCallback<E, EPubCtx>): () => void {
         this.callbacks.add(callback);
         return () => this.unsubscribe(callback);
     }
 
-    private unsubscribe(callback: PublishCallback<E, C>): void {
+    private unsubscribe(callback: PublishCallback<E, EPubCtx>): void {
         this.callbacks.delete(callback);
     }
 
@@ -39,14 +40,7 @@ export class ApplicationEventPublisher<
         }
     }
 
-    private getCurrentContext(): C | null {
+    private getCurrentContext(): EPubCtx | null {
         return this.contextStorage.getStore() ?? null;
     }
 }
-
-export type EventPublishingContextOf<P> = P extends ApplicationEventPublisher<
-    any,
-    infer C
->
-    ? C
-    : never;

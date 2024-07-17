@@ -6,3 +6,4 @@ export * from "./abstract-lifecycle";
 export * from "./lifecycle";
 export * from "./wait";
 export * from "./partial-match";
+export * from "./event-emitter";

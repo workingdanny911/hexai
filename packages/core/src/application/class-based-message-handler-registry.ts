@@ -2,15 +2,15 @@ import { C } from "ts-toolbelt";
 
 import { Message } from "@/message";
 import { isClass } from "@/utils";
-import { CommandExecutorRegistry } from "./command-executor-registry";
-import { CommandExecutor } from "./command-executor";
+import { MessageHandlerRegistry } from "./message-handler-registry";
+import { MessageHandler } from "./message-handler";
 
-export class ClassBasedCommandExecutorRegistry
-    implements CommandExecutorRegistry<C.Class, Message>
+export class ClassBasedMessageHandlerRegistry
+    implements MessageHandlerRegistry<C.Class, Message>
 {
-    private handlers = new Map<C.Class, CommandExecutor<Message>>();
+    private handlers = new Map<C.Class, MessageHandler<Message>>();
 
-    public register(key: C.Class, executor: CommandExecutor<Message>): void {
+    public register(key: C.Class, executor: MessageHandler<Message>): void {
         if (!isClass(key)) {
             throw new Error(`${key} is not a class`);
         }
@@ -22,7 +22,7 @@ export class ClassBasedCommandExecutorRegistry
         this.handlers.set(key, executor);
     }
 
-    public get(command: Message): CommandExecutor<Message> | null {
+    public getByMessage(command: Message): MessageHandler<Message> | null {
         const commandClass = command.constructor as C.Class;
 
         return this.handlers.get(commandClass) ?? null;
