@@ -49,7 +49,7 @@ describe("reading events", () => {
     }
 
     test("reading non-existing stream", async () => {
-        const events = await wrapper.readStream("non-exsiting-stream");
+        const events = await wrapper.readStream("non-existing-stream");
         expectEventsToFullyEqual(events, []);
     });
 
@@ -61,6 +61,15 @@ describe("reading events", () => {
         const eventsFetched = await wrapper.readStream("test");
         expectEventsToFullyEqual(eventsFetched, events);
     });
+
+    test('every events should have unique id', async () => {
+        const events = DummyMessage.createMany(10);
+        await esdbClient.appendToStream("test", events.map(toESDBEvent));
+        const eventsFetched = await wrapper.readStream("test", {
+            numberOfEvents: 10,
+        });
+        expect(new Set(eventsFetched.map(e => e.getMessageId())).size).toBe(10);
+    })
 
     test("reading events with data", async () => {
         const event = new EventWithData({
@@ -107,13 +116,22 @@ describe("reading events", () => {
         const initialPosition = await createStreamForTest("test");
         const events = DummyMessage.createMany(10);
         await esdbClient.appendToStream("test", events.map(toESDBEvent));
-
+        const eventsAfterDummy = new EventWithData({
+            stringValue: "string",
+            numberValue: 1,
+            booleanValue: true,
+            arrayValue: [1, 2, 3],
+            nullValue: null,
+            objectValue: {
+                key: "value",
+            },
+        });
         const eventsFetched = await wrapper.readStream("test", {
-            fromPosition: initialPosition,
+            fromPosition: initialPosition + 10,
             numberOfEvents: 1,
         });
 
-        expectEventsToFullyEqual(eventsFetched, events.slice(0, 1));
+        expectEventsToFullyEqual(eventsFetched, [eventsAfterDummy]);
     });
 });
 
