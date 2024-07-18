@@ -3,7 +3,7 @@ import { Message } from "@hexai/core";
 import { DummyMessage } from "@hexai/core/test";
 
 import { esdbClient, EventWithData } from "@/test-fixtures";
-import { EsdbHelper, RawEventInStream } from "@/esdb-helper";
+import { EsdbHelper } from "@/esdb-helper";
 
 const wrapper = new EsdbHelper(esdbClient);
 
