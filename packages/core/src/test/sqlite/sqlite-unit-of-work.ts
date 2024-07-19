@@ -1,58 +1,88 @@
 import { Database } from "sqlite";
 
-import { CommonUnitOfWorkOptions, UnitOfWork } from "@/infra";
+import {
+    AbstractTransaction,
+    AbstractUnitOfWork,
+    CommonUnitOfWorkOptions,
+    Propagation,
+    UnitOfWorkAbortedError,
+} from "@/infra";
 
-export class SqliteUnitOfWork implements UnitOfWork<Database> {
-    private static transactions = new WeakMap<
-        Database,
-        {
-            level: number;
-            aborted: boolean;
-        }
-    >();
-
-    constructor(private db: Database) {
-        if (!SqliteUnitOfWork.transactions.has(db)) {
-            SqliteUnitOfWork.transactions.set(db, {
-                level: 0,
-                aborted: false,
-            });
-        }
+export class SqliteUnitOfWork extends AbstractUnitOfWork<SqliteTransaction> {
+    constructor(
+        private connFactory: () => Promise<Database>,
+        private cleanUp?: (client: Database) => Promise<void>
+    ) {
+        super();
     }
 
-    getClient(): Database {
-        const current = SqliteUnitOfWork.transactions.get(this.db);
-        if (!current || current.level === 0) {
-            throw new Error("No transaction is active");
-        }
-        return this.db;
+    protected async newTransaction(): Promise<SqliteTransaction> {
+        return new SqliteTransaction(this.connFactory, this.cleanUp);
+    }
+}
+
+export class SqliteTransaction extends AbstractTransaction<Database> {
+    private client!: Database;
+
+    constructor(
+        private connFactory: () => Promise<Database>,
+        private cleanUp?: (client: Database) => Promise<void>
+    ) {
+        super();
     }
 
-    async wrap<T>(
-        fn: (client: Database) => Promise<T>,
-        options?: Partial<CommonUnitOfWorkOptions>
-    ): Promise<T> {
-        const current = SqliteUnitOfWork.transactions.get(this.db)!;
-        if (++current.level === 1) {
-            await this.db.run("BEGIN TRANSACTION");
-        }
+    public override getClient(): Database {
+        return this.client;
+    }
 
+    protected resolveOptions(options: Partial<CommonUnitOfWorkOptions>) {
+        return {
+            propagation: Propagation.EXISTING,
+            ...options,
+        };
+    }
+
+    protected async initialize(): Promise<void> {
+        this.client = await this.connFactory();
+    }
+
+    protected async executeBegin(): Promise<void> {
+        await this.client.exec("BEGIN");
+    }
+
+    protected async executeCommit(): Promise<void> {
+        await this.client.exec("COMMIT");
+    }
+
+    protected async executeRollback(): Promise<void> {
         try {
-            return await fn(this.db);
+            await this.client.exec("ROLLBACK");
         } catch (e) {
-            if (!current.aborted) {
-                current.aborted = true;
+            if (this.isDatabaseClosedError(e)) {
+                throw new UnitOfWorkAbortedError(
+                    `Transaction aborted: ${(e as Error).message}`
+                );
             }
 
             throw e;
-        } finally {
-            if (--current.level === 0) {
-                if (current.aborted) {
-                    await this.db.run("ROLLBACK");
-                } else {
-                    await this.db.run("COMMIT");
-                }
-            }
+        }
+    }
+
+    private isDatabaseClosedError(e: any): boolean {
+        return e?.message.match(/database is closed/i);
+    }
+
+    protected async executeSavepoint(): Promise<void> {
+        await this.client.exec(`SAVEPOINT sp_${this.currentLevel}`);
+    }
+
+    protected async executeRollbackToSavepoint(): Promise<void> {
+        await this.client.exec(`ROLLBACK TO sp_${this.currentLevel}`);
+    }
+
+    protected async annihilate(): Promise<void> {
+        if (this.cleanUp) {
+            await this.cleanUp(this.client);
         }
     }
 }

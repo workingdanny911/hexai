@@ -32,8 +32,11 @@ export abstract class AbstractTransaction<
 
     public abstract getClient(): C;
 
-    public async run<T>(fn: (client: C) => Promise<T>, options: O): Promise<T> {
-        this.overwriteOptions(options);
+    public async run<T>(
+        fn: (client: C) => Promise<T>,
+        options: Partial<O>
+    ): Promise<T> {
+        this.options = this.resolveOptions(options);
         if (this.isNotStarted()) {
             await this.start();
         }
@@ -48,9 +51,7 @@ export abstract class AbstractTransaction<
         }
     }
 
-    private overwriteOptions(options: O): void {
-        this.options = options;
-    }
+    protected abstract resolveOptions(options: Partial<O>): O;
 
     private getPropagationType(): Propagation {
         return this.options.propagation;
@@ -95,11 +96,11 @@ export abstract class AbstractTransaction<
         fn: (client: C) => Promise<T>
     ): Promise<T> {
         try {
-            await this.enterSavepoint();
+            await this.executeSavepoint();
 
             return await this.withLevelAdjustment(fn);
         } catch (e) {
-            await this.rollbackToSavepoint();
+            await this.executeRollbackToSavepoint();
 
             throw e;
         }
@@ -109,15 +110,18 @@ export abstract class AbstractTransaction<
     protected abstract initialize(): Promise<void>;
 
     protected async begin(): Promise<void> {
+        await this.executeBegin();
         this.toRunningState();
     }
+
+    protected abstract executeBegin(): Promise<void>;
 
     protected async commit(): Promise<void> {
         if (this.isExited()) {
             return;
         }
 
-        await this.queryCommit();
+        await this.executeCommit();
 
         await this.exit();
     }
@@ -127,15 +131,15 @@ export abstract class AbstractTransaction<
             return;
         }
 
-        await this.queryRollback();
+        await this.executeRollback();
 
         await this.exit();
     }
 
-    protected abstract queryCommit(): Promise<void>;
-    protected abstract queryRollback(): Promise<void>;
-    protected abstract enterSavepoint(): Promise<void>;
-    protected abstract rollbackToSavepoint(): Promise<void>;
+    protected abstract executeCommit(): Promise<void>;
+    protected abstract executeRollback(): Promise<void>;
+    protected abstract executeSavepoint(): Promise<void>;
+    protected abstract executeRollbackToSavepoint(): Promise<void>;
     protected annihilate(): Promise<void> {
         return Promise.resolve();
     }

@@ -2,25 +2,25 @@ export * from "./abstract-transaction";
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { Propagation, UnitOfWork } from "../unit-of-work";
 import { AbstractTransaction } from "./abstract-transaction";
-import {
-    CommonUnitOfWorkOptions,
-    Propagation,
-    UnitOfWork,
-} from "../unit-of-work";
+
+type ClientOf<T> = T extends AbstractTransaction<infer C, any> ? C : never;
+
+type OptionsOf<T> = T extends AbstractTransaction<any, infer O> ? O : never;
 
 export abstract class AbstractUnitOfWork<
-    C,
-    O extends CommonUnitOfWorkOptions = CommonUnitOfWorkOptions,
-> implements UnitOfWork<C, O>
+    Tx extends AbstractTransaction<any, any>,
+> implements UnitOfWork<ClientOf<Tx>, OptionsOf<Tx>>
 {
-    protected transactionStorage = new AsyncLocalStorage<
-        AbstractTransaction<C, O>
-    >();
+    protected static transactionStorage = new AsyncLocalStorage<any>();
+    protected transactionStorage: AsyncLocalStorage<any>;
 
-    protected abstract resolveOptions(options: Partial<O>): O;
+    constructor() {
+        this.transactionStorage = AbstractUnitOfWork.transactionStorage;
+    }
 
-    public getClient(): C {
+    public getClient(): ClientOf<Tx> {
         const current = this.getCurrent();
 
         if (!current) {
@@ -30,32 +30,32 @@ export abstract class AbstractUnitOfWork<
         return current.getClient();
     }
 
-    protected getCurrent(): AbstractTransaction<C, O> | null {
+    protected getCurrent(): Tx | null {
         return this.transactionStorage.getStore() ?? null;
     }
 
-    async wrap<T = unknown>(
-        fn: (client: C) => Promise<T>,
-        options: Partial<O> = {}
-    ): Promise<T> {
-        const resolvedOptions = this.resolveOptions(options);
+    async wrap<R = unknown>(
+        fn: (client: ClientOf<Tx>) => Promise<R>,
+        options: Partial<OptionsOf<Tx>> = {}
+    ): Promise<R> {
+        const run = (tx: Tx) => tx.run(fn, options);
 
-        const run = (tx: AbstractTransaction<C, O>) =>
-            tx.run(fn, resolvedOptions);
-
-        if (resolvedOptions.propagation === Propagation.NEW) {
-            return this.apply(this.newTransaction(), run);
+        if (options.propagation === Propagation.NEW) {
+            return this.apply(await this.newTransaction(), run);
         }
 
-        return this.apply(this.getCurrent() ?? this.newTransaction(), run);
+        return this.apply(
+            this.getCurrent() ?? (await this.newTransaction()),
+            run
+        );
     }
 
-    protected abstract newTransaction(): AbstractTransaction<C, O>;
+    protected abstract newTransaction(): Promise<Tx>;
 
-    private apply<T>(
-        transaction: AbstractTransaction<C, O>,
-        callback: (transaction: AbstractTransaction<C, O>) => Promise<T>
-    ): Promise<T> {
+    private apply<R>(
+        transaction: Tx,
+        callback: (transaction: Tx) => Promise<R>
+    ): Promise<R> {
         return this.transactionStorage.run(transaction, () =>
             callback(transaction)
         );

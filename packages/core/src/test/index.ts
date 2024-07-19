@@ -7,4 +7,3 @@ export * from "./dummy-message";
 export { setExpect } from "./expect";
 export * from "./helpers";
 export * from "./utils";
-export * from "./transactional-test";
