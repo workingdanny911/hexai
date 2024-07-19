@@ -30,4 +30,8 @@ export type OptionsOf<U extends UnitOfWork> = U extends UnitOfWork<any, infer O>
     ? O
     : never;
 
+export type QueryRunnerOf<U extends UnitOfWork> = U extends UnitOfWork<infer C>
+    ? C
+    : never;
+
 export class UnitOfWorkAbortedError extends Error {}
