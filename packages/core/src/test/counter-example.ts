@@ -1,13 +1,4 @@
-import {
-    Atomic,
-    ErrorResponse,
-    UseCase,
-    validationErrorResponse,
-} from "@/application";
-import { AggregateRoot, Id, ObjectNotFoundError, Repository } from "@/domain";
-import { EventPublisher } from "@/event-publisher";
-import { UnitOfWork } from "@/infra";
-import { Message } from "@/message";
+import { AggregateRoot, DomainEvent, Id, Repository } from "@/domain";
 import { SqliteRepository } from "./sqlite";
 
 export class CounterId extends Id<string> {}
@@ -22,12 +13,14 @@ export class Counter extends AggregateRoot<CounterId> {
 
     public static create(id: CounterId): Counter {
         const counter = new Counter(id);
-        counter.raiseCreated();
+        counter.created();
         return counter;
     }
 
-    private raiseCreated(): void {
-        this.raise(new CounterCreated({ id: this.getId() }));
+    private created(): void {
+        this.raise<CounterCreated>("counter.created", {
+            counterId: this.getId().getValue(),
+        });
     }
 
     private constructor(id: CounterId, value?: number) {
@@ -38,19 +31,20 @@ export class Counter extends AggregateRoot<CounterId> {
     public increment(by = 1): void {
         this.value += by;
 
-        this.raiseValueChange();
+        this.valueChanged();
     }
 
     public decrement(by = 1): void {
         this.value -= by;
 
-        this.raiseValueChange();
+        this.valueChanged();
     }
 
-    private raiseValueChange(): void {
-        this.raise(
-            new CounterValueChanged({ id: this.getId(), value: this.value })
-        );
+    private valueChanged(): void {
+        this.raise<CounterValueChanged>("counter.value-changed", {
+            counterId: this.getId().getValue(),
+            value: this.value,
+        });
     }
 
     public static fromMemento(memento: CounterMemento): Counter {
@@ -77,130 +71,29 @@ export class Counter extends AggregateRoot<CounterId> {
     }
 }
 
-export class CounterCreated extends Message<{
-    id: CounterId;
-}> {
-    public static type = "test.counter.counter-created";
-
-    public static deserializeRawPayload(rawPayload: { id: string }): unknown {
-        return {
-            id: new CounterId(rawPayload.id),
-        };
+export type CounterCreated = DomainEvent<
+    "counter.created",
+    {
+        counterId: string;
     }
+>;
 
-    protected serializePayload(payload: {
-        id: CounterId;
-    }): Record<string, unknown> {
-        return {
-            id: payload.id.getValue(),
-        };
-    }
-}
-
-export class CounterValueChanged extends Message<{
-    id: CounterId;
-    value: number;
-}> {
-    public static type = "test.counter.counter-value-changed";
-
-    public static deserializeRawPayload(rawPayload: {
-        id: string;
+export type CounterValueChanged = DomainEvent<
+    "counter.value-changed",
+    {
+        counterId: string;
         value: number;
-    }): unknown {
-        return {
-            id: new CounterId(rawPayload.id),
-            value: rawPayload.value,
-        };
     }
-
-    protected serializePayload(payload: {
-        id: CounterId;
-        value: number;
-    }): Record<string, unknown> {
-        return {
-            id: payload.id.getValue(),
-            value: payload.value,
-        };
-    }
-}
+>;
 
 export interface CounterRepository extends Repository<Counter> {}
 
-export class CreateCounterRequest extends Message {
-    constructor(public readonly id: string) {
-        super({
-            id,
-        });
-    }
+export interface CreateCounterRequest {
+    id: string;
 }
 
-export interface CounterApplicationContext {
-    getCounterRepository(): CounterRepository;
-    getUnitOfWork(): UnitOfWork;
-    getEventPublisher(): EventPublisher;
-}
-
-abstract class CounterUseCase<Input, Output> extends UseCase<
-    Input,
-    Output,
-    CounterApplicationContext
-> {
-    protected repository!: CounterRepository;
-
-    public setApplicationContext(
-        applicationContext: CounterApplicationContext
-    ): void {
-        super.setApplicationContext(applicationContext);
-
-        this.repository = applicationContext.getCounterRepository();
-    }
-}
-
-export class CreateCounter extends CounterUseCase<CreateCounterRequest, void> {
-    @Atomic()
-    public async doHandle(request: CreateCounterRequest): Promise<void> {
-        const counter = Counter.create(new CounterId(request.id));
-
-        await this.repository.add(counter);
-        await this.eventPublisher.publish(...counter.getEventsOccurred());
-    }
-}
-
-export class IncreaseCounterRequest extends Message {
-    constructor(public readonly id: string) {
-        super({
-            id,
-        });
-    }
-}
-
-export class IncreaseCounter extends CounterUseCase<
-    IncreaseCounterRequest,
-    { value: number }
-> {
-    @Atomic()
-    public async doHandle(request: IncreaseCounterRequest): Promise<{
-        value: number;
-    }> {
-        const counter = await this.repository.get(new CounterId(request.id));
-
-        counter.increment();
-
-        await this.repository.update(counter);
-        await this.eventPublisher.publish(...counter.getEventsOccurred());
-
-        return {
-            value: counter.getValue(),
-        };
-    }
-
-    static errorToResponse(error: Error): ErrorResponse | undefined {
-        if (error instanceof ObjectNotFoundError) {
-            return validationErrorResponse({
-                id: "NOT_FOUND",
-            });
-        }
-    }
+export interface IncreaseCounterRequest {
+    id: string;
 }
 
 export class SqliteCounterRepository

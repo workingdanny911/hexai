@@ -12,8 +12,15 @@ export class AggregateRoot<T extends Id<string | number>>
         return this.id;
     }
 
-    protected raise(event: DomainEvent): void {
-        this.events.push(event);
+    protected raise<E extends DomainEvent>(
+        type: E["type"],
+        payload: E["payload"]
+    ): void {
+        this.events.push({
+            type,
+            payload,
+            occurredAt: new Date(),
+        });
     }
 
     public getEventsOccurred(): DomainEvent[] {

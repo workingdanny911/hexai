@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, test } from "vitest";
 import { Database, open } from "sqlite";
 
 import { DuplicateObjectError } from "@/domain";
-import { Counter, CounterId, CounterMemento } from "@/test";
-import { SqliteRepository } from "@/test/sqlite/sqlite-repository";
+import { SqliteRepository } from "./sqlite-repository";
+import { Counter, CounterId, CounterMemento } from "../counter-example";
 
 describe("SqliteRepository", () => {
     let db: Database;

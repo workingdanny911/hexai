@@ -8,17 +8,17 @@ import {
     vi,
 } from "vitest";
 
-import { SimpleMessageHandlerRegistry } from "@/test";
 import {
     Application,
     ApplicationExtension,
     NoHandlerFound,
 } from "./application";
-import { MessageHandler } from "./message-handler";
+import { Handler } from "./handler";
+import { SimpleHandlerRegistry } from "./fixtures";
 
 class ApplicationForTest extends Application {
     constructor(ctx?: any) {
-        super(ctx ?? {}, new SimpleMessageHandlerRegistry());
+        super(ctx ?? {}, new SimpleHandlerRegistry());
     }
 }
 
@@ -42,8 +42,8 @@ describe("Application", () => {
             shouldHaveBeenInjectedWith(this: any, ctx: any) {
                 expect(this.setApplicationContext).toHaveBeenCalledWith(ctx);
             },
-            shouldHaveHandled(this: any, message: any) {
-                expect(this.handle).toHaveBeenCalledWith(message);
+            shouldHaveHandled(this: any, request: any) {
+                expect(this.handle).toHaveBeenCalledWith(request);
             },
             shouldNotHaveHandledAny(this: any) {
                 expect(this.handle).not.toHaveBeenCalled();
@@ -51,26 +51,26 @@ describe("Application", () => {
         };
     }
 
-    it("delegates to message handler", async () => {
+    it("delegates to request handler", async () => {
         const handler = handlerMock();
-        const app = newApp().withMessageHandler("foo", handler);
-        const message = {
+        const app = newApp().withHandler("foo", handler);
+        const request = {
             type: "foo",
             payload: "bar",
         };
         await app.start();
 
-        await app.handle(message);
+        await app.handle(request);
 
-        handler.shouldHaveHandled(message);
+        handler.shouldHaveHandled(request);
     });
 
-    it("finds handler for message using message handler registry", async () => {
+    it("finds handler for request using request handler registry", async () => {
         const fooHandler = handlerMock();
         const barHandler = handlerMock();
         const app = newApp()
-            .withMessageHandler("foo", fooHandler)
-            .withMessageHandler("bar", barHandler);
+            .withHandler("foo", fooHandler)
+            .withHandler("bar", barHandler);
         await app.start();
 
         await app.handle({
@@ -92,10 +92,10 @@ describe("Application", () => {
         await expect(handle).rejects.toThrowError(NoHandlerFound);
     });
 
-    it("injects context to application context aware message handlers, upon start", async () => {
+    it("injects context to application context aware request handlers, upon start", async () => {
         const handler = handlerMock();
         const ctx = {};
-        const app = newApp(ctx).withMessageHandler("foo", handler);
+        const app = newApp(ctx).withHandler("foo", handler);
 
         await app.start();
 
@@ -132,8 +132,8 @@ describe("Application", () => {
         expect(app.isRunning()).toBe(false);
     });
 
-    it("rejects to handle messages when application is not running", async () => {
-        const app = newApp().withMessageHandler(
+    it("rejects to handle requests when application is not running", async () => {
+        const app = newApp().withHandler(
             "dummy",
             (msg: { type: "dummy" }) => {}
         );
@@ -211,27 +211,23 @@ describe("Application", () => {
     });
 
     describe("typing", () => {
-        test("should be able to infer result type by message type", async () => {
-            const fooHandler: MessageHandler<
-                { type: "foo" },
-                "fooReturn"
-            > = () => "fooReturn";
-            const barHandler: MessageHandler<
-                { type: "bar" },
-                "barReturn"
-            > = () => "barReturn";
+        test("should be able to infer result type by request type", async () => {
+            const fooHandler: Handler<{ type: "foo" }, "fooReturn"> = () =>
+                "fooReturn";
+            const barHandler: Handler<{ type: "bar" }, "barReturn"> = () =>
+                "barReturn";
 
             const app = newApp()
-                .withMessageHandler("foo", fooHandler)
-                .withMessageHandler("bar", barHandler);
+                .withHandler("foo", fooHandler)
+                .withHandler("bar", barHandler);
             await app.start();
 
-            const fooMessage = { type: "foo" } as const;
-            const fooResult = await app.handle(fooMessage);
+            const fooRequest = { type: "foo" } as const;
+            const fooResult = await app.handle(fooRequest);
             expectTypeOf(fooResult).toEqualTypeOf<"fooReturn">();
 
-            const barMessage = { type: "bar" } as const;
-            const barResult = await app.handle(barMessage);
+            const barRequest = { type: "bar" } as const;
+            const barResult = await app.handle(barRequest);
             expectTypeOf(barResult).toEqualTypeOf<"barReturn">();
         });
     });

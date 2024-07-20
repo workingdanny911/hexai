@@ -1,5 +1,6 @@
-import { Message } from "@/message";
+import { Event } from "@/event";
 
-export abstract class DomainEvent<
+export type DomainEvent<
+    T extends string = string,
     P extends Record<string, any> = Record<string, unknown>,
-> extends Message<P> {}
+> = Event<T, P>;

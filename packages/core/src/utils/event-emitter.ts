@@ -7,7 +7,7 @@ type EnsureKey<K> = K extends string | symbol ? K : never;
 // so I had to use any type for listener
 type AnyListener = (...args: any[]) => void;
 
-export class EventEmitter<
+export class TypedEventEmitter<
     EventMap extends Record<string | symbol, any[]> = Record<string, any>,
 > {
     private emitter = new UntypedEventEmitter();

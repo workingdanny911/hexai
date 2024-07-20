@@ -1,21 +1,21 @@
 import { F, L } from "ts-toolbelt";
 
 import { ApplicationContextInjector } from "@/injection";
-import { EventEmitter, Lifecycle } from "@/utils";
+import { TypedEventEmitter, Lifecycle } from "@/utils";
 import {
-    AnyMessageHandler,
-    FindResultByMessage,
-    MessageHandler,
-    MessageHandlerObject,
-} from "./message-handler";
-import { MessageHandlerRegistry } from "./message-handler-registry";
+    AnyHandler,
+    FindResponseByRequest,
+    Handler,
+    HandlerObject,
+} from "./handler";
+import { HandlerRegistry } from "./handler-registry";
 
 export type ContextOf<A> = A extends Application<infer Ctx> ? Ctx : never;
 
-type WithMessageHandler<
-    App,
-    Handler extends AnyMessageHandler,
-> = App extends Application<any, infer Handlers>
+type WithHandler<App, Handler extends AnyHandler> = App extends Application<
+    any,
+    infer Handlers
+>
     ? Application<ContextOf<App>, L.Append<Handlers, Handler>>
     : never;
 
@@ -61,11 +61,11 @@ class Companions {
 
 export class Application<
         Ctx extends object = any,
-        Handlers extends L.List<AnyMessageHandler> = [],
+        Handlers extends L.List<AnyHandler> = [],
         EventMap extends ApplicationEventMap = ApplicationEventMap,
     >
-    extends EventEmitter<EventMap>
-    implements Lifecycle, MessageHandlerObject
+    extends TypedEventEmitter<EventMap>
+    implements Lifecycle, HandlerObject
 {
     protected ctxInjector = new ApplicationContextInjector<Ctx>();
     protected companions = new Companions();
@@ -73,7 +73,7 @@ export class Application<
 
     constructor(
         public readonly context: Ctx,
-        protected handlers: MessageHandlerRegistry
+        protected handlers: HandlerRegistry
     ) {
         super();
 
@@ -120,42 +120,39 @@ export class Application<
         this._isRunning = false;
     }
 
-    public withMessageHandler<Handler extends AnyMessageHandler>(
+    public withHandler<Handler extends AnyHandler>(
         key: any,
         handler: Handler
-    ): WithMessageHandler<Application<Ctx, Handlers>, Handler> {
+    ): WithHandler<Application<Ctx, Handlers>, Handler> {
         this.ctxInjector.addCandidate(handler);
         this.handlers.register(key, handler);
 
         return this as any;
     }
 
-    async handle<M>(message: M): Promise<FindResultByMessage<Handlers, M>> {
+    async handle<M>(request: M): Promise<FindResponseByRequest<Handlers, M>> {
         if (!this.isRunning()) {
             throw new Error(
-                "Cannot handle messages when application is not running"
+                "Cannot handle requests when application is not running"
             );
         }
 
-        const handler = this.handlers.getByMessage(message);
+        const handler = this.handlers.getByRequest(request);
 
         if (!handler) {
             throw new NoHandlerFound(
-                `No handler found for message: ${JSON.stringify(message)}`
+                `No handler found for request: ${JSON.stringify(request)}`
             );
         }
 
-        return await this.doHandle(message, handler);
+        return await this.doHandle(request, handler);
     }
 
-    protected async doHandle(
-        message: any,
-        handler: MessageHandler
-    ): Promise<any> {
+    protected async doHandle(request: any, handler: Handler): Promise<any> {
         if (typeof handler === "function") {
-            return handler(message);
+            return handler(request);
         } else {
-            return handler.handle(message);
+            return handler.handle(request);
         }
     }
 
