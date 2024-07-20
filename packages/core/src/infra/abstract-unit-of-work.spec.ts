@@ -4,9 +4,6 @@ import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { SqliteUnitOfWork, useSqliteFileDatabase } from "@/test";
 import { EntryRepository } from "@/fixtures";
 import { Propagation, UnitOfWorkAbortedError } from "./unit-of-work";
-import { verbose } from "sqlite3";
-
-verbose();
 
 function ignoringErrors(fn: () => Promise<void>) {
     return async () => {
@@ -18,30 +15,25 @@ function ignoringErrors(fn: () => Promise<void>) {
     };
 }
 
-function dbHelper(runner: Database) {
+function repository(runner: Database) {
     return new EntryRepository(runner);
 }
 
 describe("AbstractUnitOfWork: driven by SqliteUnitOfWork", () => {
     const newConn = useSqliteFileDatabase("./abstract-unit-of-work.sqlite");
     const uow = new SqliteUnitOfWork(newConn, async (conn) => conn.close());
-    let db: EntryRepository;
-
-    beforeAll(async () => {
-        const adminConn = await newConn();
-
-        db = dbHelper(adminConn);
-        await db.createTable();
-    });
-
-    beforeEach(async () => {
-        await db.reset();
-    });
-
+    let connForSetup: Database;
     let onTheOutside: EntryRepository;
 
+    beforeAll(async () => {
+        connForSetup = await newConn();
+        await repository(connForSetup).createTable();
+    });
+
     beforeEach(async () => {
-        onTheOutside = dbHelper(await newConn());
+        await repository(connForSetup).reset();
+
+        onTheOutside = repository(await newConn());
     });
 
     function doInNestedUow<T>(
@@ -53,28 +45,28 @@ describe("AbstractUnitOfWork: driven by SqliteUnitOfWork", () => {
         });
     }
 
-    async function insertEntryInNestedUow(
+    async function addEntryInNestedUow(
         value: string,
         propagation: Propagation
     ) {
         return doInNestedUow(
-            (runner) => dbHelper(runner).insertEntry(value),
+            (runner) => repository(runner).add(value),
             propagation
         );
     }
 
     test("successful execution of wrapped function, results in committed state", async () => {
         const entryId = await uow.wrap(async (runner) => {
-            return await dbHelper(runner).insertEntry("test");
+            return await repository(runner).add("test");
         });
 
-        const entry = await onTheOutside.getEntryById(entryId);
+        const entry = await onTheOutside.getById(entryId);
         expect(entry.value).toBe("test");
     });
 
     test("transaction is rolled back when an error is thrown inside of fn", async () => {
         const failingExecute = uow.wrap(async (runner) => {
-            await dbHelper(runner).insertEntry("test");
+            await repository(runner).add("test");
 
             throw new Error("rollback");
         });
@@ -101,7 +93,7 @@ describe("AbstractUnitOfWork: driven by SqliteUnitOfWork", () => {
                     await failingNestedUow(Propagation.EXISTING);
 
                     const work = () =>
-                        insertEntryInNestedUow("test", Propagation.EXISTING);
+                        addEntryInNestedUow("test", Propagation.EXISTING);
                     await expect(work).rejects.toThrowError(
                         UnitOfWorkAbortedError
                     );
@@ -113,7 +105,7 @@ describe("AbstractUnitOfWork: driven by SqliteUnitOfWork", () => {
             await uow.wrap(async () => {
                 await failingNestedUow(Propagation.NESTED);
 
-                const entryId = await insertEntryInNestedUow(
+                const entryId = await addEntryInNestedUow(
                     "test",
                     Propagation.NESTED
                 );
@@ -123,11 +115,11 @@ describe("AbstractUnitOfWork: driven by SqliteUnitOfWork", () => {
 
         test("using propagation NESTED: only the changes in the error-thrown uow are rolled back", async () => {
             await uow.wrap(async () => {
-                await insertEntryInNestedUow("1", Propagation.NESTED);
+                await addEntryInNestedUow("1", Propagation.NESTED);
 
                 await failingNestedUow(Propagation.NESTED);
 
-                await insertEntryInNestedUow("2", Propagation.NESTED);
+                await addEntryInNestedUow("2", Propagation.NESTED);
             });
 
             const firstAndThirdAreCommitted =

@@ -1,6 +1,5 @@
 import { unlink } from "node:fs/promises";
 
-import { beforeAll } from "vitest";
 import * as sqlite from "sqlite";
 
 import { getSqliteConnection } from "./conn";
@@ -28,13 +27,15 @@ async function deleteFile(path: string) {
 
 function useTempFile(filename: string): Promise<void> {
     return new Promise((resolve) => {
-        beforeAll(async () => {
-            await deleteFile(filename);
-            resolve();
-
-            return async () => {
+        import("vitest").then(({ beforeAll }) => {
+            beforeAll(async () => {
                 await deleteFile(filename);
-            };
+                resolve();
+
+                return async () => {
+                    await deleteFile(filename);
+                };
+            });
         });
     });
 }
