@@ -1,4 +1,4 @@
-import * as pg from "pg";
+import { Client } from "pg";
 import {
     AbstractTransaction,
     AbstractUnitOfWork,
@@ -14,10 +14,7 @@ import {
 } from "./types";
 import { ensureConnection } from "./helpers";
 
-export class PostgresUnitOfWork extends AbstractUnitOfWork<
-    pg.Client,
-    PostgresTransactionOptions
-> {
+export class PostgresUnitOfWork extends AbstractUnitOfWork<PostgresTransaction> {
     constructor(
         private clientFactory: ClientFactory,
         private clientCleanUp?: ClientCleanUp
@@ -25,7 +22,26 @@ export class PostgresUnitOfWork extends AbstractUnitOfWork<
         super();
     }
 
-    protected override resolveOptions(
+    protected override async newTransaction(): Promise<PostgresTransaction> {
+        return new PostgresTransaction(this.clientFactory, this.clientCleanUp);
+    }
+}
+
+class PostgresTransaction extends AbstractTransaction<
+    Client,
+    PostgresTransactionOptions
+> {
+    private originalClient!: Client;
+    private patchedClient!: Client;
+
+    constructor(
+        private clientFactory: ClientFactory,
+        private clientCleanUp?: ClientCleanUp
+    ) {
+        super();
+    }
+
+    protected resolveOptions(
         options: Partial<PostgresTransactionOptions>
     ): PostgresTransactionOptions {
         return {
@@ -34,37 +50,26 @@ export class PostgresUnitOfWork extends AbstractUnitOfWork<
         };
     }
 
-    protected override newTransaction(): AbstractTransaction<
-        pg.Client,
-        PostgresTransactionOptions
-    > {
-        return new PostgresTransaction(this.clientFactory, this.clientCleanUp);
-    }
-}
+    protected async executeBegin(): Promise<void> {
+        const client = this.getClient();
+        await client.query("BEGIN");
 
-class PostgresTransaction extends AbstractTransaction<
-    pg.Client,
-    PostgresTransactionOptions
-> {
-    private originalClient!: pg.Client;
-    private patchedClient!: pg.Client;
-
-    constructor(
-        private clientFactory: ClientFactory,
-        private clientCleanUp?: ClientCleanUp
-    ) {
-        super();
+        if (this.getIsolationLevel() !== IsolationLevel.READ_COMMITTED) {
+            await client.query(
+                `SET TRANSACTION ISOLATION LEVEL ${this.getIsolationLevel()}`
+            );
+        }
     }
 
-    public override getClient(): pg.Client {
+    public override getClient(): Client {
         return this.patchedClient;
     }
 
     protected override async initialize(): Promise<void> {
         const client = await this.clientFactory();
 
-        if (!(client instanceof pg.Client)) {
-            throw new Error("Client factory must return a pg.Client");
+        if (!(client instanceof Client)) {
+            throw new Error("Client factory must return a pg.Client instance");
         }
 
         await ensureConnection(client);
@@ -72,12 +77,12 @@ class PostgresTransaction extends AbstractTransaction<
         this.setClient(client);
     }
 
-    private setClient(client: pg.Client): void {
+    private setClient(client: Client): void {
         this.originalClient = client;
         this.patchedClient = this.patchClient(client);
     }
 
-    private patchClient(client: pg.Client): pg.Client {
+    private patchClient(client: Client): Client {
         const isAbort = () => this.isAbort();
         const isExited = () => this.isExited();
 
@@ -98,22 +103,11 @@ class PostgresTransaction extends AbstractTransaction<
         });
     }
 
-    protected override async begin(): Promise<void> {
-        const client = this.getClient();
-        await client.query("BEGIN");
-
-        if (this.getIsolationLevel() !== IsolationLevel.READ_COMMITTED) {
-            await client.query(
-                `SET TRANSACTION ISOLATION LEVEL ${this.getIsolationLevel()}`
-            );
-        }
-    }
-
-    protected override async enterSavepoint(): Promise<void> {
+    protected override async executeSavepoint(): Promise<void> {
         await this.getClient().query(`SAVEPOINT sp_${this.currentLevel}`);
     }
 
-    protected override async rollbackToSavepoint(): Promise<void> {
+    protected override async executeRollbackToSavepoint(): Promise<void> {
         await this.getClient().query(
             `ROLLBACK TO SAVEPOINT sp_${this.currentLevel}`
         );
@@ -123,11 +117,11 @@ class PostgresTransaction extends AbstractTransaction<
         await this.clientCleanUp?.(this.originalClient);
     }
 
-    protected override async queryRollback(): Promise<void> {
+    protected override async executeRollback(): Promise<void> {
         await this.originalClient.query("ROLLBACK");
     }
 
-    protected override async queryCommit(): Promise<void> {
+    protected override async executeCommit(): Promise<void> {
         await this.originalClient.query("COMMIT");
     }
 

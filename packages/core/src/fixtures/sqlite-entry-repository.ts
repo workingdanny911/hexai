@@ -1,5 +1,10 @@
 import { Database } from "sqlite";
 
+interface Entry {
+    id: number;
+    value: string;
+}
+
 export class EntryRepository {
     private static tableName = "entries";
     constructor(private client: Database) {}
@@ -16,7 +21,7 @@ export class EntryRepository {
         );
     }
 
-    async insertEntry(value: string): Promise<number> {
+    async add(value: Entry["value"]): Promise<Entry["id"]> {
         const { lastID } = await this.client.run(
             `INSERT INTO ${EntryRepository.tableName} (value) VALUES (?)`,
             [value]
@@ -25,7 +30,7 @@ export class EntryRepository {
         return lastID!;
     }
 
-    async getEntryById(id: number): Promise<{ id: number; value: string }> {
+    async getById(id: Entry["id"]): Promise<Entry> {
         const result = await this.client.get(
             `SELECT * FROM ${EntryRepository.tableName} WHERE id = ?`,
             [id]
@@ -38,9 +43,7 @@ export class EntryRepository {
         return result;
     }
 
-    async getEntryByValue(
-        value: string
-    ): Promise<{ id: number; value: string }> {
+    async getByValue(value: string): Promise<Entry> {
         const result = await this.client.get(
             `SELECT * FROM ${EntryRepository.tableName} WHERE value = ?`,
             [value]
