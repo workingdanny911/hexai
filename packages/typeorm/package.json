@@ -1,0 +1,32 @@
+{
+    "name": "@hexai/typeorm",
+    "version": "0.1.0",
+    "description": "typeorm support for hexai",
+    "author": "Sangwoo Hyun <workingdanny@naver.com>",
+    "license": "ISC",
+    "files": [
+        "dist",
+        "package.json"
+    ],
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "require": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "test": "vitest",
+        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+    },
+    "dependencies": {
+        "@hexai/core": "workspace:^0.2.0",
+        "reflect-metadata": "^0.2.2",
+        "typeorm": "^0.3.20"
+    },
+    "devDependencies": {
+        "unplugin-swc": "^1.5.1",
+        "vitest": "^2.0.4"
+    }
+}
