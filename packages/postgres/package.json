@@ -1,0 +1,59 @@
+{
+    "name": "@hexaijs/postgres",
+    "publishConfig": {
+        "access": "public"
+    },
+    "version": "0.1.0",
+    "description": "PostgreSQL support for hexai",
+    "license": "MIT",
+    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+    "contributors": [
+        "Seungcheol Baek <victoryiron.baek@gmail.com>",
+        "Donghyun Lee <edonghyun@naver.com>"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/workingdanny911/hexai.git",
+        "directory": "packages/postgres"
+    },
+    "homepage": "https://github.com/workingdanny911/hexai#readme",
+    "bugs": {
+        "url": "https://github.com/workingdanny911/hexai/issues"
+    },
+    "keywords": ["hexai", "hexagonal", "clean-architecture", "postgres", "postgresql", "database", "typescript"],
+    "files": [
+        "dist",
+        "migrations",
+        "LICENSE"
+    ],
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.js"
+        },
+        "./test": {
+            "types": "./dist/test.d.ts",
+            "import": "./dist/test.js",
+            "require": "./dist/test.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "test": "vitest run",
+        "build": "rm -rf dist && tsc -p ./tsconfig.build.json && tsc-alias"
+    },
+    "dependencies": {
+        "lodash": "^4.17.21",
+        "node-pg-migrate": "^7.9.0"
+    },
+    "peerDependencies": {
+        "@hexaijs/core": "workspace:^",
+        "@hexaijs/utils": "workspace:^",
+        "pg": "^8.0.0"
+    },
+    "devDependencies": {
+        "@types/pg": "^8.11.8",
+        "pg": "^8.12.0"
+    }
+}

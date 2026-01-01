@@ -1,0 +1,41 @@
+{
+    "name": "@hexaijs/utils",
+    "publishConfig": {
+        "access": "public"
+    },
+    "version": "0.1.0",
+    "description": "A collection of utility functions and value objects for hexai projects",
+    "license": "MIT",
+    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+    "contributors": [
+        "Seungcheol Baek <victoryiron.baek@gmail.com>",
+        "Donghyun Lee <edonghyun@naver.com>"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/workingdanny911/hexai.git",
+        "directory": "packages/utils"
+    },
+    "homepage": "https://github.com/workingdanny911/hexai#readme",
+    "bugs": {
+        "url": "https://github.com/workingdanny911/hexai/issues"
+    },
+    "keywords": ["hexai", "hexagonal", "clean-architecture", "utilities", "typescript"],
+    "files": [
+        "dist",
+        "LICENSE"
+    ],
+    "exports": {
+        "./config": {
+            "types": "./dist/config/index.d.ts",
+            "import": "./dist/config/index.js",
+            "require": "./dist/config/index.js"
+        }
+    },
+    "scripts": {
+        "test": "vitest run",
+        "build": "tsc && tsc-alias"
+    },
+    "dependencies": {},
+    "devDependencies": {}
+}

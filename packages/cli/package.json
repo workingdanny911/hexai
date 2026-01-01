@@ -1,0 +1,57 @@
+{
+    "name": "@hexaijs/cli",
+    "publishConfig": {
+        "access": "public"
+    },
+    "version": "0.1.0",
+    "description": "Unified CLI tool for hexai plugins",
+    "license": "MIT",
+    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+    "contributors": [
+        "Seungcheol Baek <victoryiron.baek@gmail.com>",
+        "Donghyun Lee <edonghyun@naver.com>"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/workingdanny911/hexai.git",
+        "directory": "packages/cli"
+    },
+    "homepage": "https://github.com/workingdanny911/hexai#readme",
+    "bugs": {
+        "url": "https://github.com/workingdanny911/hexai/issues"
+    },
+    "keywords": ["hexai", "hexagonal", "clean-architecture", "cli", "typescript"],
+    "files": [
+        "dist",
+        "LICENSE"
+    ],
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "bin": {
+        "hexai": "dist/index.js"
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.js"
+        }
+    },
+    "scripts": {
+        "clean": "rm -rf dist",
+        "build": "pnpm clean && tsc -p ./tsconfig.build.json",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "commander": "^12.0.0"
+    },
+    "peerDependencies": {
+        "typescript": "^5.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "typescript": "^5.3.0",
+        "vitest": "^1.3.0"
+    }
+}

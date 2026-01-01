@@ -1,0 +1,60 @@
+{
+    "name": "@hexaijs/plugin-application-builder",
+    "publishConfig": {
+        "access": "public"
+    },
+    "version": "0.1.0",
+    "description": "Build plugin for generating ApplicationBuilder code from decorated handlers",
+    "license": "MIT",
+    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+    "contributors": [
+        "Seungcheol Baek <victoryiron.baek@gmail.com>",
+        "Donghyun Lee <edonghyun@naver.com>"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/workingdanny911/hexai.git",
+        "directory": "packages/plugin-application-builder"
+    },
+    "homepage": "https://github.com/workingdanny911/hexai#readme",
+    "bugs": {
+        "url": "https://github.com/workingdanny911/hexai/issues"
+    },
+    "keywords": ["hexai", "hexagonal", "clean-architecture", "ddd", "cqrs", "application-builder", "code-generation", "typescript"],
+    "files": [
+        "dist",
+        "LICENSE"
+    ],
+    "bin": {
+        "generate-app-builder": "./dist/cli.js"
+    },
+    "scripts": {
+        "test": "npm run build && vitest",
+        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.js"
+        },
+        "./decorators": {
+            "types": "./dist/decorators/index.d.ts",
+            "import": "./dist/decorators/index.js",
+            "require": "./dist/decorators/index.js"
+        }
+    },
+    "dependencies": {
+        "glob": "^10.0.0"
+    },
+    "peerDependencies": {
+        "@hexaijs/core": "workspace:^",
+        "@hexaijs/application": "workspace:^",
+        "@hexaijs/cli": "workspace:^",
+        "typescript": "^5.0.0"
+    },
+    "devDependencies": {
+        "@hexaijs/cli": "workspace:^",
+        "@types/node": "^20.0.0"
+    }
+}

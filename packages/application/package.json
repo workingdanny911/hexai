@@ -1,0 +1,56 @@
+{
+    "name": "@hexaijs/application",
+    "publishConfig": {
+        "access": "public"
+    },
+    "version": "0.1.0",
+    "description": "CQRS Application Framework for Hexagonal Architecture",
+    "license": "MIT",
+    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+    "contributors": [
+        "Seungcheol Baek <victoryiron.baek@gmail.com>",
+        "Donghyun Lee <edonghyun@naver.com>"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/workingdanny911/hexai.git",
+        "directory": "packages/application"
+    },
+    "homepage": "https://github.com/workingdanny911/hexai#readme",
+    "bugs": {
+        "url": "https://github.com/workingdanny911/hexai/issues"
+    },
+    "keywords": ["hexai", "hexagonal", "clean-architecture", "ddd", "cqrs", "typescript", "application"],
+    "files": [
+        "dist",
+        "LICENSE"
+    ],
+    "scripts": {
+        "test": "vitest run",
+        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.js"
+        },
+        "./request": {
+            "types": "./dist/request.d.ts",
+            "import": "./dist/request.js",
+            "require": "./dist/request.js"
+        }
+    },
+    "dependencies": {
+        "lodash": "^4.17.21",
+        "pino": "^9.6.0"
+    },
+    "peerDependencies": {
+        "@hexaijs/core": "workspace:^"
+    },
+    "devDependencies": {
+        "@types/lodash": "^4.17.20",
+        "@types/node": "^20.0.0",
+        "pino-pretty": "^13.0.0"
+    }
+}

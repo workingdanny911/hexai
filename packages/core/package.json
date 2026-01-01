@@ -1,0 +1,52 @@
+{
+    "name": "@hexaijs/core",
+    "publishConfig": {
+        "access": "public"
+    },
+    "version": "0.2.0",
+    "description": "Core utilities/types/base classes for hexai projects",
+    "license": "MIT",
+    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+    "contributors": [
+        "Seungcheol Baek <victoryiron.baek@gmail.com>",
+        "Donghyun Lee <edonghyun@naver.com>"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/workingdanny911/hexai.git",
+        "directory": "packages/core"
+    },
+    "homepage": "https://github.com/workingdanny911/hexai#readme",
+    "bugs": {
+        "url": "https://github.com/workingdanny911/hexai/issues"
+    },
+    "keywords": ["hexai", "hexagonal", "clean-architecture", "ddd", "cqrs", "typescript", "event-sourcing"],
+    "files": [
+        "dist",
+        "LICENSE"
+    ],
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.js"
+        },
+        "./test": {
+            "types": "./dist/test/index.d.ts",
+            "import": "./dist/test/index.js",
+            "require": "./dist/test/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "test": "vitest run",
+        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+    },
+    "dependencies": {
+        "lodash": "^4.17.21",
+        "uuid": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/uuid": "^9.0.8"
+    }
+}

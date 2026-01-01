@@ -1,0 +1,31 @@
+{
+    "name": "hexai-root",
+    "version": "0.1.0",
+    "description": "Hexai is a lightweight hexagonal architecture library.",
+    "main": "index.js",
+    "scripts": {
+        "test": "pnpm -r test",
+        "clean": "find ./packages -name dist -type d -exec rm -rf {} +",
+        "build": "pnpm clean && pnpm --filter @hexaijs/core --filter @hexaijs/utils build && pnpm -r build"
+    },
+    "author": "",
+    "license": "ISC",
+    "private": true,
+    "workspaces": [
+        "packages/*"
+    ],
+    "devDependencies": {
+        "@types/lodash": "^4.17.7",
+        "@types/node": "^20.16.5",
+        "@typescript-eslint/eslint-plugin": "^6.21.0",
+        "@typescript-eslint/parser": "^6.21.0",
+        "dotenv": "^16.4.5",
+        "eslint": "^8.57.0",
+        "prettier": "^3.3.3",
+        "ts-toolbelt": "^9.6.0",
+        "tsc-alias": "^1.8.10",
+        "typescript": "^5.5.4",
+        "vite-tsconfig-paths": "^4.3.2",
+        "vitest": "3.2.4"
+    }
+}

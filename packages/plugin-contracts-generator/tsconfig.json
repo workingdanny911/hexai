@@ -1,0 +1,15 @@
+{
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "rootDir": "./",
+        "outDir": "./dist",
+        "experimentalDecorators": true,
+        "types": ["reflect-metadata"],
+        "paths": {
+            "@/*": ["./src/*"],
+            "@e2e/*": ["./e2e/*"]
+        }
+    },
+    "include": ["src", "e2e", "test", "output"],
+    "exclude": ["node_modules", "dist"]
+}
