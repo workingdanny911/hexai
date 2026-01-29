@@ -274,26 +274,92 @@ await tableManager.dropAllTables();
 await ensureConnection(client);  // Safe to call multiple times
 ```
 
-### Test Fixtures
+### PostgresUnitOfWorkForTesting
 
-The package exports test utilities from `@hexaijs/postgres/test`:
+A test-specific `UnitOfWork` implementation that runs inside an external transaction. This allows tests to rollback all changes after each test, keeping the database clean without truncating tables.
 
 ```typescript
-import { useDatabase, useClient, useTableManager } from "@hexaijs/postgres/test";
+import { PostgresUnitOfWorkForTesting } from "@hexaijs/postgres/test";
+import { Client } from "pg";
 
-describe("OrderRepository", () => {
-    // Creates database before tests, drops after
-    const dbUrl = useDatabase("order_test_db");
+describe("OrderService", () => {
+    let client: Client;
+    let uow: PostgresUnitOfWorkForTesting;
 
-    // Provides connected client
-    const client = useClient("order_test_db");
+    beforeEach(async () => {
+        client = new Client({ connectionString: "postgres://..." });
+        await client.connect();
+        await client.query("BEGIN");  // Start external transaction
+        uow = new PostgresUnitOfWorkForTesting(client);
+    });
 
-    it("should persist orders", async () => {
-        // Use client for assertions
+    afterEach(async () => {
+        await client.query("ROLLBACK");  // Rollback all changes
+        await client.end();
+    });
+
+    it("should create order", async () => {
+        await uow.wrap(async (c) => {
+            await c.query("INSERT INTO orders (id) VALUES ($1)", ["order-1"]);
+        });
+
+        // Verify within the same transaction
         const result = await client.query("SELECT * FROM orders");
         expect(result.rows).toHaveLength(1);
     });
+
+    // After this test, ROLLBACK cleans up - no data persists
 });
+```
+
+**How it works:**
+
+| Operation | Production (`PostgresUnitOfWork`) | Testing (`PostgresUnitOfWorkForTesting`) |
+|-----------|-----------------------------------|------------------------------------------|
+| Start | `BEGIN` | `SAVEPOINT` |
+| Commit | `COMMIT` | `RELEASE SAVEPOINT` |
+| Rollback | `ROLLBACK` | `ROLLBACK TO SAVEPOINT` |
+
+**Key behaviors:**
+
+- **abortError propagation**: When a nested `EXISTING` operation throws (even if caught), the entire transaction is marked as aborted and will rollback - matching production behavior.
+- **NESTED savepoints**: `Propagation.NESTED` creates independent savepoints that can rollback without affecting the parent.
+- **Propagation.NEW**: Logs a warning and creates a new savepoint instead (true separate transactions are not possible within the external transaction).
+- **Single client**: Does not support concurrent `Promise.all` wrap calls (PostgreSQL limitation with single connection).
+
+```typescript
+// abortError behavior - matches production
+await uow.wrap(async (c) => {
+    await insertOrder(c, 1);
+
+    try {
+        await uow.wrap(async () => {
+            throw new Error("fails");
+        });
+    } catch {
+        // Caught, but transaction is already marked as aborted
+    }
+
+    await insertOrder(c, 2);  // Executes, but will be rolled back
+});
+// Result: Both orders rolled back (abortError propagation)
+
+// NESTED savepoint - independent rollback
+await uow.wrap(async (c) => {
+    await insertOrder(c, 1);
+
+    try {
+        await uow.wrap(async (sp) => {
+            await insertOrder(sp, 2);
+            throw new Error("fails");
+        }, { propagation: Propagation.NESTED });
+    } catch {
+        // Only savepoint rolled back
+    }
+
+    await insertOrder(c, 3);
+});
+// Result: Orders 1 and 3 committed, order 2 rolled back
 ```
 
 ## API Highlights
@@ -301,6 +367,7 @@ describe("OrderRepository", () => {
 | Export | Description |
 |--------|-------------|
 | `PostgresUnitOfWork` | Transaction management with `AsyncLocalStorage` context |
+| `PostgresUnitOfWorkForTesting` | Test-specific UnitOfWork that runs inside external transaction |
 | `PostgresEventStore` | Event store implementation with batch insert support |
 | `PostgresConfig` | Immutable configuration with builder pattern |
 | `postgresConfig` | Config spec for `defineConfig` integration |
