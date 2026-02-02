@@ -156,28 +156,22 @@ export class FileCopier {
             }
 
             const rawContent = await this.readFileContent(node.absolutePath);
-            const extractedContent = this.extractSymbolsFromEntry(
-                rawContent,
-                node.absolutePath,
-                messageTypes,
-                decoratorNames
-            );
+            const { content: extractedContent, usedModuleSpecifiers } =
+                this.extractSymbolsFromEntry(
+                    rawContent,
+                    node.absolutePath,
+                    messageTypes,
+                    decoratorNames
+                );
             entryContents.set(node.absolutePath, extractedContent);
 
-            const { content: contentWithRelativePaths } =
-                this.rewriteInternalPathAliases(
-                    extractedContent,
-                    node,
-                    fileGraph,
-                    sourceRoot
+            for (const specifier of usedModuleSpecifiers) {
+                const importInfo = node.imports.find(
+                    (i) => i.moduleSpecifier === specifier
                 );
-
-            const localImports = this.extractLocalImportPaths(
-                contentWithRelativePaths,
-                node.absolutePath
-            );
-            for (const importPath of localImports) {
-                usedLocalImports.add(importPath);
+                if (importInfo?.resolvedPath && !importInfo.isExternal) {
+                    usedLocalImports.add(importInfo.resolvedPath);
+                }
             }
         }
 
@@ -279,40 +273,7 @@ export class FileCopier {
         return { content: transformedContent, rewrites };
     }
 
-    private extractLocalImportPaths(
-        content: string,
-        sourceFilePath: string
-    ): string[] {
-        const sourceFile = ts.createSourceFile(
-            sourceFilePath,
-            content,
-            ts.ScriptTarget.Latest,
-            true,
-            ts.ScriptKind.TS
-        );
-
-        const localPaths: string[] = [];
-        const sourceDir = path.dirname(sourceFilePath);
-
-        const visit = (node: ts.Node): void => {
-            if (ts.isImportDeclaration(node)) {
-                const moduleSpecifier = (
-                    node.moduleSpecifier as ts.StringLiteral
-                ).text;
-                if (moduleSpecifier.startsWith(".")) {
-                    let resolvedPath = path.resolve(sourceDir, moduleSpecifier);
-                    if (!resolvedPath.endsWith(TS_EXTENSION)) {
-                        resolvedPath += TS_EXTENSION;
-                    }
-                    localPaths.push(resolvedPath);
-                }
-            }
-            ts.forEachChild(node, visit);
-        };
-        visit(sourceFile);
-
-        return localPaths;
-    }
+    
 
     generateBarrelExport(copiedFiles: string[], outputDir: string): string {
         const lines: string[] = [];
@@ -971,7 +932,7 @@ export class FileCopier {
         filePath: string,
         messageTypes: readonly MessageType[],
         decoratorNames?: DecoratorNames
-    ): string {
+    ): { content: string; usedModuleSpecifiers: Set<string> } {
         const sourceFile = ts.createSourceFile(
             filePath,
             content,
@@ -993,7 +954,7 @@ export class FileCopier {
             this.findTargetClasses(context);
 
         if (targetClasses.length === 0) {
-            return content;
+            return { content, usedModuleSpecifiers: new Set() };
         }
 
         const relatedTypeNames = this.computeRelatedTypeNames(targetClassNames);
@@ -1263,7 +1224,7 @@ export class FileCopier {
     private generateExtractedOutput(
         context: SymbolExtractionContext,
         symbols: ExtractedSymbols
-    ): string {
+    ): { content: string; usedModuleSpecifiers: Set<string> } {
         const output: string[] = [];
 
         const importMap = this.buildImportMap(context.sourceFile);
@@ -1277,7 +1238,12 @@ export class FileCopier {
         this.appendLocalTypeDeclarations(output, context, symbols);
         this.appendTargetClasses(output, context, symbols.targetClasses);
 
-        return output.join("\n");
+        const usedModuleSpecifiers = new Set(filteredImports.keys());
+
+        return {
+            content: output.join("\n"),
+            usedModuleSpecifiers,
+        };
     }
 
     private buildImportMap(sourceFile: ts.SourceFile): Map<string, ImportInfo> {
