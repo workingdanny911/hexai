@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "PostgreSQL support for hexai",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -20,7 +20,15 @@
     "bugs": {
         "url": "https://github.com/workingdanny911/hexai/issues"
     },
-    "keywords": ["hexai", "hexagonal", "clean-architecture", "postgres", "postgresql", "database", "typescript"],
+    "keywords": [
+        "hexai",
+        "hexagonal",
+        "clean-architecture",
+        "postgres",
+        "postgresql",
+        "database",
+        "typescript"
+    ],
     "files": [
         "dist",
         "migrations",
@@ -49,7 +57,7 @@
     },
     "peerDependencies": {
         "@hexaijs/core": "workspace:^",
-        "@hexaijs/utils": "workspace:^",
+        "ezcfg": "^0.1.0",
         "pg": "^8.0.0"
     },
     "devDependencies": {

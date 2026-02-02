@@ -4,7 +4,7 @@ import {
     env,
     envNumber,
     envBoolean,
-} from "@hexaijs/utils/config";
+} from "ezcfg";
 import { postgresConfig } from "./postgres-config-spec";
 import { PostgresConfig } from "./postgres-config";
 

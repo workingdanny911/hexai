@@ -1,4 +1,4 @@
-import type { DatabaseConfig } from "@hexaijs/utils/config";
+import type { DatabaseConfig } from "ezcfg";
 
 export interface PoolOptions {
     size?: number;

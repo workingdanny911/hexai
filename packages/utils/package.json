@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "A collection of utility functions and value objects for hexai projects",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -20,7 +20,13 @@
     "bugs": {
         "url": "https://github.com/workingdanny911/hexai/issues"
     },
-    "keywords": ["hexai", "hexagonal", "clean-architecture", "utilities", "typescript"],
+    "keywords": [
+        "hexai",
+        "hexagonal",
+        "clean-architecture",
+        "utilities",
+        "typescript"
+    ],
     "files": [
         "dist",
         "LICENSE"
@@ -36,6 +42,8 @@
         "test": "vitest run",
         "build": "tsc && tsc-alias"
     },
-    "dependencies": {},
+    "dependencies": {
+        "ezcfg": "^0.1.0"
+    },
     "devDependencies": {}
 }

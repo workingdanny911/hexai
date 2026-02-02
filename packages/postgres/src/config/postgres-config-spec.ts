@@ -1,4 +1,4 @@
-import type { ConfigSpec } from "@hexaijs/utils/config";
+import type { ConfigSpec } from "ezcfg";
 import { PostgresConfig, type FromEnvOptions } from "./postgres-config";
 
 export class PostgresConfigSpec implements ConfigSpec<PostgresConfig> {
