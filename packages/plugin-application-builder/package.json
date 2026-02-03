@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.1.0",
+    "version": "0.1.2",
     "description": "Build plugin for generating ApplicationBuilder code from decorated handlers",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -20,7 +20,16 @@
     "bugs": {
         "url": "https://github.com/workingdanny911/hexai/issues"
     },
-    "keywords": ["hexai", "hexagonal", "clean-architecture", "ddd", "cqrs", "application-builder", "code-generation", "typescript"],
+    "keywords": [
+        "hexai",
+        "hexagonal",
+        "clean-architecture",
+        "ddd",
+        "cqrs",
+        "application-builder",
+        "code-generation",
+        "typescript"
+    ],
     "files": [
         "dist",
         "LICENSE"
@@ -48,9 +57,9 @@
         "glob": "^10.0.0"
     },
     "peerDependencies": {
-        "@hexaijs/core": "workspace:^",
-        "@hexaijs/application": "workspace:^",
-        "@hexaijs/cli": "workspace:^",
+        "@hexaijs/core": "^0.3.0",
+        "@hexaijs/application": "^0.2.0",
+        "@hexaijs/cli": "^0.1.0",
         "typescript": "^5.0.0"
     },
     "devDependencies": {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { Command } from "./command";
 
 class TestCmd extends Command<{ value: string }> {
@@ -64,6 +64,77 @@ describe("Command", () => {
 
             expect(cmd.getSecurityContext()).toEqual(securityContext);
             expect(cmd.getHeader("correlationId")).toBe("corr-789");
+        });
+
+        it("should return typed security context with generic", () => {
+            interface MySecurityContext {
+                userId: string;
+                roles: string[];
+            }
+
+            const sc: MySecurityContext = { userId: "u1", roles: ["admin"] };
+            const cmd = new TestCmd("test").withSecurityContext(sc);
+
+            const retrieved = cmd.getSecurityContext<MySecurityContext>();
+
+            expect(retrieved.userId).toBe("u1");
+            expect(retrieved.roles).toEqual(["admin"]);
+            expectTypeOf(retrieved).toEqualTypeOf<MySecurityContext>();
+        });
+    });
+
+    describe("ResultType indexed access", () => {
+        it("extracts output type from Command", () => {
+            class CreateUser extends Command<{ name: string }, { id: string }> {
+                constructor(name: string) {
+                    super({ name });
+                }
+            }
+
+            type Output = CreateUser['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<{ id: string }>();
+        });
+
+        it("returns void for void output Command", () => {
+            class DeleteUser extends Command<{ id: string }, void> {
+                constructor(id: string) {
+                    super({ id });
+                }
+            }
+
+            type Output = DeleteUser['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<void>();
+        });
+
+        it("returns unknown for Command without explicit output", () => {
+            class GenericCommand extends Command<{ data: string }> {
+                constructor(data: string) {
+                    super({ data });
+                }
+            }
+
+            type Output = GenericCommand['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<unknown>();
+        });
+
+        it("works with complex output types", () => {
+            interface UserData {
+                id: string;
+                profile: { name: string; age: number };
+            }
+
+            class GetUserData extends Command<{ userId: string }, UserData> {
+                constructor(userId: string) {
+                    super({ userId });
+                }
+            }
+
+            type Output = GetUserData['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<UserData>();
         });
     });
 });

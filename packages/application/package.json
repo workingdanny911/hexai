@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "CQRS Application Framework for Hexagonal Architecture",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -46,9 +46,10 @@
         "pino": "^9.6.0"
     },
     "peerDependencies": {
-        "@hexaijs/core": "workspace:^"
+        "@hexaijs/core": "^0.3.0"
     },
     "devDependencies": {
+        "@hexaijs/core": "workspace:^",
         "@types/lodash": "^4.17.20",
         "@types/node": "^20.0.0",
         "pino-pretty": "^13.0.0"

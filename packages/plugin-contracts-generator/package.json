@@ -59,7 +59,7 @@
         "reflect-metadata": "^0.2.2"
     },
     "peerDependencies": {
-        "@hexaijs/cli": "workspace:^",
+        "@hexaijs/cli": "^0.1.0",
         "typescript": "^5.0.0"
     },
     "devDependencies": {

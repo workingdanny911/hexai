@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { Query } from "./query";
 
 class TestQuery extends Query<{ value: string }> {
@@ -64,6 +64,86 @@ describe("Query", () => {
 
             expect(query.getSecurityContext()).toEqual(securityContext);
             expect(query.getHeader("correlationId")).toBe("corr-789");
+        });
+
+        it("should return typed security context with generic", () => {
+            interface MySecurityContext {
+                userId: string;
+                permissions: string[];
+            }
+
+            const sc: MySecurityContext = {
+                userId: "u1",
+                permissions: ["read", "write"],
+            };
+            const query = new TestQuery("test").withSecurityContext(sc);
+
+            const retrieved = query.getSecurityContext<MySecurityContext>();
+
+            expect(retrieved.userId).toBe("u1");
+            expect(retrieved.permissions).toEqual(["read", "write"]);
+            expectTypeOf(retrieved).toEqualTypeOf<MySecurityContext>();
+        });
+    });
+
+    describe("ResultType indexed access", () => {
+        it("extracts output type from Query", () => {
+            class GetUsers extends Query<{ filter: string }, { users: string[] }> {
+                constructor(filter: string) {
+                    super({ filter });
+                }
+            }
+
+            type Output = GetUsers['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<{ users: string[] }>();
+        });
+
+        it("returns void for void output Query", () => {
+            class CheckHealth extends Query<null, void> {
+                constructor() {
+                    super(null);
+                }
+            }
+
+            type Output = CheckHealth['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<void>();
+        });
+
+        it("returns unknown for Query without explicit output", () => {
+            class GenericQuery extends Query<{ id: string }> {
+                constructor(id: string) {
+                    super({ id });
+                }
+            }
+
+            type Output = GenericQuery['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<unknown>();
+        });
+
+        it("works with complex output types", () => {
+            interface PaginatedResult<T> {
+                items: T[];
+                total: number;
+                page: number;
+            }
+
+            class ListProducts extends Query<
+                { page: number },
+                PaginatedResult<{ id: string; name: string }>
+            > {
+                constructor(page: number) {
+                    super({ page });
+                }
+            }
+
+            type Output = ListProducts['ResultType'];
+
+            expectTypeOf<Output>().toEqualTypeOf<
+                PaginatedResult<{ id: string; name: string }>
+            >();
         });
     });
 });

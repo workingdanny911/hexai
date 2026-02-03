@@ -56,11 +56,12 @@
         "node-pg-migrate": "^7.9.0"
     },
     "peerDependencies": {
-        "@hexaijs/core": "workspace:^",
+        "@hexaijs/core": "^0.3.0",
         "ezcfg": "^0.1.0",
         "pg": "^8.0.0"
     },
     "devDependencies": {
+        "@hexaijs/core": "workspace:^",
         "@types/pg": "^8.11.8",
         "pg": "^8.12.0"
     }

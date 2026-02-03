@@ -1,9 +1,5 @@
 import { Query } from "@/query";
 
-export interface QueryHandler<
-    I extends Query = Query,
-    O = any,
-    Ctx = any,
-> {
-    execute(query: I, ctx?: Ctx): Promise<O>;
+export interface QueryHandler<Q extends Query = Query, Ctx = any> {
+    execute(query: Q, ctx?: Ctx): Promise<Q["ResultType"]>;
 }

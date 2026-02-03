@@ -1,6 +1,10 @@
 import { Message } from "@hexaijs/core";
 
-import { Application, EventHandlingResult, Result } from "./application";
+import {
+    Application,
+    EventHandlingResult,
+    Result,
+} from "./application";
 import { Command } from "./command";
 import { Query } from "./query";
 import {
@@ -68,16 +72,16 @@ export class InterceptedApplication implements Application {
         private commonInterceptors: Interceptor[]
     ) {}
 
-    public async executeCommand<T = unknown>(
-        command: Command
-    ): Promise<Result<T>> {
+    public async executeCommand<C extends Command>(
+        command: C
+    ): Promise<Result<C['ResultType']>> {
         const context: CommandInterceptionContext = {
             intent: "command",
             message: command,
             metadata: {},
         };
 
-        const finalHandler: Executor<T> = () =>
+        const finalHandler: Executor<C['ResultType']> = () =>
             this.delegate.executeCommand(command);
 
         const chain = this.buildInterceptorChain(
@@ -88,14 +92,16 @@ export class InterceptedApplication implements Application {
         return chain();
     }
 
-    public async executeQuery<T = unknown>(query: Query): Promise<Result<T>> {
+    public async executeQuery<Q extends Query>(
+        query: Q
+    ): Promise<Result<Q['ResultType']>> {
         const context: QueryInterceptionContext = {
             intent: "query",
             message: query,
             metadata: {},
         };
 
-        const finalHandler: Executor<T> = () =>
+        const finalHandler: Executor<Q['ResultType']> = () =>
             this.delegate.executeQuery(query);
 
         const chain = this.buildInterceptorChain(

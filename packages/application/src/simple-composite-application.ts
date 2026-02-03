@@ -24,9 +24,9 @@ export class SimpleCompositeApplication implements Application {
         this.unitOfWork = unitOfWork;
     }
 
-    public async executeCommand<T = unknown>(
-        command: Command
-    ): Promise<Result<T>> {
+    public async executeCommand<C extends Command>(
+        command: C
+    ): Promise<Result<C['ResultType']>> {
         const handler = this.findAppropriateApplication(
             command.getMessageType()
         );
@@ -40,7 +40,9 @@ export class SimpleCompositeApplication implements Application {
         );
     }
 
-    public async executeQuery<T = unknown>(query: Query): Promise<Result<T>> {
+    public async executeQuery<Q extends Query>(
+        query: Q
+    ): Promise<Result<Q['ResultType']>> {
         const handler = this.findAppropriateApplication(query.getMessageType());
 
         if (handler) {

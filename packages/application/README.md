@@ -26,41 +26,75 @@ npm install @hexaijs/application
 
 `Command` and `Query` extend the core `Message` class to represent different intents. Commands change state; queries read state.
 
+Both classes accept three type parameters:
+- `Payload` - The data the message carries
+- `ResultType` - The output type (enables automatic type inference)
+- `SecurityContext` - Optional security context type (defaults to `unknown`)
+
 ```typescript
 import { Command, Query } from "@hexaijs/application";
 
-// Command - changes state
-export class CreateOrderCommand extends Command<{
-    customerId: string;
-    items: { productId: string; quantity: number }[];
-}> {
+// Command - changes state, returns { orderId: string }
+export class CreateOrderCommand extends Command<
+    { customerId: string; items: { productId: string; quantity: number }[] },
+    { orderId: string }
+> {
     static readonly type = "order.create-order";
 }
 
-// Query - reads state
-export class GetOrderQuery extends Query<{
-    orderId: string;
-}> {
+// Query - reads state, returns OrderDto
+export class GetOrderQuery extends Query<
+    { orderId: string },
+    OrderDto
+> {
     static readonly type = "order.get-order";
 }
 ```
 
-Both support security contexts for authorization:
+With output types declared, `executeCommand` and `executeQuery` automatically infer return types:
 
 ```typescript
+const result = await app.executeCommand(new CreateOrderCommand({
+    customerId: "c-123",
+    items: []
+}));
+// result type: Result<{ orderId: string }> - automatically inferred!
+
+const orderResult = await app.executeQuery(new GetOrderQuery({ orderId: "o-456" }));
+// orderResult type: Result<OrderDto> - automatically inferred!
+```
+
+Both support security contexts for authorization. To get typed security context access, specify it as the third type parameter:
+
+```typescript
+// Define a security context type
+interface UserSecurityContext {
+    userId: string;
+    roles: string[];
+}
+
+// Command with typed security context (third parameter)
+export class SecureCreateOrderCommand extends Command<
+    { customerId: string; items: { productId: string; quantity: number }[] },
+    { orderId: string },
+    UserSecurityContext
+> {
+    static readonly type = "order.secure-create-order";
+}
+
 // Attach security context
-const command = new CreateOrderCommand({
+const command = new SecureCreateOrderCommand({
     customerId: "customer-123",
     items: []
 }).withSecurityContext({ userId: "user-456", roles: ["admin"] });
 
-// Access in handler
-const user = command.getSecurityContext();
+// Access in handler - type is inferred from Command's third parameter
+const user = command.getSecurityContext();  // UserSecurityContext
 ```
 
 ### CommandHandler and QueryHandler
 
-Handlers implement the `execute` method to process messages:
+Handlers implement the `execute` method to process messages. The output type is automatically inferred from the Command/Query's `ResultType` parameter:
 
 ```typescript
 import { CommandHandler, QueryHandler } from "@hexaijs/application";
@@ -69,11 +103,8 @@ interface OrderContext {
     getOrderRepository(): OrderRepository;
 }
 
-class CreateOrderHandler implements CommandHandler<
-    CreateOrderCommand,
-    { orderId: string },
-    OrderContext
-> {
+// Handler infers output type from CreateOrderCommand's ResultType ({ orderId: string })
+class CreateOrderHandler implements CommandHandler<CreateOrderCommand, OrderContext> {
     async execute(
         command: CreateOrderCommand,
         ctx: OrderContext
@@ -85,11 +116,8 @@ class CreateOrderHandler implements CommandHandler<
     }
 }
 
-class GetOrderHandler implements QueryHandler<
-    GetOrderQuery,
-    OrderDto,
-    OrderContext
-> {
+// Handler infers output type from GetOrderQuery's ResultType (OrderDto)
+class GetOrderHandler implements QueryHandler<GetOrderQuery, OrderContext> {
     async execute(
         query: GetOrderQuery,
         ctx: OrderContext
@@ -99,6 +127,13 @@ class GetOrderHandler implements QueryHandler<
         return toDto(order);
     }
 }
+```
+
+You can also extract output types directly from Command/Query classes using indexed access:
+
+```typescript
+type CreateOrderOutput = CreateOrderCommand['ResultType'];  // { orderId: string }
+type GetOrderOutput = GetOrderQuery['ResultType'];          // OrderDto
 ```
 
 ### EventHandler
@@ -310,10 +345,10 @@ await compositeApp.handleEvent(event);
 |--------|-------------|
 | `Application` | Interface for command/query execution and event handling |
 | `ApplicationBuilder` | Fluent builder for assembling applications |
-| `Command<P, SC>` | Base class for commands with payload and security context |
-| `Query<P, SC>` | Base class for queries with payload and security context |
-| `CommandHandler<I, O, Ctx>` | Interface for command handlers |
-| `QueryHandler<I, O, Ctx>` | Interface for query handlers |
+| `Command<P, O, SC>` | Base class for commands with payload, output type, and security context |
+| `Query<P, O, SC>` | Base class for queries with payload, output type, and security context |
+| `CommandHandler<I, Ctx>` | Interface for command handlers (output inferred from command) |
+| `QueryHandler<I, Ctx>` | Interface for query handlers (output inferred from query) |
 | `EventHandler<E, Ctx>` | Interface for event handlers |
 | `AbstractApplicationContext` | Base class for application contexts |
 | `Result<R, E>` | Union type of `SuccessResult` or `ErrorResult` |
@@ -323,6 +358,69 @@ await compositeApp.handleEvent(event);
 | `QueryInterceptor` | Interceptor type for queries |
 | `EventInterceptor` | Interceptor type for events |
 | `Interceptor` | Interceptor type for all messages |
+
+## Migration Guide
+
+### From v0.1.x to v0.2.0
+
+This version introduces automatic output type inference with breaking changes to type parameters.
+
+#### Command and Query
+
+**Before (v0.2.x)**:
+```typescript
+// Second type parameter was SecurityContext
+class MyCommand extends Command<Payload, MySecurityContext> {}
+```
+
+**After (v0.3.0)**:
+```typescript
+// Second type parameter is now ResultType, SecurityContext moves to third
+class MyCommand extends Command<Payload, ResultType, MySecurityContext> {}
+
+// If you don't need custom SecurityContext, just use two parameters:
+class MyCommand extends Command<Payload, ResultType> {}
+```
+
+#### CommandHandler and QueryHandler
+
+**Before (v0.2.x)**:
+```typescript
+class MyHandler implements CommandHandler<MyCommand, OutputType, Context> {
+    async execute(cmd: MyCommand, ctx: Context): Promise<OutputType> { ... }
+}
+```
+
+**After (v0.3.0)**:
+```typescript
+// Output type is automatically inferred from MyCommand's ResultType
+class MyHandler implements CommandHandler<MyCommand, Context> {
+    async execute(cmd: MyCommand, ctx: Context): Promise<OutputType> { ... }
+}
+```
+
+#### Security Context Access
+
+**Before (v0.2.x)**:
+```typescript
+// SC was the second type parameter
+class MyCommand extends Command<Payload, MySecurityContext> {}
+const sc = command.getSecurityContext();  // MySecurityContext
+```
+
+**After (v0.3.0)**:
+```typescript
+// SC is now the third type parameter
+class MyCommand extends Command<Payload, ResultType, MySecurityContext> {}
+const sc = command.getSecurityContext();  // MySecurityContext (same usage)
+```
+
+#### Quick Migration Checklist
+
+- [ ] Update `Command<P, SC>` to `Command<P, O, SC>` or `Command<P, O>` (SC moves to 3rd position)
+- [ ] Update `Query<P, SC>` to `Query<P, O, SC>` or `Query<P, O>` (SC moves to 3rd position)
+- [ ] Remove `O` parameter from `CommandHandler<I, O, Ctx>` → `CommandHandler<I, Ctx>`
+- [ ] Remove `O` parameter from `QueryHandler<I, O, Ctx>` → `QueryHandler<I, Ctx>`
 
 ## See Also
 

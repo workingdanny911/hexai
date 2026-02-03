@@ -20,7 +20,15 @@
     "bugs": {
         "url": "https://github.com/workingdanny911/hexai/issues"
     },
-    "keywords": ["hexai", "hexagonal", "clean-architecture", "ddd", "cqrs", "typescript", "event-sourcing"],
+    "keywords": [
+        "hexai",
+        "hexagonal",
+        "clean-architecture",
+        "ddd",
+        "cqrs",
+        "typescript",
+        "event-sourcing"
+    ],
     "files": [
         "dist",
         "LICENSE"
@@ -40,7 +48,8 @@
     },
     "scripts": {
         "test": "vitest run",
-        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+        "build": "pnpm clean && tsc -p ./tsconfig.build.json && tsc-alias",
+        "clean": "rm -rf dist"
     },
     "dependencies": {
         "lodash": "^4.17.21",

@@ -4,14 +4,22 @@ import { Command } from "@/command";
 import { Query } from "@/query";
 import { Message } from "@hexaijs/core";
 
-export class DummyCommand extends Command<null, { role: string }> {
-    constructor(sc?: { role: string }) {
-        super(null, sc);
+interface DummySecurityContext {
+    role: string;
+}
+
+export class DummyCommand extends Command<null, void, DummySecurityContext> {
+    constructor(sc?: DummySecurityContext) {
+        super(null, {}, sc);
     }
 }
 
-export class DummyQuery extends Query<{ id: string }, { role: string }> {
-    constructor(id: string = "test-id", sc?: { role: string }) {
+export class DummyQuery extends Query<
+    { id: string },
+    { name: string },
+    DummySecurityContext
+> {
+    constructor(id: string = "test-id", sc?: DummySecurityContext) {
         super({ id }, {}, sc);
     }
 }
@@ -19,5 +27,23 @@ export class DummyQuery extends Query<{ id: string }, { role: string }> {
 export class DummyEvent extends Message<null> {
     constructor() {
         super(null);
+    }
+}
+
+export class TypedCommand extends Command<{ name: string }, { id: string }> {
+    constructor(payload: { name: string }) {
+        super(payload);
+    }
+}
+
+export class TypedQuery extends Query<{ filter: string }, { items: string[] }> {
+    constructor(payload: { filter: string }) {
+        super(payload);
+    }
+}
+
+export class VoidOutputCommand extends Command<{ data: string }, void> {
+    constructor(payload: { data: string }) {
+        super(payload);
     }
 }

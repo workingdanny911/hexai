@@ -70,11 +70,11 @@ type QueryHandlerRegistry = TypeBasedHandlerRegistry<
 export type EventHandlingResult = unknown;
 
 export interface CommandDispatcher {
-    executeCommand<T = unknown>(command: Command): Promise<Result<T>>;
+    executeCommand<C extends Command>(command: C): Promise<Result<C['ResultType']>>;
 }
 
 export interface QueryDispatcher {
-    executeQuery<T = unknown>(query: Query): Promise<Result<T>>;
+    executeQuery<Q extends Query>(query: Q): Promise<Result<Q['ResultType']>>;
 }
 
 export interface EventDispatcher {
@@ -93,11 +93,11 @@ class GenericApplication implements Application {
         private errorTransformer: ApplicationErrorTransformer
     ) {}
 
-    public async executeCommand<T = unknown>(
-        command: Command
-    ): Promise<Result<T>> {
+    public async executeCommand<C extends Command>(
+        command: C
+    ): Promise<Result<C['ResultType']>> {
         try {
-            const result = await this.doExecuteCommand<T>(command);
+            const result = await this.doExecuteCommand<C['ResultType']>(command);
             return new SuccessResult(result);
         } catch (e) {
             let error: ApplicationError;
@@ -139,9 +139,11 @@ class GenericApplication implements Application {
         }
     }
 
-    public async executeQuery<T = unknown>(query: Query): Promise<Result<T>> {
+    public async executeQuery<Q extends Query>(
+        query: Q
+    ): Promise<Result<Q['ResultType']>> {
         try {
-            const result = await this.doExecuteQuery<T>(query);
+            const result = await this.doExecuteQuery<Q['ResultType']>(query);
             return new SuccessResult(result);
         } catch (e) {
             let error: ApplicationError;
@@ -166,7 +168,7 @@ class GenericApplication implements Application {
             await this.applicationContext.enterCommandExecutionScope(
                 command,
                 async (context) => {
-                    result = await handler.execute(command, context);
+                    result = (await handler.execute(command, context)) as unknown as T;
                 }
             );
             return result!;
@@ -199,7 +201,7 @@ class GenericApplication implements Application {
             await this.applicationContext.enterCommandExecutionScope(
                 query,
                 async (context) => {
-                    result = await handler.execute(query, context);
+                    result = (await handler.execute(query, context)) as unknown as T;
                 }
             );
             return result!;
