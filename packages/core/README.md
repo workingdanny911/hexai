@@ -190,6 +190,35 @@ Propagation.EXISTING  // Use existing transaction (error if none)
 Propagation.NESTED    // Nested transaction (savepoint)
 ```
 
+### QueryableUnitOfWork
+
+Extends `UnitOfWork` with a `query()` method for executing read operations without transaction overhead.
+
+```typescript
+import { QueryableUnitOfWork } from "@hexaijs/core";
+
+interface OrderApplicationContext {
+    getUnitOfWork(): QueryableUnitOfWork;
+    getOrderRepository(): OrderRepository;
+}
+
+// Execute a query without transaction overhead
+const user = await unitOfWork.query(async (client) => {
+    return await userRepo.findById(client, userId);
+});
+```
+
+**When to use `wrap()` vs `query()`:**
+
+| Method | Transaction | Use Case |
+|--------|-------------|----------|
+| `wrap()` | Yes (BEGIN/COMMIT) | Commands that modify state |
+| `query()` | No (autocommit) | Read-only queries |
+
+The `query()` method is context-aware:
+- **Outside transaction**: Acquires a new connection, executes, then releases
+- **Inside transaction**: Reuses the existing transaction's client
+
 ### EventStore
 
 Interface for event sourcing scenarios. Stores and retrieves events by position.
@@ -263,6 +292,7 @@ throw new DuplicateObjectError("Order with this ID already exists");
 | `Identifiable<T>` | Interface for entities with identity |
 | `Repository<T>` | Interface for aggregate persistence |
 | `UnitOfWork` | Interface for transaction management |
+| `QueryableUnitOfWork` | UnitOfWork with `query()` for non-transactional reads |
 | `Propagation` | Enum for transaction propagation modes |
 | `EventStore` | Interface for event store implementations |
 

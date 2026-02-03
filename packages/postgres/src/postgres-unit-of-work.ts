@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import * as pg from "pg";
 
-import { Propagation, UnitOfWork } from "@hexaijs/core";
+import { Propagation, QueryableUnitOfWork } from "@hexaijs/core";
 import { IsolationLevel } from "./types";
 import {
     ClientCleanUp,
@@ -11,10 +11,9 @@ import {
 } from "./types";
 import { ensureConnection } from "./helpers";
 
-export class PostgresUnitOfWork implements UnitOfWork<
-    pg.Client,
-    PostgresTransactionOptions
-> {
+export class PostgresUnitOfWork
+    implements QueryableUnitOfWork<pg.Client, PostgresTransactionOptions>
+{
     private transactionStorage = new AsyncLocalStorage<PostgresTransaction>();
 
     constructor(
@@ -42,6 +41,22 @@ export class PostgresUnitOfWork implements UnitOfWork<
         return this.executeInContext(transaction, (tx) =>
             tx.execute(fn, resolvedOptions)
         );
+    }
+
+    async query<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+        const currentTransaction = this.getCurrentTransaction();
+
+        if (currentTransaction) {
+            return fn(currentTransaction.getClient());
+        }
+
+        const client = await this.clientFactory();
+        try {
+            await ensureConnection(client);
+            return await fn(client);
+        } finally {
+            await this.clientCleanUp?.(client);
+        }
     }
 
     private getCurrentTransaction(): PostgresTransaction | null {

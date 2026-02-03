@@ -349,4 +349,62 @@ describe("PostgresUnitOfWork", () => {
             );
         });
     });
+
+    describe("query method", () => {
+        test("executes query without transaction", async () => {
+            await uow.query(async (client) => {
+                await insertRecord(client, 1);
+            });
+
+            await expectRecordExists(1);
+        });
+
+        test("reuses client when inside wrap()", async () => {
+            const txids: string[] = [];
+
+            await uow.wrap(async (wrapClient) => {
+                txids.push(await getTransactionId(wrapClient));
+
+                await uow.query(async (queryClient) => {
+                    txids.push(await getTransactionId(queryClient));
+                });
+            });
+
+            expect(areSameTransaction(...txids)).toBe(true);
+        });
+
+        test("uses separate connections when outside transaction", async () => {
+            const txids: string[] = [];
+
+            await uow.query(async (client) => {
+                txids.push(await getTransactionId(client));
+            });
+            await uow.query(async (client) => {
+                txids.push(await getTransactionId(client));
+            });
+
+            expect(areDistinctTransactions(...txids)).toBe(true);
+        });
+
+        test("cleans up client on error", async () => {
+            await expect(
+                uow.query(async () => {
+                    throw new Error("query error");
+                })
+            ).rejects.toThrow("query error");
+        });
+
+        test("changes are visible immediately without transaction", async () => {
+            await uow.query(async (client) => {
+                await insertRecord(client, 1);
+            });
+
+            await uow.query(async (client) => {
+                const result = await client.query(
+                    `SELECT COUNT(*) FROM ${TABLE} WHERE id = 1;`
+                );
+                expect(parseInt(result.rows[0].count)).toBe(1);
+            });
+        });
+    });
 });

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Client } from "pg";
 
-import { Propagation, UnitOfWork } from "@hexaijs/core";
+import { Propagation, QueryableUnitOfWork } from "@hexaijs/core";
 import { DatabaseManager, isDatabaseError, TableManager } from "@/helpers";
 import { PostgresConfig } from "@/config";
 import { runHexaiMigrations } from "@/run-hexai-migrations";
@@ -48,7 +48,7 @@ export function createTestContext(dbUrl: string | PostgresConfig) {
 }
 
 export class PostgresUnitOfWorkForTesting
-    implements UnitOfWork<Client, PostgresTransactionOptions>
+    implements QueryableUnitOfWork<Client, PostgresTransactionOptions>
 {
     private executorStorage = new AsyncLocalStorage<TestTransactionExecutor>();
 
@@ -60,6 +60,10 @@ export class PostgresUnitOfWorkForTesting
             throw new Error("Unit of work not started");
         }
         return this.client;
+    }
+
+    async query<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+        return fn(this.client);
     }
 
     async wrap<T = unknown>(

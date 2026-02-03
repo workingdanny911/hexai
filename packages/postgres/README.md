@@ -71,6 +71,52 @@ const client = ctx.getUnitOfWork().getClient();
 await client.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
 ```
 
+### Query Execution (No Transaction)
+
+Use `query()` for read-only operations without transaction overhead. This implements the `QueryableUnitOfWork` interface from `@hexaijs/core`.
+
+```typescript
+// Simple read without transaction (autocommit)
+const user = await unitOfWork.query(async (client) => {
+    const result = await client.query("SELECT * FROM users WHERE id = $1", [userId]);
+    return result.rows[0];
+});
+```
+
+The `query()` method is context-aware:
+
+| Context | Behavior |
+|---------|----------|
+| Outside transaction | New connection from factory → query → cleanup |
+| Inside transaction | Reuses existing transaction's client |
+
+This means you can safely use `query()` anywhere in your code:
+
+```typescript
+// Outside any transaction - gets its own connection
+const users = await unitOfWork.query(async (client) => {
+    return await client.query("SELECT * FROM users");
+});
+
+// Inside wrap() - reuses the transaction's client
+await unitOfWork.wrap(async (txClient) => {
+    await txClient.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+
+    // Uses the same txClient, sees uncommitted changes
+    const order = await unitOfWork.query(async (client) => {
+        // client === txClient
+        return await client.query("SELECT * FROM orders WHERE id = $1", [orderId]);
+    });
+});
+```
+
+**When to use `wrap()` vs `query()`:**
+
+| Method | Transaction | Overhead | Use Case |
+|--------|-------------|----------|----------|
+| `wrap()` | Yes | BEGIN + COMMIT | Commands (INSERT, UPDATE, DELETE) |
+| `query()` | No | Connection only | Queries (SELECT) |
+
 ### Transaction Propagation
 
 Control how nested operations participate in transactions using `Propagation`:
@@ -276,7 +322,7 @@ await ensureConnection(client);  // Safe to call multiple times
 
 ### PostgresUnitOfWorkForTesting
 
-A test-specific `UnitOfWork` implementation that runs inside an external transaction. This allows tests to rollback all changes after each test, keeping the database clean without truncating tables.
+A test-specific `QueryableUnitOfWork` implementation that runs inside an external transaction. This allows tests to rollback all changes after each test, keeping the database clean without truncating tables.
 
 ```typescript
 import { PostgresUnitOfWorkForTesting } from "@hexaijs/postgres/test";
@@ -322,6 +368,7 @@ describe("OrderService", () => {
 
 **Key behaviors:**
 
+- **`query()` method**: Uses the test client directly, always within the external transaction context.
 - **abortError propagation**: When a nested `EXISTING` operation throws (even if caught), the entire transaction is marked as aborted and will rollback - matching production behavior.
 - **NESTED savepoints**: `Propagation.NESTED` creates independent savepoints that can rollback without affecting the parent.
 - **Propagation.NEW**: Logs a warning and creates a new savepoint instead (true separate transactions are not possible within the external transaction).
@@ -366,8 +413,8 @@ await uow.wrap(async (c) => {
 
 | Export | Description |
 |--------|-------------|
-| `PostgresUnitOfWork` | Transaction management with `AsyncLocalStorage` context |
-| `PostgresUnitOfWorkForTesting` | Test-specific UnitOfWork that runs inside external transaction |
+| `PostgresUnitOfWork` | Transaction and query management implementing `QueryableUnitOfWork` |
+| `PostgresUnitOfWorkForTesting` | Test-specific QueryableUnitOfWork that runs inside external transaction |
 | `PostgresEventStore` | Event store implementation with batch insert support |
 | `PostgresConfig` | Immutable configuration with builder pattern |
 | `postgresConfig` | Config spec for `defineConfig` integration |
@@ -380,6 +427,6 @@ await uow.wrap(async (c) => {
 
 ## See Also
 
-- [@hexaijs/core](../core/README.md) - Core interfaces (`UnitOfWork`, `EventStore`, `Propagation`)
+- [@hexaijs/core](../core/README.md) - Core interfaces (`UnitOfWork`, `QueryableUnitOfWork`, `EventStore`, `Propagation`)
 - [@hexaijs/sqlite](../sqlite/README.md) - SQLite implementation for testing
 - [@hexaijs/application](../application/README.md) - Application context that provides `getUnitOfWork()`

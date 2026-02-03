@@ -18,3 +18,10 @@ export interface UnitOfWork<
         options?: Partial<Options>
     ): Promise<T>;
 }
+
+export interface QueryableUnitOfWork<
+    Client = unknown,
+    Options extends BaseUnitOfWorkOptions = BaseUnitOfWorkOptions,
+> extends UnitOfWork<Client, Options> {
+    query<T>(fn: (client: Client) => Promise<T>): Promise<T>;
+}

@@ -276,4 +276,39 @@ describe("PostgresUnitOfWorkForTesting", () => {
             expect(afterRollback.rows).toHaveLength(0);
         });
     });
+
+    describe("query method", () => {
+        test("executes query using test client", async () => {
+            await uow.query(async (c) => {
+                await insertRecord(c, 1);
+            });
+
+            const result = await client.query(`SELECT * FROM ${TABLE}`);
+            expect(result.rows).toHaveLength(1);
+        });
+
+        test("uses same client inside wrap()", async () => {
+            await uow.wrap(async (wrapClient) => {
+                await insertRecord(wrapClient, 1);
+
+                await uow.query(async (queryClient) => {
+                    const result = await queryClient.query(
+                        `SELECT * FROM ${TABLE} WHERE id = 1`
+                    );
+                    expect(result.rows).toHaveLength(1);
+                });
+            });
+        });
+
+        test("uses same client outside wrap()", async () => {
+            await uow.query(async (c) => {
+                await insertRecord(c, 1);
+            });
+
+            await uow.query(async (c) => {
+                const result = await c.query(`SELECT * FROM ${TABLE}`);
+                expect(result.rows).toHaveLength(1);
+            });
+        });
+    });
 });
