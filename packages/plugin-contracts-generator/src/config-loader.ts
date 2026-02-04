@@ -1,20 +1,13 @@
-import { resolve, dirname, join } from "path";
-import * as ts from "typescript";
+import { resolve, dirname, basename, relative } from "path";
+import ts from "typescript";
 
 import { ConfigLoadError } from "./errors";
 import { FileSystem, nodeFileSystem } from "./file-system";
 import type { DecoratorNames, ResponseNamingConvention } from "./domain";
 import { mergeDecoratorNames } from "./domain";
+import { ContextConfig, type InputContextConfig } from "./context-config";
 
-const PACKAGE_CONFIG_FILENAME = "application.config.ts";
 const SUPPORTED_GLOB_PARTS_COUNT = 2;
-
-export interface ContextConfig {
-    readonly name: string;
-    readonly sourceDir: string;
-    readonly tsconfigPath?: string;
-    readonly responseNamingConventions?: readonly ResponseNamingConvention[];
-}
 
 export interface ContractsConfig {
     readonly contexts: readonly ContextConfig[];
@@ -25,20 +18,9 @@ export interface ContractsConfig {
     readonly removeDecorators?: boolean;
 }
 
-interface PackageConfig {
-    contextName?: string;
-    sourceDir?: string;
-    tsconfigPath?: string;
-    responseNamingConventions?: readonly ResponseNamingConvention[];
-}
-
 interface ApplicationConfig {
     contracts?: {
-        contexts?: string[] | Array<{
-            name?: string;
-            sourceDir?: string;
-            tsconfigPath?: string;
-        }>;
+        contexts?: string[] | InputContextConfig[];
         pathAliasRewrites?: Record<string, string>;
         externalDependencies?: Record<string, string>;
         decoratorNames?: DecoratorNames;
@@ -115,7 +97,7 @@ export class ConfigLoader {
     }
 
     private async resolveContexts(
-        contextsConfig: string[] | Array<{ name?: string; sourceDir?: string; tsconfigPath?: string }>,
+        contextsConfig: string[] | InputContextConfig[],
         configDir: string
     ): Promise<ContextConfig[]> {
         const contexts: ContextConfig[] = [];
@@ -127,8 +109,8 @@ export class ConfigLoader {
                 const resolvedContexts = await this.resolveStringContext(item, configDir);
                 contexts.push(...resolvedContexts);
             } else {
-                const validated = this.validateObjectContext(item, i);
-                contexts.push(validated);
+                const contextConfig = await this.createObjectContext(item, i, configDir);
+                contexts.push(contextConfig);
             }
         }
 
@@ -143,79 +125,50 @@ export class ConfigLoader {
             return this.expandGlobPattern(contextPath, configDir);
         }
 
-        const packageDir = resolve(configDir, contextPath);
-        return [await this.loadPackageConfig(packageDir)];
+        const basePath = resolve(configDir, contextPath);
+        const name = basename(basePath);
+
+        return [await ContextConfig.create(
+            { name, path: contextPath },
+            configDir,
+            this.fs
+        )];
     }
 
     private async expandGlobPattern(pattern: string, configDir: string): Promise<ContextConfig[]> {
         const packageDirs = await this.matchGlobPattern(pattern, configDir);
-        const configs = await Promise.all(
-            packageDirs.map((packageDir) => this.loadPackageConfig(packageDir))
+
+        return Promise.all(
+            packageDirs.map((dir) => {
+                const name = basename(dir);
+                const relativePath = relative(configDir, dir);
+
+                return ContextConfig.create(
+                    { name, path: relativePath },
+                    configDir,
+                    this.fs
+                );
+            })
         );
-        return configs;
     }
 
-    private async loadPackageConfig(packageDir: string): Promise<ContextConfig> {
-        const configPath = join(packageDir, PACKAGE_CONFIG_FILENAME);
-
-        if (!await this.fs.exists(configPath)) {
-            throw new ConfigLoadError(
-                `Missing application.config.ts in package: ${packageDir}`
-            );
-        }
-
-        const packageConfig = await this.loadTypeScriptConfig(configPath) as PackageConfig;
-
-        if (!packageConfig.contextName || typeof packageConfig.contextName !== "string") {
-            throw new ConfigLoadError(
-                `Missing 'contextName' in ${configPath}`
-            );
-        }
-
-        if (!packageConfig.sourceDir || typeof packageConfig.sourceDir !== "string") {
-            throw new ConfigLoadError(
-                `Missing 'sourceDir' in ${configPath}`
-            );
-        }
-
-        const contextName = packageConfig.contextName;
-        const sourceDir = resolve(packageDir, packageConfig.sourceDir);
-        const tsconfigPath = packageConfig.tsconfigPath
-            ? resolve(packageDir, packageConfig.tsconfigPath)
-            : undefined;
-
-        return {
-            name: contextName,
-            sourceDir,
-            tsconfigPath,
-            responseNamingConventions: packageConfig.responseNamingConventions,
-        };
-    }
-
-    private validateObjectContext(
-        ctx: {
-            name?: string;
-            sourceDir?: string;
-            tsconfigPath?: string;
-        },
-        index: number
-    ): ContextConfig {
+    private async createObjectContext(
+        ctx: InputContextConfig,
+        index: number,
+        configDir: string
+    ): Promise<ContextConfig> {
         if (!ctx.name || typeof ctx.name !== "string") {
             throw new ConfigLoadError(
                 `Invalid context at index ${index}: missing 'name'`
             );
         }
-        if (!ctx.sourceDir || typeof ctx.sourceDir !== "string") {
+        if (!ctx.path || typeof ctx.path !== "string") {
             throw new ConfigLoadError(
-                `Invalid context at index ${index}: missing 'sourceDir'`
+                `Invalid context at index ${index}: missing 'path'`
             );
         }
 
-        return {
-            name: ctx.name,
-            sourceDir: ctx.sourceDir,
-            tsconfigPath: ctx.tsconfigPath,
-        };
+        return ContextConfig.create(ctx, configDir, this.fs);
     }
 
     private async matchGlobPattern(pattern: string, configDir: string): Promise<string[]> {

@@ -333,7 +333,7 @@ export async function runInsideTransaction<T = unknown>(
     }
 }
 
-export async function ensureConnection(client: pg.Client): Promise<void> {
+export async function ensureConnection(client: pg.ClientBase): Promise<void> {
     try {
         await client.connect();
     } catch (e) {

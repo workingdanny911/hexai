@@ -76,18 +76,12 @@ export { Scanner, type ScannerOptions } from "./scanner";
 export { Parser, type ParseResult } from "./parser";
 export { FileGraphResolver } from "./file-graph-resolver";
 export { FileCopier } from "./file-copier";
-export { TsconfigLoader } from "./tsconfig-loader";
-export {
-    ConfigLoader,
-    type ContractsConfig,
-    type ContextConfig,
-} from "./config-loader";
+export { ConfigLoader, type ContractsConfig } from "./config-loader";
 
 export {
     MessageParserError,
     ConfigurationError,
     ConfigLoadError,
-    TsconfigLoadError,
     FileSystemError,
     FileNotFoundError,
     FileReadError,
@@ -131,11 +125,15 @@ export {
     type ParsedMessages,
 } from "./pipeline";
 
+export { ContextConfig, type InputContextConfig } from "./context-config";
+
+import { ContextConfig } from "./context-config";
 import type { ResponseNamingConvention, MessageType } from "./domain/types";
 
 export interface ProcessContextOptions {
     contextName: string;
-    sourceDir: string;
+    path: string;
+    sourceDir?: string;
     outputDir: string;
     pathAliasRewrites?: Map<string, string>;
     tsconfigPath?: string;
@@ -158,6 +156,7 @@ export async function processContext(
 ): Promise<ProcessContextResult> {
     const {
         contextName,
+        path: contextPath,
         sourceDir,
         outputDir,
         pathAliasRewrites,
@@ -169,17 +168,27 @@ export async function processContext(
         logger = noopLogger,
     } = options;
 
-    const pipeline = await ContractsPipeline.create({
-        tsconfigPath,
+    const contextConfig = await ContextConfig.create(
+        {
+            name: contextName,
+            path: contextPath,
+            sourceDir,
+            tsconfigPath,
+            responseNamingConventions,
+        },
+        process.cwd(),
+        fileSystem
+    );
+
+    return ContractsPipeline.create({
+        contextConfig,
         responseNamingConventions,
         messageTypes,
         fileSystem,
         logger,
-    });
-
-    return pipeline.execute({
+    }).execute({
         contextName,
-        sourceDir,
+        sourceDir: contextConfig.sourceDir,
         outputDir,
         pathAliasRewrites,
         removeDecorators,

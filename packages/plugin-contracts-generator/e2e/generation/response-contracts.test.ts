@@ -8,8 +8,8 @@ import {
     expectGeneratedFiles,
     expectExtractionResult,
     expectCommands,
-} from "../helpers";
-import type { ProcessContextResult } from "../../src/index";
+} from "@e2e/helpers";
+import type { ProcessContextResult } from "@/index";
 import { ResponseNamingConvention } from "../../src/domain/types";
 
 /**

@@ -5,7 +5,7 @@ import {
     expectFileContains,
     expectTypeScriptCompiles,
     expectCommand,
-} from "../helpers";
+} from "@e2e/helpers";
 
 describe("E2E: Barrel Import (Directory Import Resolution)", () => {
     /**
@@ -70,7 +70,10 @@ describe("E2E: Barrel Import (Directory Import Resolution)", () => {
 
         it("should not rewrite to explicit index path", async () => {
             const content = await import("fs/promises").then((fs) =>
-                fs.readFile(ctx.getOutputFile("barrel-import", "commands.ts"), "utf-8")
+                fs.readFile(
+                    ctx.getOutputFile("barrel-import", "commands.ts"),
+                    "utf-8"
+                )
             );
             expect(content).not.toContain('from "./domain/index"');
         });

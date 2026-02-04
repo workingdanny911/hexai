@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "PostgreSQL support for hexai",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -56,7 +56,7 @@
         "node-pg-migrate": "^7.9.0"
     },
     "peerDependencies": {
-        "@hexaijs/core": "^0.3.0",
+        "@hexaijs/core": "^0.4.0",
         "ezcfg": "^0.1.0",
         "pg": "^8.0.0"
     },

@@ -8,6 +8,7 @@ export {
     ensureConnection,
 } from "./helpers";
 export * from "./postgres-event-store";
+export * from "./types";
 
 // Config exports
 export * from "./config";

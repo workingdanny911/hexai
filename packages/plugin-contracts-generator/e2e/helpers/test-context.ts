@@ -10,6 +10,7 @@ const PRODUCTION_SOURCE_DIR = join(__dirname, "..", "..", "src");
 
 export interface RunParserOptions {
     contextName?: string;
+    path?: string;
     sourceDir?: string;
     pathAliasRewrites?: Map<string, string>;
     tsconfigPath?: string;
@@ -96,19 +97,20 @@ export class E2ETestContext {
     }
 
     async runParser(options?: string | RunParserOptions): Promise<ProcessContextResult> {
-        // Handle backward compatibility: string argument means contextName
         const opts: RunParserOptions = typeof options === "string"
             ? { contextName: options }
             : options ?? {};
 
         const contextName = opts.contextName ?? this.fixtureName;
-        const sourceDir = opts.sourceDir ?? this.getSourceDir();
+        const contextPath = opts.path ?? this.fixtureDir;
+        const sourceDir = opts.sourceDir;
 
         const pathAliasRewrites = opts.pathAliasRewrites
             ?? this.buildPathAliasRewrites(contextName);
 
         return processContext({
             contextName,
+            path: contextPath,
             sourceDir,
             outputDir: this.getOutputDir(),
             pathAliasRewrites,
@@ -137,7 +139,8 @@ export class E2ETestContext {
 
             const result = await processContext({
                 contextName: context.contextName,
-                sourceDir: this.getSourceDir(context.sourceSubPath),
+                path: this.fixtureDir,
+                sourceDir: join("src", context.sourceSubPath),
                 outputDir: this.getOutputDir(),
                 pathAliasRewrites,
             });

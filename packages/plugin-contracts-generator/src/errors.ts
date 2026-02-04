@@ -30,19 +30,6 @@ export class ConfigLoadError extends ConfigurationError {
 }
 
 /**
- * Error thrown when loading tsconfig.json fails.
- */
-export class TsconfigLoadError extends ConfigurationError {
-    readonly tsconfigPath: string;
-
-    constructor(message: string, tsconfigPath: string, options?: ErrorOptions) {
-        super(message, options);
-        this.name = "TsconfigLoadError";
-        this.tsconfigPath = tsconfigPath;
-    }
-}
-
-/**
  * Base class for file system operation errors.
  */
 export class FileSystemError extends MessageParserError {

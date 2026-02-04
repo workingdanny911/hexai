@@ -14,10 +14,8 @@ describe("ConfigLoader", () => {
             const result = await configLoader.load(configPath);
 
             expect(result.contexts).toHaveLength(1);
-            expect(result.contexts[0]).toEqual({
-                name: "lecture",
-                sourceDir: "src",
-            });
+            expect(result.contexts[0].name).toBe("lecture");
+            expect(result.contexts[0].sourceDir).toContain("valid-config/src");
             expect(result.pathAliasRewrites).toEqual({
                 "@/": "@libera/",
             });
@@ -32,7 +30,7 @@ describe("ConfigLoader", () => {
                 ConfigLoadError
             );
             await expect(configLoader.load(configPath)).rejects.toThrow(
-                "missing 'sourceDir'"
+                "missing 'path'"
             );
         });
 
@@ -73,7 +71,6 @@ describe("ConfigLoader", () => {
             expect(result.contexts).toHaveLength(1);
             expect(result.contexts[0].name).toBe("lecture");
             expect(result.contexts[0].sourceDir).toContain("packages/lecture/src");
-            expect(result.contexts[0].tsconfigPath).toContain("packages/lecture/tsconfig.json");
         });
 
         it("should include pathAliasRewrites from root config", async () => {
@@ -114,18 +111,6 @@ describe("ConfigLoader", () => {
             );
         });
 
-        it("should throw error when package has no application.config.ts", async () => {
-            const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/packages-glob/application.config.ts";
-
-            await expect(configLoader.load(configPath)).rejects.toThrow(
-                ConfigLoadError
-            );
-            await expect(configLoader.load(configPath)).rejects.toThrow(
-                "Missing application.config.ts"
-            );
-        });
     });
 
     describe("error handling", () => {

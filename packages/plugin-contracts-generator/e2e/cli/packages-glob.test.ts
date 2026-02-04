@@ -100,7 +100,7 @@ describe("Packages Glob Pattern E2E", () => {
                     contexts: [
                         {
                             name: "explicit-orders",
-                            sourceDir: join(fixturesDir, "orders", "src"),
+                            path: join(fixturesDir, "orders"),
                         },
                         fixturesDir + "/*",
                     ],

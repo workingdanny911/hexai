@@ -5,8 +5,8 @@ import {
     E2ETestContext,
     expectFileContains,
     expectGeneratedFiles,
-} from "../helpers";
-import type { ProcessContextResult } from "../../src/index";
+} from "@e2e/helpers";
+import type { ProcessContextResult } from "@/index";
 
 /**
  * E2E: Module Structure
@@ -68,27 +68,30 @@ describe("E2E: Module Structure", () => {
     describe("Entry Point File (commands-but-different-filename.ts)", () => {
         it("should preserve command class with decorator", async () => {
             await expectFileContains(
-                ctx.getOutputFile("module-structure", "commands-but-different-filename.ts"),
-                [
-                    "@PublicCommand()",
-                    "export class SomeCommand",
-                ]
+                ctx.getOutputFile(
+                    "module-structure",
+                    "commands-but-different-filename.ts"
+                ),
+                ["@PublicCommand()", "export class SomeCommand"]
             );
         });
 
         it("should preserve imports from dependencies", async () => {
             await expectFileContains(
-                ctx.getOutputFile("module-structure", "commands-but-different-filename.ts"),
-                [
-                    'from "./foo.validator"',
-                    'from "./bar.validator"',
-                ]
+                ctx.getOutputFile(
+                    "module-structure",
+                    "commands-but-different-filename.ts"
+                ),
+                ['from "./foo.validator"', 'from "./bar.validator"']
             );
         });
 
         it("should preserve method implementation", async () => {
             await expectFileContains(
-                ctx.getOutputFile("module-structure", "commands-but-different-filename.ts"),
+                ctx.getOutputFile(
+                    "module-structure",
+                    "commands-but-different-filename.ts"
+                ),
                 [
                     "validate()",
                     "FooValidator.validateFoo(foo)",
@@ -113,10 +116,7 @@ describe("E2E: Module Structure", () => {
         it("should copy bar.validator.ts with function export", async () => {
             await expectFileContains(
                 ctx.getOutputFile("module-structure", "bar.validator.ts"),
-                [
-                    "export function validateBar",
-                    'from "./is-empty"',
-                ]
+                ["export function validateBar", 'from "./is-empty"']
             );
         });
     });
@@ -125,14 +125,12 @@ describe("E2E: Module Structure", () => {
         it("should copy is-empty.ts (shared by both validators)", async () => {
             await expectFileContains(
                 ctx.getOutputFile("module-structure", "is-empty.ts"),
-                [
-                    "export function isEmpty",
-                ]
+                ["export function isEmpty"]
             );
         });
 
         it("should copy shared dependency only once", async () => {
-            const isEmptyFiles = result.copiedFiles.filter(f =>
+            const isEmptyFiles = result.copiedFiles.filter((f) =>
                 f.includes("is-empty")
             );
             expect(isEmptyFiles.length).toBe(1);

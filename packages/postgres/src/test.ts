@@ -1,11 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Client } from "pg";
+import { Client, ClientBase } from "pg";
 
-import { Propagation, QueryableUnitOfWork } from "@hexaijs/core";
+import { Propagation } from "@hexaijs/core";
 import { DatabaseManager, isDatabaseError, TableManager } from "@/helpers";
 import { PostgresConfig } from "@/config";
 import { runHexaiMigrations } from "@/run-hexai-migrations";
 import { PostgresTransactionOptions } from "@/types";
+import { PostgresUnitOfWork } from "./postgres-unit-of-work";
 
 export function createTestContext(dbUrl: string | PostgresConfig) {
     const config =
@@ -47,14 +48,12 @@ export function createTestContext(dbUrl: string | PostgresConfig) {
     };
 }
 
-export class PostgresUnitOfWorkForTesting
-    implements QueryableUnitOfWork<Client, PostgresTransactionOptions>
-{
+export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
     private executorStorage = new AsyncLocalStorage<TestTransactionExecutor>();
 
-    constructor(private client: Client) {}
+    constructor(private client: ClientBase) {}
 
-    public getClient(): Client {
+    public getClient(): ClientBase {
         const executor = this.getCurrentExecutor();
         if (!executor) {
             throw new Error("Unit of work not started");
@@ -62,12 +61,12 @@ export class PostgresUnitOfWorkForTesting
         return this.client;
     }
 
-    async query<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+    async withClient<T>(fn: (client: ClientBase) => Promise<T>): Promise<T> {
         return fn(this.client);
     }
 
     async wrap<T = unknown>(
-        fn: (client: Client) => Promise<T>,
+        fn: (client: ClientBase) => Promise<T>,
         options: Partial<PostgresTransactionOptions> = {}
     ): Promise<T> {
         const resolvedOptions = this.resolveOptions(options);
@@ -125,12 +124,12 @@ class TestTransactionExecutor {
     private savepoints: TestSavepoint[] = [];
     private savepointName: string;
 
-    constructor(private readonly client: Client) {
+    constructor(private readonly client: ClientBase) {
         this.savepointName = `test_sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     }
 
     public async execute<T>(
-        fn: (client: Client) => Promise<T>,
+        fn: (client: ClientBase) => Promise<T>,
         options: PostgresTransactionOptions
     ): Promise<T> {
         await this.ensureStarted();
@@ -141,7 +140,7 @@ class TestTransactionExecutor {
             : executor.execute(fn, options);
     }
 
-    public getClient(): Client {
+    public getClient(): ClientBase {
         return this.client;
     }
 
@@ -155,7 +154,7 @@ class TestTransactionExecutor {
     }
 
     private async runWithLifecycle<T>(
-        fn: (client: Client) => Promise<T>
+        fn: (client: ClientBase) => Promise<T>
     ): Promise<T> {
         try {
             return await this.executeWithNesting(fn);
@@ -168,7 +167,7 @@ class TestTransactionExecutor {
     }
 
     private async executeWithNesting<T>(
-        fn: (client: Client) => Promise<T>
+        fn: (client: ClientBase) => Promise<T>
     ): Promise<T> {
         this.nestingDepth++;
         try {
@@ -257,11 +256,13 @@ class TestSavepoint {
 
     constructor(
         private readonly name: string,
-        private readonly client: Client,
+        private readonly client: ClientBase,
         private readonly onClose: () => void
     ) {}
 
-    public async execute<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+    public async execute<T>(
+        fn: (client: ClientBase) => Promise<T>
+    ): Promise<T> {
         await this.ensureStarted();
         return this.runWithLifecycle(fn);
     }
@@ -280,7 +281,7 @@ class TestSavepoint {
     }
 
     private async runWithLifecycle<T>(
-        fn: (client: Client) => Promise<T>
+        fn: (client: ClientBase) => Promise<T>
     ): Promise<T> {
         this.nestingDepth++;
         try {

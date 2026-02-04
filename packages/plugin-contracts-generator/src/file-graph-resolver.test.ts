@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import path from "path";
 
 import { FileGraphResolver } from "./file-graph-resolver";
+import { ContextConfig } from "./context-config";
 import type { FileGraph, FileNode, ImportInfo } from "./file-graph-resolver";
+
+function createTestContextConfig(sourceDir: string): ContextConfig {
+    return ContextConfig.createSync("test-context", sourceDir);
+}
 
 describe("FileGraphResolver", () => {
     const fixtureRoot = path.resolve(
@@ -12,7 +17,9 @@ describe("FileGraphResolver", () => {
 
     describe("single file with no local dependencies", () => {
         it("should create a graph with one node for an entry point that has no local imports", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(fixtureRoot, "is-empty.ts");
 
             const graph = await resolver.buildGraph([entryPoint], fixtureRoot);
@@ -31,7 +38,9 @@ describe("FileGraphResolver", () => {
 
     describe("direct local dependency", () => {
         it("should include directly imported local file in the graph", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(fixtureRoot, "foo.validator.ts");
 
             const graph = await resolver.buildGraph([entryPoint], fixtureRoot);
@@ -60,7 +69,9 @@ describe("FileGraphResolver", () => {
 
     describe("transitive dependencies", () => {
         it("should follow imports transitively using BFS", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 fixtureRoot,
                 "commands-but-different-filename.ts"
@@ -89,7 +100,9 @@ describe("FileGraphResolver", () => {
 
     describe("external package imports", () => {
         it("should mark external package imports with isExternal true and resolvedPath null", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 fixtureRoot,
                 "commands-but-different-filename.ts"
@@ -112,7 +125,9 @@ describe("FileGraphResolver", () => {
 
     describe("path alias imports", () => {
         it("should treat unresolved path aliases as external imports", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 fixtureRoot,
                 "commands-but-different-filename.ts"
@@ -140,7 +155,9 @@ describe("FileGraphResolver", () => {
         );
 
         it("should follow 'export * from' and 'export { X } from' declarations as dependencies", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(barrelExportFixtureRoot, "entry.ts");
 
             const graph = await resolver.buildGraph(
@@ -169,7 +186,9 @@ describe("FileGraphResolver", () => {
         });
 
         it("should include export declaration info in the imports array", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(barrelExportFixtureRoot, "entry.ts");
 
             const graph = await resolver.buildGraph(
@@ -199,10 +218,21 @@ describe("FileGraphResolver", () => {
         );
         const pathAliasSrcRoot = path.join(pathAliasFixtureRoot, "src");
 
+        async function createPathAliasContextConfig(): Promise<ContextConfig> {
+            return ContextConfig.create(
+                {
+                    name: "path-alias-test",
+                    path: ".",
+                    sourceDir: "src",
+                    tsconfigPath: "tsconfig.json",
+                },
+                pathAliasFixtureRoot
+            );
+        }
+
         it("should resolve path alias when tsconfig is provided", async () => {
-            const resolver = await FileGraphResolver.create({
-                tsconfigPath: path.join(pathAliasFixtureRoot, "tsconfig.json"),
-            });
+            const contextConfig = await createPathAliasContextConfig();
+            const resolver = FileGraphResolver.create({ contextConfig });
             const entryPoint = path.join(pathAliasSrcRoot, "events.ts");
 
             const graph = await resolver.buildGraph(
@@ -224,9 +254,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should include resolved path alias dependencies in the graph", async () => {
-            const resolver = await FileGraphResolver.create({
-                tsconfigPath: path.join(pathAliasFixtureRoot, "tsconfig.json"),
-            });
+            const contextConfig = await createPathAliasContextConfig();
+            const resolver = FileGraphResolver.create({ contextConfig });
             const entryPoint = path.join(pathAliasSrcRoot, "events.ts");
 
             const graph = await resolver.buildGraph(
@@ -247,9 +276,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should still treat external packages as external even with tsconfig", async () => {
-            const resolver = await FileGraphResolver.create({
-                tsconfigPath: path.join(pathAliasFixtureRoot, "tsconfig.json"),
-            });
+            const contextConfig = await createPathAliasContextConfig();
+            const resolver = FileGraphResolver.create({ contextConfig });
             const entryPoint = path.join(pathAliasSrcRoot, "events.ts");
 
             const graph = await resolver.buildGraph(
@@ -274,7 +302,8 @@ describe("FileGraphResolver", () => {
         );
 
         it("should exclude dependencies matching *.test.ts pattern", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: ["**/*.test.ts"],
             });
             const entryPoint = path.join(
@@ -295,7 +324,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should exclude dependencies matching *.spec.ts pattern", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: ["**/*.spec.ts"],
             });
             const entryPoint = path.join(
@@ -316,7 +346,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should exclude dependencies matching *.eh.ts pattern (event handlers)", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: ["**/*.eh.ts"],
             });
             const entryPoint = path.join(
@@ -337,7 +368,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should exclude dependencies matching **/db.ts pattern", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: ["**/db.ts"],
             });
             const entryPoint = path.join(
@@ -355,7 +387,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should exclude dependencies matching **/infra/** pattern", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: ["**/infra/**"],
             });
             const entryPoint = path.join(
@@ -376,7 +409,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should include non-matching dependencies normally", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: [
                     "**/*.test.ts",
                     "**/*.spec.ts",
@@ -407,7 +441,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should exclude all matching patterns when multiple patterns provided", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: [
                     "**/*.test.ts",
                     "**/*.spec.ts",
@@ -437,7 +472,8 @@ describe("FileGraphResolver", () => {
         });
 
         it("should populate excludedPaths with all excluded dependency paths", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: [
                     "**/*.test.ts",
                     "**/*.spec.ts",
@@ -490,7 +526,9 @@ describe("FileGraphResolver", () => {
         });
 
         it("should have empty excludedPaths when no dependencies are excluded", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 excludePatternsFixtureRoot,
                 "query.ts"

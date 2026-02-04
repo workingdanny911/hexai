@@ -1,12 +1,12 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import type { ProcessContextResult } from "../../src/index";
+import type { ProcessContextResult } from "@/index";
 import {
     E2ETestContext,
     expectGeneratedFiles,
     expectFileContains,
-} from "../helpers";
+} from "@e2e/helpers";
 
 describe("E2E: tsconfig.json Path Alias Resolution", () => {
     const ctx = new E2ETestContext("path-alias");

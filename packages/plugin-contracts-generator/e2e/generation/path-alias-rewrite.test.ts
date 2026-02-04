@@ -1,12 +1,12 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import type { ProcessContextResult } from "../../src/index";
+import type { ProcessContextResult } from "@/index";
 import {
     E2ETestContext,
     expectGeneratedFiles,
     expectFileContains,
-} from "../helpers";
+} from "@e2e/helpers";
 
 /*
  * Example transformation tested:
@@ -20,11 +20,16 @@ describe("E2E: Path Alias Transformation", () => {
         await ctx.setup();
 
         // Custom path alias rewrites for this test (override default @/decorators handling)
+        // We explicitly disable tsconfig loading so that @/decorators is NOT resolved to
+        // the internal decorators folder, allowing pathAliasRewrites to apply instead.
         const pathAliasRewrites = new Map<string, string>([
             ["@/decorators", "@libera/decorators"],
         ]);
 
-        result = await ctx.runParser({ pathAliasRewrites });
+        result = await ctx.runParser({
+            pathAliasRewrites,
+            tsconfigPath: "nonexistent.json",
+        });
     });
 
     afterAll(async () => {

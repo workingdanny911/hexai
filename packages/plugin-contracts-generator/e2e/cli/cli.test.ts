@@ -47,7 +47,7 @@ describe("CLI E2E", () => {
                 contexts: [
                     {
                         name: "lecture",
-                        sourceDir: join(fixturesDir, "lecture", "src"),
+                        path: join(fixturesDir, "lecture"),
                     },
                 ],
             },
@@ -69,21 +69,13 @@ describe("CLI E2E", () => {
                     contexts: [
                         {
                             name: "orders",
-                            sourceDir: join(
-                                fixturesDir,
-                                "multi-context",
-                                "src",
-                                "orders"
-                            ),
+                            path: join(fixturesDir, "multi-context"),
+                            sourceDir: "src/orders",
                         },
                         {
                             name: "inventory",
-                            sourceDir: join(
-                                fixturesDir,
-                                "multi-context",
-                                "src",
-                                "inventory"
-                            ),
+                            path: join(fixturesDir, "multi-context"),
+                            sourceDir: "src/inventory",
                         },
                     ],
                 },
@@ -103,7 +95,7 @@ describe("CLI E2E", () => {
                     contexts: [
                         {
                             name: "path-alias",
-                            sourceDir: join(fixturesDir, "path-alias", "src"),
+                            path: join(fixturesDir, "path-alias"),
                         },
                     ],
                     pathAliasRewrites: {
@@ -177,13 +169,13 @@ describe("CLI E2E", () => {
             ).rejects.toThrow("Missing 'contracts' section");
         });
 
-        it("should throw error for invalid context (missing sourceDir)", async () => {
+        it("should throw error for invalid context (missing path)", async () => {
             const config = {
                 contracts: {
                     contexts: [
                         {
                             name: "test",
-                            // missing sourceDir
+                            // missing path
                         },
                     ],
                 },
@@ -194,7 +186,7 @@ describe("CLI E2E", () => {
 
             await expect(
                 run(["--config", configPath, "--output-dir", contractsDir])
-            ).rejects.toThrow("missing 'sourceDir'");
+            ).rejects.toThrow("missing 'path'");
         });
 
         it("should throw error for non-existent config file", async () => {
@@ -217,11 +209,7 @@ describe("CLI E2E", () => {
                     contexts: [
                         {
                             name: "decorator-removal",
-                            sourceDir: join(
-                                fixturesDir,
-                                "decorator-removal",
-                                "src"
-                            ),
+                            path: join(fixturesDir, "decorator-removal"),
                         },
                     ],
                     removeDecorators: true,
@@ -253,11 +241,7 @@ describe("CLI E2E", () => {
                     contexts: [
                         {
                             name: "decorator-removal",
-                            sourceDir: join(
-                                fixturesDir,
-                                "decorator-removal",
-                                "src"
-                            ),
+                            path: join(fixturesDir, "decorator-removal"),
                         },
                     ],
                     removeDecorators: true,
@@ -289,11 +273,7 @@ describe("CLI E2E", () => {
                     contexts: [
                         {
                             name: "decorator-removal",
-                            sourceDir: join(
-                                fixturesDir,
-                                "decorator-removal",
-                                "src"
-                            ),
+                            path: join(fixturesDir, "decorator-removal"),
                         },
                     ],
                     // removeDecorators not set (defaults to true)
@@ -324,11 +304,7 @@ describe("CLI E2E", () => {
                     contexts: [
                         {
                             name: "decorator-removal",
-                            sourceDir: join(
-                                fixturesDir,
-                                "decorator-removal",
-                                "src"
-                            ),
+                            path: join(fixturesDir, "decorator-removal"),
                         },
                     ],
                     removeDecorators: false,
@@ -597,11 +573,7 @@ describe("runWithConfig E2E", () => {
                     contexts: [
                         {
                             name: "decorator-removal",
-                            sourceDir: join(
-                                fixturesDir,
-                                "decorator-removal",
-                                "src"
-                            ),
+                            path: join(fixturesDir, "decorator-removal"),
                         },
                     ],
                     // removeDecorators intentionally not set
@@ -632,11 +604,7 @@ describe("runWithConfig E2E", () => {
                     contexts: [
                         {
                             name: "decorator-removal",
-                            sourceDir: join(
-                                fixturesDir,
-                                "decorator-removal",
-                                "src"
-                            ),
+                            path: join(fixturesDir, "decorator-removal"),
                         },
                     ],
                     removeDecorators: true,
@@ -663,11 +631,7 @@ describe("runWithConfig E2E", () => {
                     contexts: [
                         {
                             name: "decorator-removal",
-                            sourceDir: join(
-                                fixturesDir,
-                                "decorator-removal",
-                                "src"
-                            ),
+                            path: join(fixturesDir, "decorator-removal"),
                         },
                     ],
                     removeDecorators: false,

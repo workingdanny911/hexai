@@ -1,9 +1,9 @@
-import * as ts from "typescript";
-import * as path from "path";
+import ts from "typescript";
+import path from "path";
 import { minimatch } from "minimatch";
 
 import { extractImportedNames } from "./import-analyzer";
-import { TsconfigLoader, PathAliasConfig } from "./tsconfig-loader";
+import { ContextConfig } from "./context-config";
 import { FileReadError } from "./errors";
 import { FileSystem, nodeFileSystem } from "./file-system";
 
@@ -31,46 +31,30 @@ export interface FileGraph {
 }
 
 export interface FileGraphResolverOptions {
-    tsconfigPath?: string;
-    pathAliasConfig?: PathAliasConfig;
+    contextConfig: ContextConfig;
     fileSystem?: FileSystem;
     excludeDependencies?: string[];
 }
 
 export class FileGraphResolver {
-    private readonly pathAliasConfig: PathAliasConfig | null;
+    private readonly contextConfig: ContextConfig;
     private readonly fs: FileSystem;
     private readonly excludeDependencies: string[];
 
     private constructor(
-        pathAliasConfig: PathAliasConfig | null,
+        contextConfig: ContextConfig,
         fileSystem: FileSystem,
         excludeDependencies: string[]
     ) {
-        this.pathAliasConfig = pathAliasConfig;
+        this.contextConfig = contextConfig;
         this.fs = fileSystem;
         this.excludeDependencies = excludeDependencies;
     }
 
-    static async create(options?: FileGraphResolverOptions): Promise<FileGraphResolver> {
-        const fs = options?.fileSystem ?? nodeFileSystem;
-        const pathAliasConfig = await FileGraphResolver.loadPathAliasConfig(options, fs);
-        const excludeDependencies = options?.excludeDependencies ?? [];
-        return new FileGraphResolver(pathAliasConfig, fs, excludeDependencies);
-    }
-
-    private static async loadPathAliasConfig(
-        options: FileGraphResolverOptions | undefined,
-        fileSystem: FileSystem
-    ): Promise<PathAliasConfig | null> {
-        if (options?.pathAliasConfig) {
-            return options.pathAliasConfig;
-        }
-        if (options?.tsconfigPath) {
-            const loader = new TsconfigLoader();
-            return loader.load(options.tsconfigPath);
-        }
-        return null;
+    static create(options: FileGraphResolverOptions): FileGraphResolver {
+        const fs = options.fileSystem ?? nodeFileSystem;
+        const excludeDependencies = options.excludeDependencies ?? [];
+        return new FileGraphResolver(options.contextConfig, fs, excludeDependencies);
     }
 
     async buildGraph(entryPoints: string[], sourceRoot: string): Promise<FileGraph> {
@@ -88,7 +72,7 @@ export class FileGraphResolver {
             }
             visited.add(filePath);
 
-            const imports = await this.extractImports(filePath, sourceRoot);
+            const imports = await this.extractImports(filePath);
 
             const node: FileNode = {
                 absolutePath: filePath,
@@ -108,7 +92,7 @@ export class FileGraphResolver {
         };
     }
 
-    private async extractImports(filePath: string, sourceRoot: string): Promise<ImportInfo[]> {
+    private async extractImports(filePath: string): Promise<ImportInfo[]> {
         const sourceCode = await this.readSourceFile(filePath);
         const sourceFile = ts.createSourceFile(
             filePath,
@@ -125,11 +109,7 @@ export class FileGraphResolver {
                 continue;
             }
 
-            const resolution = await this.resolveModule(
-                moduleSpecifier,
-                filePath,
-                sourceRoot
-            );
+            const resolution = await this.resolveModule(moduleSpecifier, filePath);
 
             const importedNames = this.extractImportedNamesFromNode(node);
 
@@ -172,8 +152,7 @@ export class FileGraphResolver {
 
     private async resolveModule(
         moduleSpecifier: string,
-        fromFile: string,
-        sourceRoot: string
+        fromFile: string
     ): Promise<{ resolvedPath: string | null; isExternal: boolean }> {
         if (moduleSpecifier.startsWith(".")) {
             const resolvedPath = await this.resolveRelativeModule(
@@ -183,74 +162,7 @@ export class FileGraphResolver {
             return { resolvedPath, isExternal: false };
         }
 
-        const pathAliasResolved = await this.resolvePathAlias(
-            moduleSpecifier,
-            sourceRoot
-        );
-        if (pathAliasResolved) {
-            return { resolvedPath: pathAliasResolved, isExternal: false };
-        }
-
-        return { resolvedPath: null, isExternal: true };
-    }
-
-    private async resolvePathAlias(
-        moduleSpecifier: string,
-        sourceRoot: string
-    ): Promise<string | null> {
-        if (!this.pathAliasConfig) {
-            return null;
-        }
-
-        for (const [pattern, targets] of this.pathAliasConfig.paths) {
-            const wildcardMatch = this.matchPathPattern(moduleSpecifier, pattern);
-            if (wildcardMatch === null) {
-                continue;
-            }
-
-            const resolvedPath = await this.resolveFirstMatchingTarget(
-                targets,
-                wildcardMatch,
-                sourceRoot
-            );
-            if (resolvedPath) {
-                return resolvedPath;
-            }
-        }
-
-        return null;
-    }
-
-    private async resolveFirstMatchingTarget(
-        targets: string[],
-        wildcardMatch: string,
-        sourceRoot: string
-    ): Promise<string | null> {
-        for (const target of targets) {
-            const resolvedTarget = target.replace("*", wildcardMatch);
-            const resolvedPath = await this.tryResolveWithExtensions(resolvedTarget);
-
-            const isWithinSourceRoot = resolvedPath?.startsWith(sourceRoot);
-            if (isWithinSourceRoot) {
-                return resolvedPath;
-            }
-        }
-        return null;
-    }
-
-    private matchPathPattern(
-        moduleSpecifier: string,
-        pattern: string
-    ): string | null {
-        if (pattern.endsWith("*")) {
-            const prefix = pattern.slice(0, -1);
-            if (moduleSpecifier.startsWith(prefix)) {
-                return moduleSpecifier.slice(prefix.length);
-            }
-        } else if (moduleSpecifier === pattern) {
-            return "";
-        }
-        return null;
+        return this.contextConfig.resolvePath(moduleSpecifier);
     }
 
     private queueUnvisitedLocalDependencies(

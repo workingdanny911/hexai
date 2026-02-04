@@ -150,7 +150,10 @@ export default {
 };
 ```
 
-Each matched package must have its own `application.config.ts` with `contextName` and `sourceDir`.
+Each matched directory is treated as a context with sensible defaults:
+- Context name = directory name (e.g., `packages/auth` → `auth`)
+- Source directory = `src/` (default)
+- TypeScript config = `tsconfig.json` (auto-detected if exists)
 
 ### Response Types
 
@@ -313,7 +316,7 @@ try {
 **Error hierarchy:**
 
 - `MessageParserError` (base)
-  - `ConfigurationError` → `ConfigLoadError`, `TsconfigLoadError`
+  - `ConfigurationError` → `ConfigLoadError`
   - `FileSystemError` → `FileNotFoundError`, `FileReadError`, `FileWriteError`
   - `ParseError` → `JsonParseError`
   - `ResolutionError` → `ModuleResolutionError`

@@ -3,11 +3,11 @@ export default {
         contexts: [
             {
                 name: "lecture",
-                sourceDir: "packages/lecture/src",
+                path: "packages/lecture",
             },
             {
                 name: "video-lesson",
-                sourceDir: "packages/video-lesson/src",
+                path: "packages/video-lesson",
             },
         ],
         pathAliasRewrites: {

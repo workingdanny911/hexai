@@ -3,7 +3,7 @@ import {
     E2ETestContext,
     expectFileContains,
     expectTypeScriptCompiles,
-} from "../helpers";
+} from "@e2e/helpers";
 
 describe("E2E: Dependency Extraction", () => {
     /**
@@ -30,14 +30,18 @@ describe("E2E: Dependency Extraction", () => {
             // When a local interface extends an imported type,
             // that imported type must be included in the generated imports
             await expectFileContains(
-                ctx.getOutputFile("dependency-extraction/query-with-extends.ts"),
+                ctx.getOutputFile(
+                    "dependency-extraction/query-with-extends.ts"
+                ),
                 ["import", "BaseProfile", 'from "./base-types"']
             );
         });
 
         it("should include the local interface that extends the imported type", async () => {
             await expectFileContains(
-                ctx.getOutputFile("dependency-extraction/query-with-extends.ts"),
+                ctx.getOutputFile(
+                    "dependency-extraction/query-with-extends.ts"
+                ),
                 ["export interface ExtendedProfile extends BaseProfile"]
             );
         });
@@ -61,14 +65,18 @@ describe("E2E: Dependency Extraction", () => {
             // When a method body calls imported functions,
             // those functions must be included in the generated imports
             await expectFileContains(
-                ctx.getOutputFile("dependency-extraction/query-with-extends.ts"),
+                ctx.getOutputFile(
+                    "dependency-extraction/query-with-extends.ts"
+                ),
                 ["import", "generateId", 'from "./base-types"']
             );
         });
 
         it("should import all functions called in method body", async () => {
             await expectFileContains(
-                ctx.getOutputFile("dependency-extraction/query-with-extends.ts"),
+                ctx.getOutputFile(
+                    "dependency-extraction/query-with-extends.ts"
+                ),
                 ["import", "formatDate", 'from "./base-types"']
             );
         });

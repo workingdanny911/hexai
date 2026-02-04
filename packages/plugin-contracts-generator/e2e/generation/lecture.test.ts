@@ -6,8 +6,8 @@ import {
     expectExtractionResult,
     expectEvents,
     expectCommands,
-} from "../helpers";
-import type { ProcessContextResult } from "../../src/index";
+} from "@e2e/helpers";
+import type { ProcessContextResult } from "@/index";
 
 describe("E2E: Message Parser", () => {
     const ctx = new E2ETestContext("lecture");
@@ -51,40 +51,45 @@ describe("E2E: Message Parser", () => {
 
         describe("events.ts", () => {
             it("should contain event classes", async () => {
-                await expectFileContains(ctx.getOutputFile("lecture/events.ts"), [
-                    "export class LectureCreated",
-                    "export class LectureDeleted",
-                ]);
+                await expectFileContains(
+                    ctx.getOutputFile("lecture/events.ts"),
+                    [
+                        "export class LectureCreated",
+                        "export class LectureDeleted",
+                    ]
+                );
             });
 
             it("should include event fields", async () => {
-                await expectFileContains(ctx.getOutputFile("lecture/events.ts"), [
-                    "lectureId",
-                ]);
+                await expectFileContains(
+                    ctx.getOutputFile("lecture/events.ts"),
+                    ["lectureId"]
+                );
             });
         });
 
         describe("commands.ts", () => {
             it("should contain command classes", async () => {
-                await expectFileContains(ctx.getOutputFile("lecture/commands.ts"), [
-                    "export class CreateLecture",
-                ]);
+                await expectFileContains(
+                    ctx.getOutputFile("lecture/commands.ts"),
+                    ["export class CreateLecture"]
+                );
             });
 
             it("should include command fields", async () => {
-                await expectFileContains(ctx.getOutputFile("lecture/commands.ts"), [
-                    "title",
-                    "instructorId",
-                ]);
+                await expectFileContains(
+                    ctx.getOutputFile("lecture/commands.ts"),
+                    ["title", "instructorId"]
+                );
             });
         });
 
         describe("index.ts", () => {
             it("should re-export entry point files", async () => {
-                await expectFileContains(ctx.getOutputFile("lecture/index.ts"), [
-                    "export * from './events'",
-                    "export * from './commands'",
-                ]);
+                await expectFileContains(
+                    ctx.getOutputFile("lecture/index.ts"),
+                    ["export * from './events'", "export * from './commands'"]
+                );
             });
         });
     });

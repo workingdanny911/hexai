@@ -1,6 +1,6 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
 import { E2ETestContext, importGeneratedModule } from "../helpers";
-import type { ProcessContextResult } from "../../src/index";
+import type { ProcessContextResult } from "@/index";
 
 describe("Runtime: Class Support", () => {
     const ctx = new E2ETestContext("class-support");
@@ -130,7 +130,9 @@ describe("Runtime: Class Support", () => {
                 LessonCredit: new (value: number) => unknown;
             }>(ctx.getOutputFile("lecture", "domain.ts"));
 
-            expect(() => new LessonCredit(101)).toThrow("Invalid lesson credit");
+            expect(() => new LessonCredit(101)).toThrow(
+                "Invalid lesson credit"
+            );
         });
 
         it("should throw on value <= 0", async () => {
@@ -160,7 +162,10 @@ describe("Runtime: Class Support", () => {
     describe("LessonPrice Domain Object", () => {
         it("should create with valid amount", async () => {
             const { LessonPrice } = await importGeneratedModule<{
-                LessonPrice: new (amount: number, currency: string) => {
+                LessonPrice: new (
+                    amount: number,
+                    currency: string
+                ) => {
                     amount: number;
                     currency: string;
                 };
@@ -186,15 +191,23 @@ describe("Runtime: Class Support", () => {
                 LessonPrice: new (amount: number, currency: string) => unknown;
             }>(ctx.getOutputFile("lecture", "domain.ts"));
 
-            expect(() => new LessonPrice(0, "KRW")).toThrow("Invalid lesson price");
+            expect(() => new LessonPrice(0, "KRW")).toThrow(
+                "Invalid lesson price"
+            );
         });
 
         it("should apply discount correctly", async () => {
             const { LessonPrice } = await importGeneratedModule<{
-                LessonPrice: new (amount: number, currency: string) => {
+                LessonPrice: new (
+                    amount: number,
+                    currency: string
+                ) => {
                     amount: number;
                     currency: string;
-                    applyDiscount(percent: number): { amount: number; currency: string };
+                    applyDiscount(percent: number): {
+                        amount: number;
+                        currency: string;
+                    };
                 };
             }>(ctx.getOutputFile("lecture", "domain.ts"));
 

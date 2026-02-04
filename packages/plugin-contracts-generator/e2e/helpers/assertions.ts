@@ -2,14 +2,20 @@ import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { expect } from "vitest";
-import type { ProcessContextResult } from "../../src/index";
+import type { ProcessContextResult } from "@/index";
 
 export function expectFileExists(filePath: string, message?: string): void {
-    expect(existsSync(filePath), message ?? `File should exist: ${filePath}`).toBe(true);
+    expect(
+        existsSync(filePath),
+        message ?? `File should exist: ${filePath}`
+    ).toBe(true);
 }
 
 export function expectFileNotExists(filePath: string, message?: string): void {
-    expect(existsSync(filePath), message ?? `File should not exist: ${filePath}`).toBe(false);
+    expect(
+        existsSync(filePath),
+        message ?? `File should not exist: ${filePath}`
+    ).toBe(false);
 }
 
 export async function expectFileContains(
@@ -20,7 +26,10 @@ export async function expectFileContains(
     const patternList = Array.isArray(patterns) ? patterns : [patterns];
 
     for (const pattern of patternList) {
-        expect(content, `File ${filePath} should contain "${pattern}"`).toContain(pattern);
+        expect(
+            content,
+            `File ${filePath} should contain "${pattern}"`
+        ).toContain(pattern);
     }
 }
 
@@ -32,7 +41,10 @@ export async function expectFileNotContains(
     const patternList = Array.isArray(patterns) ? patterns : [patterns];
 
     for (const pattern of patternList) {
-        expect(content, `File ${filePath} should not contain "${pattern}"`).not.toContain(pattern);
+        expect(
+            content,
+            `File ${filePath} should not contain "${pattern}"`
+        ).not.toContain(pattern);
     }
 }
 
@@ -45,7 +57,10 @@ export function expectGeneratedFiles(
 
     for (const file of expectedFiles) {
         const filePath = join(contextDir, file);
-        expectFileExists(filePath, `Expected file ${file} to exist in ${contextName}/`);
+        expectFileExists(
+            filePath,
+            `Expected file ${file} to exist in ${contextName}/`
+        );
     }
 }
 
@@ -73,7 +88,10 @@ export function expectEvent(
     eventName: string
 ): void {
     const eventNames = result.events.map((e) => e.name);
-    expect(eventNames, `Expected event "${eventName}" to be extracted`).toContain(eventName);
+    expect(
+        eventNames,
+        `Expected event "${eventName}" to be extracted`
+    ).toContain(eventName);
 }
 
 export function expectCommand(
@@ -81,7 +99,10 @@ export function expectCommand(
     commandName: string
 ): void {
     const commandNames = result.commands.map((c) => c.name);
-    expect(commandNames, `Expected command "${commandName}" to be extracted`).toContain(commandName);
+    expect(
+        commandNames,
+        `Expected command "${commandName}" to be extracted`
+    ).toContain(commandName);
 }
 
 export function expectEvents(

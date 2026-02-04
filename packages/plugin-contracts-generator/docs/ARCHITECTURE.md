@@ -314,10 +314,21 @@ class TsconfigLoader {
 Loads contracts configuration from `application.config.ts`.
 
 ```typescript
-interface ContextConfig {
-  readonly name: string           // Context name (e.g., 'lecture')
-  readonly sourceDir: string      // Source directory to scan
-  readonly tsconfigPath?: string  // Optional path alias config
+// Input interface for user configuration
+interface InputContextConfig {
+  readonly name: string             // Context name (e.g., 'lecture')
+  readonly path: string             // Base path to context (e.g., 'packages/lecture')
+  readonly sourceDir?: string       // Source subdirectory (default: 'src')
+  readonly tsconfigPath?: string    // TypeScript config (default: 'tsconfig.json', auto-detected)
+}
+
+// Class with path resolution capabilities (created via factory method)
+class ContextConfig {
+  readonly name: string
+  readonly sourceDir: string        // Absolute path
+
+  static async create(input: InputContextConfig, configDir: string): Promise<ContextConfig>
+  async resolvePath(moduleSpecifier: string): Promise<{ resolvedPath: string | null; isExternal: boolean }>
 }
 
 interface OutputPackageConfig {
@@ -341,15 +352,10 @@ class ConfigLoadError extends Error {
 }
 ```
 
-**Context Resolution**:
-- String path: `'packages/lecture'` → Load application.config.ts from that package
-- Glob pattern: `'packages/*'` → Automatically discover all matching packages
-- Object: `{ name, sourceDir, tsconfigPath? }`
-
-**Package Config Requirements**:
-- `contextName`: Required, context name
-- `sourceDir`: Required, source directory to scan
-- `tsconfigPath`: Optional, path alias config path
+**Context Resolution** (Convention over Configuration):
+- String path: `'packages/lecture'` → name = 'lecture', sourceDir = 'src', tsconfig auto-detected
+- Glob pattern: `'packages/*'` → Each directory resolved with same defaults
+- Object: `{ name, path, sourceDir?, tsconfigPath? }` → Explicit configuration with optional overrides
 
 ---
 
@@ -575,8 +581,7 @@ Provides a domain-specific error hierarchy.
 ```
 MessageParserError (base)
 ├── ConfigurationError
-│   ├── ConfigLoadError
-│   └── TsconfigLoadError
+│   └── ConfigLoadError
 ├── FileSystemError
 │   ├── FileNotFoundError
 │   ├── FileReadError
@@ -997,8 +1002,7 @@ noopLogger      // Singleton instance
 // Error Classes
 MessageParserError
 ├── ConfigurationError
-│   ├── ConfigLoadError
-│   └── TsconfigLoadError
+│   └── ConfigLoadError
 ├── FileSystemError
 │   ├── FileNotFoundError
 │   ├── FileReadError

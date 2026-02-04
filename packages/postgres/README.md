@@ -30,19 +30,28 @@ The `PostgresUnitOfWork` implements `UnitOfWork` from `@hexaijs/core`. It manage
 
 ```typescript
 import * as pg from "pg";
-import { PostgresUnitOfWork } from "@hexaijs/postgres";
+import { createPostgresUnitOfWork } from "@hexaijs/postgres";
 
-// Create with a client factory
+// From connection pool (recommended for production)
 const pool = new pg.Pool({ connectionString: "postgres://..." });
-const unitOfWork = new PostgresUnitOfWork(
+const unitOfWork = createPostgresUnitOfWork(pool);
+
+// From connection string
+const unitOfWork = createPostgresUnitOfWork("postgres://user:pass@localhost:5432/mydb");
+
+// From PostgresConfig
+const unitOfWork = createPostgresUnitOfWork(PostgresConfig.fromEnv("DB"));
+```
+
+For advanced use cases, you can use `DefaultPostgresUnitOfWork` directly:
+
+```typescript
+import { DefaultPostgresUnitOfWork } from "@hexaijs/postgres";
+
+// Custom client factory with custom cleanup
+const unitOfWork = new DefaultPostgresUnitOfWork(
     () => new pg.Client({ connectionString: "postgres://..." }),
     (client) => client.end()  // cleanup function
-);
-
-// Or use a connection pool
-const pooledUnitOfWork = new PostgresUnitOfWork(
-    async () => await pool.connect(),
-    (client) => (client as pg.PoolClient).release()
 );
 ```
 
@@ -71,30 +80,30 @@ const client = ctx.getUnitOfWork().getClient();
 await client.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
 ```
 
-### Query Execution (No Transaction)
+### Client Access Without Transaction
 
-Use `query()` for read-only operations without transaction overhead. This implements the `QueryableUnitOfWork` interface from `@hexaijs/core`.
+Use `withClient()` for operations without transaction overhead. Useful for read-only queries or when you need direct client access.
 
 ```typescript
 // Simple read without transaction (autocommit)
-const user = await unitOfWork.query(async (client) => {
+const user = await unitOfWork.withClient(async (client) => {
     const result = await client.query("SELECT * FROM users WHERE id = $1", [userId]);
     return result.rows[0];
 });
 ```
 
-The `query()` method is context-aware:
+The `withClient()` method is context-aware:
 
 | Context | Behavior |
 |---------|----------|
-| Outside transaction | New connection from factory → query → cleanup |
+| Outside transaction | New connection from factory → work → cleanup |
 | Inside transaction | Reuses existing transaction's client |
 
-This means you can safely use `query()` anywhere in your code:
+This means you can safely use `withClient()` anywhere in your code:
 
 ```typescript
 // Outside any transaction - gets its own connection
-const users = await unitOfWork.query(async (client) => {
+const users = await unitOfWork.withClient(async (client) => {
     return await client.query("SELECT * FROM users");
 });
 
@@ -103,19 +112,19 @@ await unitOfWork.wrap(async (txClient) => {
     await txClient.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
 
     // Uses the same txClient, sees uncommitted changes
-    const order = await unitOfWork.query(async (client) => {
+    const order = await unitOfWork.withClient(async (client) => {
         // client === txClient
         return await client.query("SELECT * FROM orders WHERE id = $1", [orderId]);
     });
 });
 ```
 
-**When to use `wrap()` vs `query()`:**
+**When to use `wrap()` vs `withClient()`:**
 
 | Method | Transaction | Overhead | Use Case |
 |--------|-------------|----------|----------|
 | `wrap()` | Yes | BEGIN + COMMIT | Commands (INSERT, UPDATE, DELETE) |
-| `query()` | No | Connection only | Queries (SELECT) |
+| `withClient()` | No | Connection only | Queries (SELECT) |
 
 ### Transaction Propagation
 
@@ -322,7 +331,7 @@ await ensureConnection(client);  // Safe to call multiple times
 
 ### PostgresUnitOfWorkForTesting
 
-A test-specific `QueryableUnitOfWork` implementation that runs inside an external transaction. This allows tests to rollback all changes after each test, keeping the database clean without truncating tables.
+A test-specific `PostgresUnitOfWork` implementation that runs inside an external transaction. This allows tests to rollback all changes after each test, keeping the database clean without truncating tables.
 
 ```typescript
 import { PostgresUnitOfWorkForTesting } from "@hexaijs/postgres/test";
@@ -368,7 +377,7 @@ describe("OrderService", () => {
 
 **Key behaviors:**
 
-- **`query()` method**: Uses the test client directly, always within the external transaction context.
+- **`withClient()` method**: Uses the test client directly, always within the external transaction context.
 - **abortError propagation**: When a nested `EXISTING` operation throws (even if caught), the entire transaction is marked as aborted and will rollback - matching production behavior.
 - **NESTED savepoints**: `Propagation.NESTED` creates independent savepoints that can rollback without affecting the parent.
 - **Propagation.NEW**: Logs a warning and creates a new savepoint instead (true separate transactions are not possible within the external transaction).
@@ -413,8 +422,10 @@ await uow.wrap(async (c) => {
 
 | Export | Description |
 |--------|-------------|
-| `PostgresUnitOfWork` | Transaction and query management implementing `QueryableUnitOfWork` |
-| `PostgresUnitOfWorkForTesting` | Test-specific QueryableUnitOfWork that runs inside external transaction |
+| `createPostgresUnitOfWork` | Factory function to create PostgresUnitOfWork from Pool or Config |
+| `PostgresUnitOfWork` | Interface extending UnitOfWork with `withClient()` method |
+| `DefaultPostgresUnitOfWork` | Default implementation of PostgresUnitOfWork with transaction management |
+| `PostgresUnitOfWorkForTesting` | Test-specific PostgresUnitOfWork that runs inside external transaction |
 | `PostgresEventStore` | Event store implementation with batch insert support |
 | `PostgresConfig` | Immutable configuration with builder pattern |
 | `postgresConfig` | Config spec for `defineConfig` integration |
@@ -425,8 +436,51 @@ await uow.wrap(async (c) => {
 | `IsolationLevel` | Transaction isolation level enum |
 | `ensureConnection` | Safe connection helper |
 
+## Migration Guide
+
+### v0.3.x → v0.4.0
+
+**Breaking Change: `PostgresUnitOfWork` class renamed**
+
+`PostgresUnitOfWork` is now an interface. The actual implementation is `DefaultPostgresUnitOfWork`.
+
+```typescript
+// Before (v0.3.x)
+import { PostgresUnitOfWork } from "@hexaijs/postgres";
+const uow = new PostgresUnitOfWork(factory, cleanup);
+
+// After (v0.4.0)
+import { DefaultPostgresUnitOfWork } from "@hexaijs/postgres";
+const uow = new DefaultPostgresUnitOfWork(factory, cleanup);
+
+// Type usage (unchanged)
+function doSomething(uow: PostgresUnitOfWork) { ... }
+```
+
+**Why this change?**
+
+The interface allows both `DefaultPostgresUnitOfWork` and `PostgresUnitOfWorkForTesting` to be used interchangeably where `PostgresUnitOfWork` type is expected.
+
+**Breaking Change: `query()` renamed to `withClient()`**
+
+The `query()` method has been renamed to `withClient()` for clarity. The name `query()` was confusing because inside the callback, you also call `client.query()`.
+
+```typescript
+// Before (v0.3.x)
+const user = await unitOfWork.query(async (client) => {
+    return client.query("SELECT * FROM users WHERE id = $1", [userId]);
+});
+
+// After (v0.4.0)
+const user = await unitOfWork.withClient(async (client) => {
+    return client.query("SELECT * FROM users WHERE id = $1", [userId]);
+});
+```
+
+The `QueryableUnitOfWork` interface has been removed from `@hexaijs/core`. The `withClient()` method is now specific to `@hexaijs/postgres`.
+
 ## See Also
 
-- [@hexaijs/core](../core/README.md) - Core interfaces (`UnitOfWork`, `QueryableUnitOfWork`, `EventStore`, `Propagation`)
+- [@hexaijs/core](../core/README.md) - Core interfaces (`UnitOfWork`, `EventStore`, `Propagation`)
 - [@hexaijs/sqlite](../sqlite/README.md) - SQLite implementation for testing
 - [@hexaijs/application](../application/README.md) - Application context that provides `getUnitOfWork()`

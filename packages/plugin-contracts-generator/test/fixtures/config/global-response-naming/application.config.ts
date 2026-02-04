@@ -3,7 +3,7 @@ export default {
         contexts: [
             {
                 name: "lecture",
-                sourceDir: "src",
+                path: ".",
             },
         ],
         responseNamingConventions: [

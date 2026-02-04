@@ -6,7 +6,7 @@ import {
     expectTypeScriptCompiles,
     expectGeneratedFiles,
     expectFileContains,
-} from "../helpers";
+} from "@e2e/helpers";
 
 describe("E2E: Class Support", () => {
     const ctx = new E2ETestContext("class-support");
@@ -44,32 +44,42 @@ describe("E2E: Class Support", () => {
         });
 
         it("should copy domain.ts with class source text", async () => {
-            await expectFileContains(ctx.getOutputFile("lecture", "domain.ts"), [
-                "export class LessonCredit",
-                "export class LessonPrice",
-                "export abstract class Money",
-            ]);
+            await expectFileContains(
+                ctx.getOutputFile("lecture", "domain.ts"),
+                [
+                    "export class LessonCredit",
+                    "export class LessonPrice",
+                    "export abstract class Money",
+                ]
+            );
         });
 
         it("should preserve class methods in output", async () => {
-            await expectFileContains(ctx.getOutputFile("lecture", "domain.ts"), [
-                "validate(): boolean",
-                "applyDiscount(percent: number)",
-                "add(other: Money): Money",
-            ]);
+            await expectFileContains(
+                ctx.getOutputFile("lecture", "domain.ts"),
+                [
+                    "validate(): boolean",
+                    "applyDiscount(percent: number)",
+                    "add(other: Money): Money",
+                ]
+            );
         });
 
         it("should include all base classes in output", async () => {
-            await expectFileContains(ctx.getOutputFile("lecture", "domain.ts"), [
-                "export abstract class ValueObject",
-                "export abstract class Money",
-            ]);
+            await expectFileContains(
+                ctx.getOutputFile("lecture", "domain.ts"),
+                [
+                    "export abstract class ValueObject",
+                    "export abstract class Money",
+                ]
+            );
         });
 
         it("should preserve import for referenced types", async () => {
-            await expectFileContains(ctx.getOutputFile("lecture", "domain.ts"), [
-                "import type { Currency }",
-            ]);
+            await expectFileContains(
+                ctx.getOutputFile("lecture", "domain.ts"),
+                ["import type { Currency }"]
+            );
         });
     });
 

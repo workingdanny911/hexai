@@ -3,6 +3,7 @@ import { Scanner } from "./scanner";
 import { Parser } from "./parser";
 import { FileGraphResolver, type FileGraph } from "./file-graph-resolver";
 import { FileCopier } from "./file-copier";
+import { ContextConfig } from "./context-config";
 import type { DomainEvent, Command, Query, TypeDefinition, ResponseNamingConvention, MessageType } from "./domain/types";
 import { type FileSystem, nodeFileSystem } from "./file-system";
 import { type Logger, noopLogger } from "./logger";
@@ -56,24 +57,24 @@ export class ContractsPipeline {
         this.messageTypes = messageTypes;
     }
 
-    static async create(options: {
-        tsconfigPath?: string;
+    static create(options: {
+        contextConfig: ContextConfig;
         responseNamingConventions?: readonly ResponseNamingConvention[];
         fileSystem?: FileSystem;
         logger?: Logger;
         excludeDependencies?: string[];
         messageTypes?: MessageType[];
-    } = {}): Promise<ContractsPipeline> {
+    }): ContractsPipeline {
         const fileSystem = options.fileSystem ?? nodeFileSystem;
         const logger = options.logger ?? noopLogger;
         const excludeDependencies = options.excludeDependencies ?? DEFAULT_EXCLUDE_DEPENDENCIES;
         const scanner = new Scanner({ fileSystem, messageTypes: options.messageTypes });
         const parser = new Parser({
-            responseNamingConventions: options.responseNamingConventions,
+            responseNamingConventions: options.responseNamingConventions ?? options.contextConfig.responseNamingConventions,
             messageTypes: options.messageTypes,
         });
-        const fileGraphResolver = await FileGraphResolver.create({
-            tsconfigPath: options.tsconfigPath,
+        const fileGraphResolver = FileGraphResolver.create({
+            contextConfig: options.contextConfig,
             fileSystem,
             excludeDependencies,
         });

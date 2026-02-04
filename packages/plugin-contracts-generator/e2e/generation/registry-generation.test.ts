@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFile } from "node:fs/promises";
 
-import { E2ETestContext } from "../helpers/test-context";
+import { E2ETestContext } from "@e2e/helpers";
 
 describe("Registry Generation E2E", () => {
     let ctx: E2ETestContext;

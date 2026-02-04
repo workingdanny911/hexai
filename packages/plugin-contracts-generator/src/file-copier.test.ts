@@ -5,6 +5,11 @@ import { randomUUID } from "crypto";
 
 import { FileCopier } from "./file-copier";
 import { FileGraphResolver } from "./file-graph-resolver";
+import { ContextConfig } from "./context-config";
+
+function createTestContextConfig(sourceDir: string): ContextConfig {
+    return ContextConfig.createSync("test-context", sourceDir);
+}
 
 describe("FileCopier", () => {
     const fixtureRoot = path.resolve(
@@ -28,7 +33,9 @@ describe("FileCopier", () => {
 
     describe("basic file copying", () => {
         it("should copy all files from the file graph to the output directory", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 fixtureRoot,
                 "commands-but-different-filename.ts"
@@ -65,7 +72,9 @@ describe("FileCopier", () => {
 
     describe("relative path preservation", () => {
         it("should preserve relative imports like ./foo.validator", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 fixtureRoot,
                 "commands-but-different-filename.ts"
@@ -93,7 +102,9 @@ describe("FileCopier", () => {
 
     describe("path alias transformation", () => {
         it("should transform path aliases using pathAliasRewrites", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 fixtureRoot,
                 "commands-but-different-filename.ts"
@@ -217,7 +228,9 @@ describe("FileCopier", () => {
         );
 
         it("should remove @PublicCommand decorator and its import", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 decoratorFixtureRoot,
                 "command-with-decorator.ts"
@@ -253,7 +266,9 @@ describe("FileCopier", () => {
         });
 
         it("should remove @PublicEvent decorator and its import", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 decoratorFixtureRoot,
                 "event-with-decorator.ts"
@@ -284,7 +299,9 @@ describe("FileCopier", () => {
         });
 
         it("should remove both PublicCommand and PublicEvent from mixed imports", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 decoratorFixtureRoot,
                 "mixed-imports.ts"
@@ -317,7 +334,9 @@ describe("FileCopier", () => {
         });
 
         it("should keep other decorators when removing PublicCommand", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 decoratorFixtureRoot,
                 "multiple-decorators.ts"
@@ -350,7 +369,9 @@ describe("FileCopier", () => {
         });
 
         it("should not remove decorators when removeDecorators is false", async () => {
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const entryPoint = path.join(
                 decoratorFixtureRoot,
                 "command-with-decorator.ts"
@@ -388,7 +409,8 @@ describe("FileCopier", () => {
         );
 
         it("should remove import statements for excluded files", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: [
                     "**/*.test.ts",
                     "**/*.spec.ts",
@@ -430,7 +452,8 @@ describe("FileCopier", () => {
         });
 
         it("should remove unused import identifiers after removing excluded imports", async () => {
-            const resolver = await FileGraphResolver.create({
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(excludePatternsFixtureRoot),
                 excludeDependencies: ["**/*.eh.ts"],
             });
             const entryPoint = path.join(
@@ -476,7 +499,9 @@ type CreateUserResult = {
 `
             );
 
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const fileGraph = await resolver.buildGraph([sourceFile], testDir);
 
             const copier = new FileCopier();
@@ -516,7 +541,9 @@ interface GetUserResult {
 `
             );
 
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const fileGraph = await resolver.buildGraph([sourceFile], testDir);
 
             const copier = new FileCopier();
@@ -555,7 +582,9 @@ export type CreateUserResult = {
 `
             );
 
-            const resolver = await FileGraphResolver.create();
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(fixtureRoot),
+            });
             const fileGraph = await resolver.buildGraph([sourceFile], testDir);
 
             const copier = new FileCopier();

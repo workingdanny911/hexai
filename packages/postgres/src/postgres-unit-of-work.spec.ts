@@ -4,7 +4,7 @@ import _ from "lodash";
 
 import { Propagation } from "@hexaijs/core";
 import { IsolationLevel } from "./types";
-import { PostgresUnitOfWork } from "./postgres-unit-of-work";
+import { DefaultPostgresUnitOfWork } from "./postgres-unit-of-work";
 import {
     newClient,
     useClient,
@@ -15,7 +15,7 @@ import {
 const DATABASE = "test_hexai__uow";
 const TABLE = "_test";
 
-async function getTransactionId(client: pg.Client): Promise<string> {
+async function getTransactionId(client: pg.ClientBase): Promise<string> {
     const result = await client.query(`SELECT txid_current();`);
     return result.rows[0].txid_current;
 }
@@ -33,9 +33,9 @@ describe("PostgresUnitOfWork", () => {
     useDatabase(DATABASE);
     const tableManager = useTableManager(DATABASE);
     const conn = useClient(DATABASE);
-    const uow = new PostgresUnitOfWork(
+    const uow = new DefaultPostgresUnitOfWork(
         () => newClient(DATABASE),
-        (c) => c.end()
+        (c) => (c as pg.Client).end()
     );
 
     let verificationRepo: {
@@ -69,7 +69,7 @@ describe("PostgresUnitOfWork", () => {
         await tableManager.truncateTable(TABLE);
     });
 
-    async function insertRecord(client: pg.Client, id: number): Promise<void> {
+    async function insertRecord(client: pg.ClientBase, id: number): Promise<void> {
         await client.query(`INSERT INTO ${TABLE} VALUES ($1);`, [id]);
     }
 
@@ -86,7 +86,7 @@ describe("PostgresUnitOfWork", () => {
     }
 
     async function runFailingTransaction(
-        fn: (client: pg.Client) => Promise<void>
+        fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
             await uow.wrap(async (client) => {
@@ -99,7 +99,7 @@ describe("PostgresUnitOfWork", () => {
     }
 
     async function runFailingSavepoint(
-        fn: (client: pg.Client) => Promise<void>
+        fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
             await uow.wrap(
@@ -115,19 +115,19 @@ describe("PostgresUnitOfWork", () => {
     }
 
     async function runSavepoint(
-        fn: (client: pg.Client) => Promise<void>
+        fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         await uow.wrap(fn, { propagation: Propagation.NESTED });
     }
 
     async function runNestedTransaction(
-        fn: (client: pg.Client) => Promise<void>
+        fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         await uow.wrap(fn, { propagation: Propagation.EXISTING });
     }
 
     async function runFailingNestedTransaction(
-        fn: (client: pg.Client) => Promise<void>
+        fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
             await uow.wrap(
@@ -189,7 +189,7 @@ describe("PostgresUnitOfWork", () => {
         });
 
         test("releases database connection after transaction ends", async () => {
-            let capturedClient!: pg.Client;
+            let capturedClient!: pg.ClientBase;
 
             await uow.wrap(async () => {
                 capturedClient = uow.getClient();
@@ -350,9 +350,9 @@ describe("PostgresUnitOfWork", () => {
         });
     });
 
-    describe("query method", () => {
+    describe("withClient method", () => {
         test("executes query without transaction", async () => {
-            await uow.query(async (client) => {
+            await uow.withClient(async (client) => {
                 await insertRecord(client, 1);
             });
 
@@ -365,7 +365,7 @@ describe("PostgresUnitOfWork", () => {
             await uow.wrap(async (wrapClient) => {
                 txids.push(await getTransactionId(wrapClient));
 
-                await uow.query(async (queryClient) => {
+                await uow.withClient(async (queryClient) => {
                     txids.push(await getTransactionId(queryClient));
                 });
             });
@@ -376,10 +376,10 @@ describe("PostgresUnitOfWork", () => {
         test("uses separate connections when outside transaction", async () => {
             const txids: string[] = [];
 
-            await uow.query(async (client) => {
+            await uow.withClient(async (client) => {
                 txids.push(await getTransactionId(client));
             });
-            await uow.query(async (client) => {
+            await uow.withClient(async (client) => {
                 txids.push(await getTransactionId(client));
             });
 
@@ -388,18 +388,18 @@ describe("PostgresUnitOfWork", () => {
 
         test("cleans up client on error", async () => {
             await expect(
-                uow.query(async () => {
+                uow.withClient(async () => {
                     throw new Error("query error");
                 })
             ).rejects.toThrow("query error");
         });
 
         test("changes are visible immediately without transaction", async () => {
-            await uow.query(async (client) => {
+            await uow.withClient(async (client) => {
                 await insertRecord(client, 1);
             });
 
-            await uow.query(async (client) => {
+            await uow.withClient(async (client) => {
                 const result = await client.query(
                     `SELECT COUNT(*) FROM ${TABLE} WHERE id = 1;`
                 );

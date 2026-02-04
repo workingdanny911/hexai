@@ -3,7 +3,7 @@ export default {
         contexts: [
             {
                 name: "lecture",
-                // missing sourceDir
+                // missing path
             },
         ],
     },

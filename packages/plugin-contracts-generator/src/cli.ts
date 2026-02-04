@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { resolve, dirname, join, relative } from "path";
-import { ConfigLoader, ContractsConfig, ContextConfig } from "./config-loader";
-import { processContext, ProcessContextResult, ConsoleLogger, type Logger } from "./index";
+import { ConfigLoader, type ContractsConfig } from "./config-loader";
+import { ContextConfig } from "./context-config";
+import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } from "./index";
 import { RegistryGenerator, ContextMessages } from "./registry-generator";
 import { ReexportGenerator } from "./reexport-generator";
 import { nodeFileSystem } from "./file-system";
@@ -44,7 +45,8 @@ export interface RunWithConfigOptions {
 export interface ContractsPluginConfig {
     contexts: Array<{
         name: string;
-        sourceDir: string;
+        path: string;
+        sourceDir?: string;
         tsconfigPath?: string;
     }>;
     pathAliasRewrites?: Record<string, string>;
@@ -56,7 +58,7 @@ export interface ContractsPluginConfig {
 
 interface ContextProcessingResult {
     name: string;
-    result: ProcessContextResult;
+    result: PipelineResult;
     outputDir: string;
 }
 
@@ -241,24 +243,22 @@ export async function run(args: string[]): Promise<void> {
 
     const results: ContextProcessingResult[] = [];
 
-    for (const context of config.contexts) {
-        const sourceDir = resolve(configDir, context.sourceDir);
-        const tsconfigPath = context.tsconfigPath
-            ? resolve(configDir, context.tsconfigPath)
-            : undefined;
-
-        const result = await processContext({
-            contextName: context.name,
-            sourceDir,
-            outputDir,
-            pathAliasRewrites,
-            tsconfigPath,
-            removeDecorators: config.removeDecorators,
+    for (const contextConfig of config.contexts) {
+        const pipeline = ContractsPipeline.create({
+            contextConfig,
             messageTypes: options.messageTypes,
             logger,
         });
 
-        results.push({ name: context.name, result, outputDir });
+        const result = await pipeline.execute({
+            contextName: contextConfig.name,
+            sourceDir: contextConfig.sourceDir,
+            outputDir,
+            pathAliasRewrites,
+            removeDecorators: config.removeDecorators,
+        });
+
+        results.push({ name: contextConfig.name, result, outputDir });
     }
 
     const totals = calculateSummaryTotals(results);
@@ -276,13 +276,24 @@ export async function run(args: string[]): Promise<void> {
 /**
  * Converts plugin config to internal ContractsConfig format.
  */
-function toContractsConfig(pluginConfig: ContractsPluginConfig): ContractsConfig {
+async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<ContractsConfig> {
+    const contexts = await Promise.all(
+        pluginConfig.contexts.map((ctx) =>
+            ContextConfig.create(
+                {
+                    name: ctx.name,
+                    path: ctx.path,
+                    sourceDir: ctx.sourceDir,
+                    tsconfigPath: ctx.tsconfigPath,
+                },
+                process.cwd(),
+                nodeFileSystem
+            )
+        )
+    );
+
     return {
-        contexts: pluginConfig.contexts.map((ctx) => ({
-            name: ctx.name,
-            sourceDir: ctx.sourceDir,
-            tsconfigPath: ctx.tsconfigPath,
-        })),
+        contexts,
         pathAliasRewrites: pluginConfig.pathAliasRewrites,
         externalDependencies: pluginConfig.externalDependencies,
         decoratorNames: mergeDecoratorNames(pluginConfig.decoratorNames),
@@ -304,7 +315,7 @@ export async function runWithConfig(
 ): Promise<void> {
     const outputDir = resolve(options.outputDir);
     const logger = new ConsoleLogger({ level: "info" });
-    const config = toContractsConfig(pluginConfig);
+    const config = await toContractsConfig(pluginConfig);
 
     logger.info(`Found ${config.contexts.length} context(s) to process`);
     logger.info(`Output directory: ${outputDir}`);
@@ -318,24 +329,22 @@ export async function runWithConfig(
 
     const results: ContextProcessingResult[] = [];
 
-    for (const context of config.contexts) {
-        const sourceDir = resolve(context.sourceDir);
-        const tsconfigPath = context.tsconfigPath
-            ? resolve(context.tsconfigPath)
-            : undefined;
-
-        const result = await processContext({
-            contextName: context.name,
-            sourceDir,
-            outputDir,
-            pathAliasRewrites,
-            tsconfigPath,
-            removeDecorators: config.removeDecorators,
+    for (const contextConfig of config.contexts) {
+        const pipeline = ContractsPipeline.create({
+            contextConfig,
             messageTypes: options.messageTypes,
             logger,
         });
 
-        results.push({ name: context.name, result, outputDir });
+        const result = await pipeline.execute({
+            contextName: contextConfig.name,
+            sourceDir: contextConfig.sourceDir,
+            outputDir,
+            pathAliasRewrites,
+            removeDecorators: config.removeDecorators,
+        });
+
+        results.push({ name: contextConfig.name, result, outputDir });
     }
 
     const totals = calculateSummaryTotals(results);

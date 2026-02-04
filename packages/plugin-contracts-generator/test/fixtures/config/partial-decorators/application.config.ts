@@ -3,7 +3,7 @@ export default {
         contexts: [
             {
                 name: "order",
-                sourceDir: "src",
+                path: ".",
             },
         ],
         decoratorNames: {

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0] - 2026-02-04
+
+### Breaking Changes
+
+- **Removed `QueryableUnitOfWork` interface**
+  - This interface was only used by `@hexaijs/postgres`
+  - Transaction-free queries are now provided directly by `@hexaijs/postgres` via `withClient()` method
+  - Migration: No action needed if using `@hexaijs/postgres` - update to postgres 0.4.0
+
 ## [0.3.0] - 2026-02-03
 
 ### Added

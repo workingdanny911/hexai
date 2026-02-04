@@ -45,12 +45,12 @@ describe("PostgresUnitOfWorkForTesting", () => {
         await client.end();
     });
 
-    async function insertRecord(c: pg.Client, id: number): Promise<void> {
+    async function insertRecord(c: pg.ClientBase, id: number): Promise<void> {
         await c.query(`INSERT INTO ${TABLE} VALUES ($1);`, [id]);
     }
 
     async function runFailingTransaction(
-        fn: (client: pg.Client) => Promise<void>
+        fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
             await uow.wrap(async (c) => {
@@ -63,7 +63,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
     }
 
     async function runFailingSavepoint(
-        fn: (client: pg.Client) => Promise<void>
+        fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
             await uow.wrap(
@@ -277,9 +277,9 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
     });
 
-    describe("query method", () => {
+    describe("withClient method", () => {
         test("executes query using test client", async () => {
-            await uow.query(async (c) => {
+            await uow.withClient(async (c) => {
                 await insertRecord(c, 1);
             });
 
@@ -291,7 +291,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             await uow.wrap(async (wrapClient) => {
                 await insertRecord(wrapClient, 1);
 
-                await uow.query(async (queryClient) => {
+                await uow.withClient(async (queryClient) => {
                     const result = await queryClient.query(
                         `SELECT * FROM ${TABLE} WHERE id = 1`
                     );
@@ -301,11 +301,11 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
 
         test("uses same client outside wrap()", async () => {
-            await uow.query(async (c) => {
+            await uow.withClient(async (c) => {
                 await insertRecord(c, 1);
             });
 
-            await uow.query(async (c) => {
+            await uow.withClient(async (c) => {
                 const result = await c.query(`SELECT * FROM ${TABLE}`);
                 expect(result.rows).toHaveLength(1);
             });

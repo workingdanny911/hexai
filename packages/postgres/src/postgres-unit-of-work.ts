@@ -2,7 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import * as pg from "pg";
 
-import { Propagation, QueryableUnitOfWork } from "@hexaijs/core";
+import { Propagation, UnitOfWork } from "@hexaijs/core";
+import { PostgresConfig } from "./config";
 import { IsolationLevel } from "./types";
 import {
     ClientCleanUp,
@@ -11,9 +12,12 @@ import {
 } from "./types";
 import { ensureConnection } from "./helpers";
 
-export class PostgresUnitOfWork
-    implements QueryableUnitOfWork<pg.Client, PostgresTransactionOptions>
-{
+export interface PostgresUnitOfWork
+    extends UnitOfWork<pg.ClientBase, PostgresTransactionOptions> {
+    withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T>;
+}
+
+export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
     private transactionStorage = new AsyncLocalStorage<PostgresTransaction>();
 
     constructor(
@@ -21,7 +25,7 @@ export class PostgresUnitOfWork
         private clientCleanUp?: ClientCleanUp
     ) {}
 
-    public getClient(): pg.Client {
+    public getClient(): pg.ClientBase {
         const current = this.getCurrentTransaction();
 
         if (!current) {
@@ -32,7 +36,7 @@ export class PostgresUnitOfWork
     }
 
     async wrap<T = unknown>(
-        fn: (client: pg.Client) => Promise<T>,
+        fn: (client: pg.ClientBase) => Promise<T>,
         options: Partial<PostgresTransactionOptions> = {}
     ): Promise<T> {
         const resolvedOptions = this.resolveOptions(options);
@@ -43,7 +47,7 @@ export class PostgresUnitOfWork
         );
     }
 
-    async query<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+    async withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T> {
         const currentTransaction = this.getCurrentTransaction();
 
         if (currentTransaction) {
@@ -103,7 +107,7 @@ class PostgresTransaction {
     private nestingDepth = 0;
     private options!: PostgresTransactionOptions;
 
-    private client!: pg.Client;
+    private client!: pg.ClientBase;
     private savepoints: Savepoint[] = [];
 
     constructor(
@@ -112,7 +116,7 @@ class PostgresTransaction {
     ) {}
 
     public async execute<T>(
-        fn: (client: pg.Client) => Promise<T>,
+        fn: (client: pg.ClientBase) => Promise<T>,
         options: PostgresTransactionOptions
     ): Promise<T> {
         this.options = options;
@@ -124,7 +128,7 @@ class PostgresTransaction {
             : executor.execute(fn, options);
     }
 
-    public getClient(): pg.Client {
+    public getClient(): pg.ClientBase {
         return this.client;
     }
 
@@ -142,7 +146,7 @@ class PostgresTransaction {
         const client = await this.clientFactory();
 
         if (!("query" in client)) {
-            throw new Error("Client factory must return a pg.Client");
+            throw new Error("Client factory must return a pg.ClientBase");
         }
 
         await ensureConnection(client);
@@ -162,7 +166,7 @@ class PostgresTransaction {
     }
 
     private async runWithLifecycle<T>(
-        fn: (client: pg.Client) => Promise<T>
+        fn: (client: pg.ClientBase) => Promise<T>
     ): Promise<T> {
         try {
             return await this.executeWithNesting(fn);
@@ -177,7 +181,7 @@ class PostgresTransaction {
     }
 
     private async executeWithNesting<T>(
-        fn: (client: pg.Client) => Promise<T>
+        fn: (client: pg.ClientBase) => Promise<T>
     ): Promise<T> {
         this.nestingDepth++;
         try {
@@ -277,11 +281,13 @@ class Savepoint {
 
     constructor(
         private readonly name: string,
-        private readonly client: pg.Client,
+        private readonly client: pg.ClientBase,
         private readonly onClose: () => void
     ) {}
 
-    public async execute<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+    public async execute<T>(
+        fn: (client: pg.ClientBase) => Promise<T>
+    ): Promise<T> {
         await this.ensureStarted();
         return this.runWithLifecycle(fn);
     }
@@ -300,7 +306,7 @@ class Savepoint {
     }
 
     private async runWithLifecycle<T>(
-        fn: (client: pg.Client) => Promise<T>
+        fn: (client: pg.ClientBase) => Promise<T>
     ): Promise<T> {
         this.nestingDepth++;
         try {
@@ -347,4 +353,27 @@ class Savepoint {
     private isAborted(): boolean {
         return this.abortError !== undefined && !this.closed;
     }
+}
+
+export function createPostgresUnitOfWork(pool: pg.Pool): PostgresUnitOfWork;
+export function createPostgresUnitOfWork(
+    config: PostgresConfig | string
+): PostgresUnitOfWork;
+export function createPostgresUnitOfWork(
+    source: pg.Pool | PostgresConfig | string
+): PostgresUnitOfWork {
+    if (source instanceof pg.Pool) {
+        return new DefaultPostgresUnitOfWork(
+            async () => source.connect(),
+            (client) => (client as pg.PoolClient).release()
+        );
+    }
+
+    const connectionString =
+        source instanceof PostgresConfig ? source.toString() : source;
+
+    return new DefaultPostgresUnitOfWork(
+        () => new pg.Client({ connectionString }),
+        (client) => (client as pg.Client).end()
+    );
 }

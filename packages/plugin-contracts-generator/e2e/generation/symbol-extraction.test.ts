@@ -3,12 +3,13 @@ import {
     E2ETestContext,
     expectFileContains,
     expectFileNotContains,
+    expectFileNotExists,
     expectGeneratedFiles,
     expectExtractionResult,
     expectEvents,
     expectCommands,
-} from "../helpers";
-import type { ProcessContextResult } from "../../src/index";
+} from "@e2e/helpers";
+import type { ProcessContextResult } from "@/index";
 
 describe("E2E: Symbol Extraction", () => {
     /**
@@ -55,35 +56,45 @@ describe("E2E: Symbol Extraction", () => {
             describe("mixed-messages.ts", () => {
                 it("should contain target event class", async () => {
                     await expectFileContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export class UserRegistered"]
                     );
                 });
 
                 it("should contain target event dependencies (payload)", async () => {
                     await expectFileContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export interface UserRegisteredPayload"]
                     );
                 });
 
                 it("should contain DomainEvent import (used by target)", async () => {
                     await expectFileContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["import { DomainEvent }"]
                     );
                 });
 
                 it("should NOT contain command class (different messageType)", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export class RegisterUser"]
                     );
                 });
 
                 it("should NOT contain command dependencies", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         [
                             "export interface RegisterUserPayload",
                             "export interface RegisterUserResponse",
@@ -93,14 +104,18 @@ describe("E2E: Symbol Extraction", () => {
 
                 it("should NOT contain handler class", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export class RegisterUserHandler"]
                     );
                 });
 
                 it("should NOT contain handler-only imports", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         [
                             "CommandHandlerMarker",
                             "BaseUseCase",
@@ -112,7 +127,9 @@ describe("E2E: Symbol Extraction", () => {
 
                 it("should NOT contain unrelated symbols", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         [
                             "export interface SomeUnrelatedType",
                             "export function someUnrelatedFunction",
@@ -155,14 +172,18 @@ describe("E2E: Symbol Extraction", () => {
             describe("mixed-messages.ts", () => {
                 it("should contain target command class", async () => {
                     await expectFileContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export class RegisterUser"]
                     );
                 });
 
                 it("should contain target command dependencies", async () => {
                     await expectFileContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         [
                             "export interface RegisterUserPayload",
                             "export interface RegisterUserResponse",
@@ -172,35 +193,45 @@ describe("E2E: Symbol Extraction", () => {
 
                 it("should contain Message import (used by target)", async () => {
                     await expectFileContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["import", "Message"]
                     );
                 });
 
                 it("should NOT contain event class (different messageType)", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export class UserRegistered"]
                     );
                 });
 
                 it("should NOT contain event dependencies", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export interface UserRegisteredPayload"]
                     );
                 });
 
                 it("should NOT contain handler class", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         ["export class RegisterUserHandler"]
                     );
                 });
 
                 it("should NOT contain handler-only imports", async () => {
                     await expectFileNotContains(
-                        ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                        ctx.getOutputFile(
+                            "symbol-extraction/mixed-messages.ts"
+                        ),
                         [
                             "CommandHandlerMarker",
                             "BaseUseCase",
@@ -228,8 +259,9 @@ describe("E2E: Symbol Extraction", () => {
         });
 
         it("should NOT copy repository.ts (handler-only dependency)", async () => {
-            const { expectFileNotExists } = await import("../helpers");
-            const repositoryPath = ctx.getOutputFile("symbol-extraction/repository.ts");
+            const repositoryPath = ctx.getOutputFile(
+                "symbol-extraction/repository.ts"
+            );
             expectFileNotExists(repositoryPath);
         });
     });

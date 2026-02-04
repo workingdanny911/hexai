@@ -4,7 +4,7 @@ import {
     expectFileContains,
     expectGeneratedFiles,
     expectTypeScriptCompiles,
-} from "../helpers";
+} from "@e2e/helpers";
 import type { ProcessContextResult } from "@/index";
 
 describe("E2E: Complex Types", () => {

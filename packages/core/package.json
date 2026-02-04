@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Core utilities/types/base classes for hexai projects",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
