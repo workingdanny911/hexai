@@ -3,7 +3,8 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.1.2",
+    "version": "0.2.0",
+    "type": "module",
     "description": "Build plugin for generating ApplicationBuilder code from decorated handlers",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -38,32 +39,34 @@
         "generate-app-builder": "./dist/cli.js"
     },
     "scripts": {
-        "test": "npm run build && vitest",
-        "build": "tsc -p ./tsconfig.build.json && tsc-alias"
+        "test": "vitest run",
+        "build": "tsup"
     },
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.js",
-            "require": "./dist/index.js"
+            "import": "./dist/index.js"
         },
         "./decorators": {
             "types": "./dist/decorators/index.d.ts",
-            "import": "./dist/decorators/index.js",
-            "require": "./dist/decorators/index.js"
-        }
+            "import": "./dist/decorators/index.js"
+        },
+        "./package.json": "./package.json"
     },
     "dependencies": {
         "glob": "^10.0.0"
     },
     "peerDependencies": {
-        "@hexaijs/core": "^0.3.0",
-        "@hexaijs/application": "^0.2.0",
-        "@hexaijs/cli": "^0.1.0",
+        "@hexaijs/core": "^0.5.0",
+        "@hexaijs/application": "^0.3.0",
+        "@hexaijs/cli": "^0.2.0",
         "typescript": "^5.0.0"
     },
     "devDependencies": {
+        "@hexaijs/application": "workspace:^",
         "@hexaijs/cli": "workspace:^",
+        "@hexaijs/core": "workspace:^",
+        "@hexaijs/tooling": "workspace:*",
         "@types/node": "^20.0.0"
     }
 }

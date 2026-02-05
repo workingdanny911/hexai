@@ -18,9 +18,11 @@ import {
     Interceptor,
 } from "./interceptor";
 import { InterceptedApplication } from "./intercepted-application";
-import { SuccessResult, ErrorResult, Result } from "./result";
+import { SuccessResult, ErrorResult } from "./result";
+import type { Result } from "./result";
 
-export { SuccessResult, ErrorResult, Result };
+export { SuccessResult, ErrorResult };
+export type { Result };
 
 type Factory<T> = () => T;
 

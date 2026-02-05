@@ -1,0 +1,15 @@
+{
+  "name": "@hexaijs/tooling",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["tsconfig/*.json", "tsup.base.ts"],
+  "exports": {
+    "./tsconfig/base.json": "./tsconfig/base.json",
+    "./tsconfig/node.json": "./tsconfig/node.json",
+    "./tsup.base": "./tsup.base.ts"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0"
+  }
+}

@@ -3,7 +3,8 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.1.1",
+    "version": "0.2.0",
+    "type": "module",
     "description": "Collect domain events and commands from bounded contexts and generate frontend-compatible contracts package",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -25,33 +26,27 @@
         "dist",
         "LICENSE"
     ],
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.js",
-            "require": "./dist/index.js"
+            "import": "./dist/index.js"
         },
         "./decorators": {
             "types": "./dist/decorators/index.d.ts",
-            "import": "./dist/decorators/index.js",
-            "require": "./dist/decorators/index.js"
+            "import": "./dist/decorators/index.js"
         },
         "./runtime": {
             "types": "./dist/runtime/index.d.ts",
-            "import": "./dist/runtime/index.js",
-            "require": "./dist/runtime/index.js"
-        }
+            "import": "./dist/runtime/index.js"
+        },
+        "./package.json": "./package.json"
     },
     "bin": {
         "generate-contracts": "dist/cli.js"
     },
     "scripts": {
-        "clean": "rm -rf dist",
-        "build": "pnpm clean && tsc -p ./tsconfig.build.json",
         "test": "vitest run",
-        "test:watch": "vitest"
+        "build": "tsup"
     },
     "dependencies": {
         "glob": "^10.3.0",
@@ -59,12 +54,13 @@
         "reflect-metadata": "^0.2.2"
     },
     "peerDependencies": {
-        "@hexaijs/cli": "^0.1.0",
+        "@hexaijs/cli": "^0.2.0",
         "typescript": "^5.0.0"
     },
     "devDependencies": {
         "@hexaijs/cli": "workspace:^",
         "@hexaijs/core": "workspace:^",
+        "@hexaijs/tooling": "workspace:*",
         "@types/node": "^20.11.0",
         "typescript": "^5.3.0"
     }

@@ -1,15 +1,14 @@
 {
-    "extends": "../../tsconfig.json",
+    "extends": "@hexaijs/tooling/tsconfig/base.json",
     "compilerOptions": {
-        "rootDir": "./",
+        "rootDir": "./src",
+        "baseUrl": ".",
         "outDir": "./dist",
-        "experimentalDecorators": true,
         "types": ["reflect-metadata"],
         "paths": {
-            "@/*": ["./src/*"],
-            "@e2e/*": ["./e2e/*"]
+            "@/*": ["src/*"]
         }
     },
-    "include": ["src", "e2e", "test", "output"],
+    "include": ["src", "e2e", "test"],
     "exclude": ["node_modules", "dist"]
 }

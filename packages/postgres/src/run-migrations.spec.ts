@@ -522,7 +522,7 @@ exports.down = (pgm) => {
     ${downCode}
 };
 `;
-    await fs.writeFile(`${dir}/${name}.js`, content);
+    await fs.writeFile(`${dir}/${name}.cjs`, content);
 }
 
 async function createSqlMigration(

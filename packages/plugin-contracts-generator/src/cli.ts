@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { resolve, dirname, join, relative } from "path";
+import { fileURLToPath } from "node:url";
+import { resolve, dirname, join, relative } from "node:path";
 import { ConfigLoader, type ContractsConfig } from "./config-loader";
 import { ContextConfig } from "./context-config";
 import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } from "./index";
@@ -435,6 +436,6 @@ async function main(): Promise<void> {
     }
 }
 
-if (require.main === module) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
     main();
 }

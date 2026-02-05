@@ -1,4 +1,4 @@
-import { clone } from "lodash";
+import lodash from "lodash";
 import { Message } from "@hexaijs/core";
 
 import { ApplicationEventPublisher } from "./application-event-publisher";
@@ -15,7 +15,7 @@ export abstract class AbstractApplicationContext {
     }
 
     protected clone(): this {
-        return clone(this);
+        return lodash.clone(this);
     }
 
     public async enterCommandExecutionScope<C extends Message>(

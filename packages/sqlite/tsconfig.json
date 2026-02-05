@@ -1,10 +1,9 @@
 {
-    "extends": "../../tsconfig.json",
+    "extends": "@hexaijs/tooling/tsconfig/base.json",
     "compilerOptions": {
+        "rootDir": "./src",
         "baseUrl": ".",
-        "rootDir": "src",
-        "outDir": "dist",
-
+        "outDir": "./dist",
         "paths": {
             "@/*": ["src/*"]
         }

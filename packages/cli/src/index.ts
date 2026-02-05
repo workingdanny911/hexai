@@ -4,6 +4,7 @@ export * from "./types";
 export * from "./config-loader";
 export * from "./plugin-loader";
 
+import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import { Command } from "commander";
 import {
@@ -234,7 +235,6 @@ export default {
 }
 
 // Run the CLI when this file is executed directly
-// Note: Using CommonJS pattern since tsconfig outputs CJS
-if (require.main === module) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
     main();
 }

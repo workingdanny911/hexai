@@ -3,7 +3,8 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.1.1",
+    "version": "0.2.0",
+    "type": "module",
     "description": "A collection of utility functions and value objects for hexai projects",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
@@ -34,16 +35,17 @@
     "exports": {
         "./config": {
             "types": "./dist/config/index.d.ts",
-            "import": "./dist/config/index.js",
-            "require": "./dist/config/index.js"
-        }
+            "import": "./dist/config/index.js"
+        },
+        "./package.json": "./package.json"
     },
     "scripts": {
-        "test": "vitest run",
-        "build": "tsc && tsc-alias"
+        "build": "tsup"
     },
     "dependencies": {
         "ezcfg": "^0.1.0"
     },
-    "devDependencies": {}
+    "devDependencies": {
+        "@hexaijs/tooling": "workspace:*"
+    }
 }

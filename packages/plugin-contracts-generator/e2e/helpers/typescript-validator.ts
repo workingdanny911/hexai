@@ -21,8 +21,8 @@ export async function compileTypeScript(directory: string): Promise<CompilationR
     const tsconfig = {
         compilerOptions: {
             target: "ES2022",
-            module: "Node16",
-            moduleResolution: "Node16",
+            module: "ESNext",
+            moduleResolution: "Bundler",
             strict: true,
             noEmit: true,
             skipLibCheck: true,
