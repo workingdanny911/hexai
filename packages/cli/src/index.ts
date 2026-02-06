@@ -6,6 +6,7 @@ export * from "./plugin-loader";
 
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
+import { realpathSync } from "node:fs";
 import { Command } from "commander";
 import {
     loadConfig,
@@ -235,6 +236,6 @@ export default {
 }
 
 // Run the CLI when this file is executed directly
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
     main();
 }

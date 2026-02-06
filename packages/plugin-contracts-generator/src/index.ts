@@ -76,7 +76,7 @@ export { Scanner, type ScannerOptions } from "./scanner";
 export { Parser, type ParseResult } from "./parser";
 export { FileGraphResolver } from "./file-graph-resolver";
 export { FileCopier } from "./file-copier";
-export { ConfigLoader, type ContractsConfig } from "./config-loader";
+export { ConfigLoader, resolveContextEntries, type ContractsConfig } from "./config-loader";
 
 export {
     MessageParserError,

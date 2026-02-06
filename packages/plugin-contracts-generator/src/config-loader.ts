@@ -20,7 +20,7 @@ export interface ContractsConfig {
 
 interface ApplicationConfig {
     contracts?: {
-        contexts?: string[] | InputContextConfig[];
+        contexts?: readonly (string | InputContextConfig)[];
         pathAliasRewrites?: Record<string, string>;
         externalDependencies?: Record<string, string>;
         decoratorNames?: DecoratorNames;
@@ -31,6 +31,132 @@ interface ApplicationConfig {
 
 export interface ConfigLoaderOptions {
     fileSystem?: FileSystem;
+}
+
+export async function resolveContextEntries(
+    entries: readonly (string | InputContextConfig)[],
+    configDir: string,
+    fs: FileSystem = nodeFileSystem
+): Promise<ContextConfig[]> {
+    const contexts: ContextConfig[] = [];
+
+    for (let i = 0; i < entries.length; i++) {
+        const item = entries[i];
+
+        if (typeof item === "string") {
+            const resolved = await resolveStringEntry(item, configDir, fs);
+            contexts.push(...resolved);
+        } else {
+            const contextConfig = await createObjectContext(item, i, configDir, fs);
+            contexts.push(contextConfig);
+        }
+    }
+
+    return contexts;
+}
+
+async function resolveStringEntry(
+    contextPath: string,
+    configDir: string,
+    fs: FileSystem
+): Promise<ContextConfig[]> {
+    if (contextPath.includes("*")) {
+        return expandGlobPattern(contextPath, configDir, fs);
+    }
+
+    const basePath = resolve(configDir, contextPath);
+    const name = basename(basePath);
+
+    return [await ContextConfig.create(
+        { name, path: contextPath },
+        configDir,
+        fs
+    )];
+}
+
+async function expandGlobPattern(
+    pattern: string,
+    configDir: string,
+    fs: FileSystem
+): Promise<ContextConfig[]> {
+    const packageDirs = await matchGlobPattern(pattern, configDir, fs);
+
+    return Promise.all(
+        packageDirs.map((dir) => {
+            const name = basename(dir);
+            const relativePath = relative(configDir, dir);
+
+            return ContextConfig.create(
+                { name, path: relativePath },
+                configDir,
+                fs
+            );
+        })
+    );
+}
+
+async function createObjectContext(
+    ctx: InputContextConfig,
+    index: number,
+    configDir: string,
+    fs: FileSystem
+): Promise<ContextConfig> {
+    if (!ctx.name || typeof ctx.name !== "string") {
+        throw new ConfigLoadError(
+            `Invalid context at index ${index}: missing 'name'`
+        );
+    }
+    if (!ctx.path || typeof ctx.path !== "string") {
+        throw new ConfigLoadError(
+            `Invalid context at index ${index}: missing 'path'`
+        );
+    }
+
+    return ContextConfig.create(ctx, configDir, fs);
+}
+
+async function matchGlobPattern(
+    pattern: string,
+    configDir: string,
+    fs: FileSystem
+): Promise<string[]> {
+    const globParts = pattern.split("*");
+
+    if (globParts.length !== SUPPORTED_GLOB_PARTS_COUNT) {
+        throw new ConfigLoadError(
+            `Invalid glob pattern: "${pattern}". Only single wildcard patterns like "packages/*" are supported.`
+        );
+    }
+
+    const [prefix, suffix] = globParts;
+    const baseDir = resolve(configDir, prefix);
+
+    if (!await fs.exists(baseDir)) {
+        return [];
+    }
+
+    const entries = await fs.readdir(baseDir);
+    const matchedDirs: string[] = [];
+
+    for (const entry of entries) {
+        const fullPath = resolve(baseDir, entry);
+        const stats = await fs.stat(fullPath);
+
+        if (!stats.isDirectory()) {
+            continue;
+        }
+
+        if (suffix) {
+            const suffixPath = resolve(fullPath, suffix.replace(/^\//, ""));
+            if (await fs.exists(suffixPath)) {
+                matchedDirs.push(fullPath);
+            }
+        } else {
+            matchedDirs.push(fullPath);
+        }
+    }
+
+    return matchedDirs.sort();
 }
 
 export class ConfigLoader {
@@ -78,7 +204,7 @@ export class ConfigLoader {
             throw new ConfigLoadError("Missing 'contracts.contexts' in config");
         }
 
-        const contexts = await this.resolveContexts(contracts.contexts, configDir);
+        const contexts = await resolveContextEntries(contracts.contexts, configDir, this.fs);
 
         if (contexts.length === 0) {
             throw new ConfigLoadError("No contexts found from 'contexts'");
@@ -94,121 +220,6 @@ export class ConfigLoader {
             responseNamingConventions: contracts.responseNamingConventions,
             removeDecorators: contracts.removeDecorators ?? true,
         };
-    }
-
-    private async resolveContexts(
-        contextsConfig: string[] | InputContextConfig[],
-        configDir: string
-    ): Promise<ContextConfig[]> {
-        const contexts: ContextConfig[] = [];
-
-        for (let i = 0; i < contextsConfig.length; i++) {
-            const item = contextsConfig[i];
-
-            if (typeof item === "string") {
-                const resolvedContexts = await this.resolveStringContext(item, configDir);
-                contexts.push(...resolvedContexts);
-            } else {
-                const contextConfig = await this.createObjectContext(item, i, configDir);
-                contexts.push(contextConfig);
-            }
-        }
-
-        return contexts;
-    }
-
-    private async resolveStringContext(
-        contextPath: string,
-        configDir: string
-    ): Promise<ContextConfig[]> {
-        if (contextPath.includes("*")) {
-            return this.expandGlobPattern(contextPath, configDir);
-        }
-
-        const basePath = resolve(configDir, contextPath);
-        const name = basename(basePath);
-
-        return [await ContextConfig.create(
-            { name, path: contextPath },
-            configDir,
-            this.fs
-        )];
-    }
-
-    private async expandGlobPattern(pattern: string, configDir: string): Promise<ContextConfig[]> {
-        const packageDirs = await this.matchGlobPattern(pattern, configDir);
-
-        return Promise.all(
-            packageDirs.map((dir) => {
-                const name = basename(dir);
-                const relativePath = relative(configDir, dir);
-
-                return ContextConfig.create(
-                    { name, path: relativePath },
-                    configDir,
-                    this.fs
-                );
-            })
-        );
-    }
-
-    private async createObjectContext(
-        ctx: InputContextConfig,
-        index: number,
-        configDir: string
-    ): Promise<ContextConfig> {
-        if (!ctx.name || typeof ctx.name !== "string") {
-            throw new ConfigLoadError(
-                `Invalid context at index ${index}: missing 'name'`
-            );
-        }
-        if (!ctx.path || typeof ctx.path !== "string") {
-            throw new ConfigLoadError(
-                `Invalid context at index ${index}: missing 'path'`
-            );
-        }
-
-        return ContextConfig.create(ctx, configDir, this.fs);
-    }
-
-    private async matchGlobPattern(pattern: string, configDir: string): Promise<string[]> {
-        const globParts = pattern.split("*");
-
-        if (globParts.length !== SUPPORTED_GLOB_PARTS_COUNT) {
-            throw new ConfigLoadError(
-                `Invalid glob pattern: "${pattern}". Only single wildcard patterns like "packages/*" are supported.`
-            );
-        }
-
-        const [prefix, suffix] = globParts;
-        const baseDir = resolve(configDir, prefix);
-
-        if (!await this.fs.exists(baseDir)) {
-            return [];
-        }
-
-        const entries = await this.fs.readdir(baseDir);
-        const matchedDirs: string[] = [];
-
-        for (const entry of entries) {
-            const fullPath = resolve(baseDir, entry);
-            const stats = await this.fs.stat(fullPath);
-
-            if (!stats.isDirectory()) {
-                continue;
-            }
-
-            if (suffix) {
-                const suffixPath = resolve(fullPath, suffix.replace(/^\//, ""));
-                if (await this.fs.exists(suffixPath)) {
-                    matchedDirs.push(fullPath);
-                }
-            } else {
-                matchedDirs.push(fullPath);
-            }
-        }
-
-        return matchedDirs.sort();
     }
 }
 

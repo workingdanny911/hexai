@@ -101,20 +101,15 @@ export default {
         contexts: [
             {
                 name: "order",
-                sourceDir: "packages/order/src",
-                tsconfigPath: "packages/order/tsconfig.json", // optional
+                path: "packages/order",
+                tsconfigPath: "tsconfig.json", // optional, relative to path
             },
             {
                 name: "inventory",
-                sourceDir: "packages/inventory/src",
+                path: "packages/inventory",
+                sourceDir: "lib", // optional, defaults to "src"
             },
         ],
-
-        // Output package configuration (required)
-        outputPackage: {
-            name: "@myorg/contracts",
-            dir: "packages/contracts",
-        },
 
         // Path alias rewrite rules (optional)
         pathAliasRewrites: {
@@ -132,9 +127,23 @@ export default {
             { messageSuffix: "Query", responseSuffix: "QueryResult" },
             { messageSuffix: "Request", responseSuffix: "Response" },
         ],
+
+        // Custom decorator names (optional, defaults shown)
+        decoratorNames: {
+            event: "PublicEvent",
+            command: "PublicCommand",
+            query: "PublicQuery",
+        },
+
+        // Strip decorators from generated output (optional, default: true)
+        removeDecorators: true,
     },
 };
 ```
+
+Each context requires `name` and `path`. The `path` is the base directory of the context (relative to the config file). Within that directory:
+- `sourceDir` defaults to `"src"` (resolved relative to `path`)
+- `tsconfigPath` defaults to `"tsconfig.json"` (resolved relative to `path`)
 
 For monorepos with many packages, use glob patterns to auto-discover contexts:
 
@@ -142,10 +151,6 @@ For monorepos with many packages, use glob patterns to auto-discover contexts:
 export default {
     contracts: {
         contexts: ["packages/*"],  // Matches all directories under packages/
-        outputPackage: {
-            name: "@myorg/contracts",
-            dir: "packages/contracts",
-        },
     },
 };
 ```
@@ -208,17 +213,19 @@ The generator handles two types of files differently:
 Run the generator from your monorepo root:
 
 ```bash
-# Uses application.config.ts by default
-npx contracts-generator
+# Required: --output-dir (-o) specifies where contracts are generated
+npx contracts-generator --output-dir packages/contracts/src
 
-# Specify config file path
-npx contracts-generator --config ./application.config.ts
+# Specify config file path (default: application.config.ts)
+npx contracts-generator -o packages/contracts/src --config ./app.config.ts
 
 # Filter by message types
-npx contracts-generator -m event           # Extract only events
-npx contracts-generator -m command         # Extract only commands
-npx contracts-generator -m query           # Extract only queries
-npx contracts-generator -m event,command   # Extract events and commands
+npx contracts-generator -o packages/contracts/src -m event           # Extract only events
+npx contracts-generator -o packages/contracts/src -m command         # Extract only commands
+npx contracts-generator -o packages/contracts/src -m event,command   # Extract events and commands
+
+# Generate with message registry (index.ts)
+npx contracts-generator -o packages/contracts/src --generate-message-registry
 ```
 
 ### Programmatic API
@@ -255,6 +262,7 @@ contracts/
 │   ├── {context}/
 │   │   ├── events.ts
 │   │   ├── commands.ts
+│   │   ├── queries.ts
 │   │   ├── types.ts       # Dependent types + Response types
 │   │   └── index.ts       # Barrel exports
 │   └── index.ts           # Namespace exports + MessageRegistry

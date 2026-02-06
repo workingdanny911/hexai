@@ -33,7 +33,7 @@ src/
 ├── file-graph-resolver.ts # Build import dependency graph
 ├── file-copier.ts        # Copy files with import rewriting
 ├── config-loader.ts      # Load application.config.ts
-├── tsconfig-loader.ts    # Load path aliases
+├── context-config.ts     # Context configuration with tsconfig path alias resolution
 ├── registry-generator.ts # Generate MessageRegistry registration code
 ├── reexport-generator.ts # Generate re-export files for path alias rewrites
 ├── test-utils.ts         # Test utilities
@@ -286,7 +286,7 @@ class FileCopier {
 
 ---
 
-### 7. TSConfig Loader (`src/tsconfig-loader.ts`)
+### 7. Context Config (`src/context-config.ts`)
 
 Loads path alias configuration from tsconfig.json.
 
@@ -891,7 +891,7 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
          │                           │                           │
          ▼                           ▼                           ▼
   ┌─────────────┐      ┌───────────────────────┐        ┌───────────────┐
-  │   Scanner   │      │   TS Utils (separated) │        │tsconfig-loader│
+  │   Scanner   │      │   TS Utils (separated) │        │context-config │
   └─────────────┘      │ - ast-utils           │        └───────┬───────┘
                        │ - import-analyzer     │                │
                        │ - class-analyzer      │                │

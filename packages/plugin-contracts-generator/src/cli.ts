@@ -2,8 +2,8 @@
 
 import { fileURLToPath } from "node:url";
 import { resolve, dirname, join, relative } from "node:path";
-import { ConfigLoader, type ContractsConfig } from "./config-loader";
-import { ContextConfig } from "./context-config";
+import { ConfigLoader, type ContractsConfig, resolveContextEntries } from "./config-loader";
+import type { InputContextConfig } from "./context-config";
 import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } from "./index";
 import { RegistryGenerator, ContextMessages } from "./registry-generator";
 import { ReexportGenerator } from "./reexport-generator";
@@ -44,12 +44,7 @@ export interface RunWithConfigOptions {
  * This is the config passed from hexai.config.ts.
  */
 export interface ContractsPluginConfig {
-    contexts: Array<{
-        name: string;
-        path: string;
-        sourceDir?: string;
-        tsconfigPath?: string;
-    }>;
+    contexts: Array<string | InputContextConfig>;
     pathAliasRewrites?: Record<string, string>;
     externalDependencies?: Record<string, string>;
     decoratorNames?: DecoratorNames;
@@ -163,9 +158,12 @@ Config file format:
   export default {
     contracts: {
       contexts: [
+        "packages/*",                    // glob: auto-discover all contexts
+        "packages/auth",                 // string: name inferred from directory
         {
           name: "lecture",
-          sourceDir: "packages/lecture/src",
+          path: "packages/lecture",       // required: base directory
+          sourceDir: "src",              // optional, default: "src"
         },
       ],
       pathAliasRewrites: {
@@ -278,19 +276,10 @@ export async function run(args: string[]): Promise<void> {
  * Converts plugin config to internal ContractsConfig format.
  */
 async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<ContractsConfig> {
-    const contexts = await Promise.all(
-        pluginConfig.contexts.map((ctx) =>
-            ContextConfig.create(
-                {
-                    name: ctx.name,
-                    path: ctx.path,
-                    sourceDir: ctx.sourceDir,
-                    tsconfigPath: ctx.tsconfigPath,
-                },
-                process.cwd(),
-                nodeFileSystem
-            )
-        )
+    const contexts = await resolveContextEntries(
+        pluginConfig.contexts,
+        process.cwd(),
+        nodeFileSystem
     );
 
     return {
