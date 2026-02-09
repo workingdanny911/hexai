@@ -63,7 +63,7 @@ interface MessageOptions {
 // Pass custom headers
 const command = new CreateOrderCommand(
     { customerId: "customer-123", items: [] },
-    { headers: { correlationId: "corr-abc" } }
+    { headers: { correlation: { id: "corr-abc", type: "HttpRequest" } } }
 );
 ```
 
@@ -121,13 +121,35 @@ Use `withHeader()` to create a new message instance with an additional header:
 
 ```typescript
 const command = new CreateOrderCommand({ customerId: "c-123", items: [] })
-    .withHeader("correlationId", "corr-abc")
+    .withCorrelation({ id: "corr-abc", type: "HttpRequest" })
     .withHeader("source", "api-gateway");
 
-command.getHeader("correlationId"); // "corr-abc"
+command.getCorrelation(); // { id: "corr-abc", type: "HttpRequest" }
 ```
 
 `withHeader()` returns a new immutable instance - the original message is not modified.
+
+#### Message Tracing
+
+Messages support built-in correlation and causation tracing for distributed message flows:
+
+```typescript
+import { Message, MessageTrace } from "@hexaijs/core";
+
+// Get message identity as trace
+const trace: MessageTrace = command.asTrace();
+// { id: "msg-uuid", type: "order.create-order" }
+
+// Set correlation (root message in chain)
+const correlated = command.withCorrelation({ id: "req-123", type: "HttpRequest" });
+correlated.getCorrelation();  // { id: "req-123", type: "HttpRequest" }
+
+// Set causation (direct parent message)
+const caused = event.withCausation(command.asTrace());
+caused.getCausation();  // { id: "cmd-uuid", type: "order.create-order" }
+```
+
+When events are published through `ApplicationContext.publish()`, causation and correlation headers are set automatically.
 
 ### DomainEvent
 
@@ -336,6 +358,12 @@ throw new DuplicateObjectError("Order with this ID already exists");
 |--------|-------------|
 | `Message<P>` | Base message class with headers and typed payload |
 | `MessageOptions` | Options for Message constructor (`{ headers? }`) |
+| `MessageTrace` | Interface for message identity (`{ id, type }`) used in tracing |
+| `Message.asTrace()` | Returns this message's identity as `MessageTrace` |
+| `Message.getCausation()` | Gets the direct parent message trace |
+| `Message.getCorrelation()` | Gets the root message trace in the chain |
+| `Message.withCausation(trace)` | Sets causation, returns new instance |
+| `Message.withCorrelation(trace)` | Sets correlation, returns new instance |
 | `DomainEvent<P>` | Message subclass for domain events |
 | `AggregateRoot<T>` | Base class for aggregates with event collection |
 | `Id<T>` | Value object for typed identities |

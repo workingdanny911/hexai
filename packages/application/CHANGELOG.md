@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0] - 2026-02-09
+
+### Changed
+
+- `ApplicationEventPublisher` now uses `Message.withCausation()` / `Message.withCorrelation()` instead of raw `withHeader()`
+- Logging utilities (`buildLogContext`, `propagateTrace`) now read from canonical `"causation"` / `"correlation"` object headers instead of separate `"causationId"` / `"causationType"` string headers
+
+### Removed
+
+- `messaging-support.ts` — all functions (`asTrace`, `causationOf`, `correlationOf`, `setCausationOf`, `setCorrelationOf`) and `MessageTrace` type replaced by `Message`-level methods in `@hexaijs/core`
+- Re-exports of messaging-support functions from `@hexaijs/application` and `@hexaijs/application/logging`
+
+### Fixed
+
+- **Logging trace interceptor could not read causation/correlation** from events published through `ApplicationEventPublisher` due to mismatched header key format (object vs separate strings). Now unified on object format.
+
+### Migration
+
+- Requires `@hexaijs/core` `^0.6.0`
+- Replace `import { asTrace, causationOf, ... } from "@hexaijs/application"` with `Message` methods
+- Replace `import { MessageTrace } from "@hexaijs/application"` with `import { MessageTrace } from "@hexaijs/core"`
+
 ## [0.3.1] - 2026-02-09
 
 ### Breaking Changes

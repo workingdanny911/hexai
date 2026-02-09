@@ -1,5 +1,4 @@
 import { AnyMessage, Message } from "@hexaijs/core";
-import { asTrace } from "./messaging-support";
 import { EventPublisher } from "./event-publisher";
 
 interface PublishCallback {
@@ -30,14 +29,11 @@ export class ApplicationEventPublisher implements EventPublisher<Message> {
     public async publish(...events: Message[]): Promise<void> {
         for (let event of events) {
             if (this.context) {
-                const trace = asTrace(this.context);
+                const trace = this.context.asTrace();
 
                 event = event
-                    .withHeader("causation", trace)
-                    .withHeader(
-                        "correlation",
-                        this.context.getHeader("correlation") || trace
-                    );
+                    .withCausation(trace)
+                    .withCorrelation(this.context.getCorrelation() ?? trace);
             }
             await this.runCallbacks(event);
         }

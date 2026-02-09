@@ -1,3 +1,5 @@
+import type { MessageTrace } from "@hexaijs/core";
+
 import type { Result } from "../application";
 import type {
     CommandInterceptionContext,
@@ -7,11 +9,6 @@ import type {
     InterceptionContext,
     Interceptor,
 } from "../interceptor";
-import {
-    asTrace,
-    correlationOf,
-    type MessageTrace,
-} from "../messaging-support";
 
 export const CURRENT_MESSAGE_TRACE_KEY = Symbol("currentMessageTrace");
 export const CORRELATION_TRACE_KEY = Symbol("correlationTrace");
@@ -30,10 +27,10 @@ export function getCorrelationTrace(
 
 function propagateTrace(ctx: InterceptionContext): void {
     const message = ctx.message;
-    const currentTrace = asTrace(message);
+    const currentTrace = message.asTrace();
     ctx.metadata[CURRENT_MESSAGE_TRACE_KEY] = currentTrace;
 
-    const correlationTrace = correlationOf(message) ?? currentTrace;
+    const correlationTrace = message.getCorrelation() ?? currentTrace;
     ctx.metadata[CORRELATION_TRACE_KEY] = correlationTrace;
 }
 

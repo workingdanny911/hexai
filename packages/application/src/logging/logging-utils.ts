@@ -1,7 +1,6 @@
 import { Message } from "@hexaijs/core";
 
 import type { Result } from "@/application";
-import { asTrace, causationOf, correlationOf } from "@/messaging-support";
 import type { Logger, LogContext } from "./logger";
 
 export interface LoggingInterceptorConfig {
@@ -50,7 +49,7 @@ export function buildLogContext(
     metadata: Record<string, unknown>,
     includeTracing: boolean
 ): LogContext {
-    const trace = asTrace(message);
+    const trace = message.asTrace();
 
     const logContext: LogContext = {
         messageId: trace.id,
@@ -58,13 +57,13 @@ export function buildLogContext(
     };
 
     if (includeTracing) {
-        const correlation = correlationOf(message);
+        const correlation = message.getCorrelation();
         if (correlation) {
             logContext.correlationId = correlation.id;
             logContext.correlationType = correlation.type;
         }
 
-        const causation = causationOf(message);
+        const causation = message.getCausation();
         if (causation) {
             logContext.causationId = causation.id;
             logContext.causationType = causation.type;

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0] - 2026-02-09
+
+### Added
+
+- `MessageTrace` interface: `{ id: string; type: string }` for message identity in tracing
+- `Message.asTrace()`: returns this message's identity as `MessageTrace`
+- `Message.getCausation()`: gets the direct parent message trace from `"causation"` header
+- `Message.getCorrelation()`: gets the root message trace from `"correlation"` header
+- `Message.withCausation(trace)`: sets causation trace, returns new immutable instance
+- `Message.withCorrelation(trace)`: sets correlation trace, returns new immutable instance
+
 ## [0.5.1] - 2026-02-09
 
 ### Breaking Changes

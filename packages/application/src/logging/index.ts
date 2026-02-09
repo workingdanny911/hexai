@@ -33,12 +33,3 @@ export {
     createLoggingInterceptor,
     LoggingInterceptor,
 } from "./logging-interceptor";
-
-export {
-    asTrace,
-    causationOf,
-    correlationOf,
-    setCausationOf,
-    setCorrelationOf,
-    type MessageTrace,
-} from "../messaging-support";

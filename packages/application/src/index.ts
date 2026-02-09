@@ -11,7 +11,6 @@ export * from "./intercepted-application";
 export * from "./message-handler";
 export * from "./application-context";
 export * from "./interceptor";
-export * from "./messaging-support";
 export * from "./logging";
 export * from "./event-publisher";
 export * from "./application-event-publisher";

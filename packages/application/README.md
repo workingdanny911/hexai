@@ -385,6 +385,41 @@ await compositeApp.handleEvent(event);
 
 ## Migration Guide
 
+### From v0.3.1 to v0.4.0
+
+This version promotes correlation/causation tracing to `Message`-level API in `@hexaijs/core`.
+
+#### Correlation/Causation Headers
+
+**Before (v0.3.x)** - using raw headers:
+```typescript
+const cmd = new MyCommand(payload)
+    .withHeader("correlationId", "corr-123")
+    .withHeader("correlationType", "HttpRequest");
+```
+
+**After (v0.4.0)** - using typed methods:
+```typescript
+const cmd = new MyCommand(payload)
+    .withCorrelation({ id: "corr-123", type: "HttpRequest" });
+
+cmd.getCorrelation();  // { id: "corr-123", type: "HttpRequest" }
+```
+
+The utility functions (`causationOf`, `correlationOf`, `setCausationOf`, `setCorrelationOf`, `asTrace`) and `MessageTrace` type from `messaging-support` have been **removed**. Use `Message` methods and import `MessageTrace` from `@hexaijs/core`.
+
+#### Quick Migration Checklist
+
+- [ ] Replace `import { MessageTrace } from "@hexaijs/application"` with `import { MessageTrace } from "@hexaijs/core"`
+- [ ] Replace `import { asTrace, causationOf, ... } from "@hexaijs/application"` with `Message` methods
+- [ ] Replace `withHeader("correlationId", ...)` / `withHeader("correlationType", ...)` with `withCorrelation({ id, type })`
+- [ ] Replace `withHeader("causationId", ...)` / `withHeader("causationType", ...)` with `withCausation({ id, type })`
+- [ ] Replace `getHeader("correlationId")` with `getCorrelation()?.id`
+- [ ] Replace `causationOf(msg)` with `msg.getCausation()`
+- [ ] Replace `correlationOf(msg)` with `msg.getCorrelation()`
+- [ ] Replace `asTrace(msg)` with `msg.asTrace()`
+- [ ] Update `@hexaijs/core` peer dependency to `^0.6.0`
+
 ### From v0.2.0 to v0.3.0
 
 This version changes the constructor pattern for `Command`, `Query`, and `MessageWithAuth` from positional parameters to an options object.

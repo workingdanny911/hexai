@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, Mock, test, vi } from "vitest";
 
-import { Message } from "@hexaijs/core";
+import { Message, MessageTrace } from "@hexaijs/core";
 import { DummyMessage } from "@hexaijs/core/test";
 import { ApplicationEventPublisher } from "./application-event-publisher";
-import { asTrace, MessageTrace } from "./messaging-support";
 
 describe("application event publisher", () => {
     let publisher: ApplicationEventPublisher;
@@ -91,11 +90,11 @@ describe("application event publisher", () => {
         }
     ) {
         if (correlation) {
-            expect(event.getHeader("correlation")).toEqual(correlation);
+            expect(event.getCorrelation()).toEqual(correlation);
         }
 
         if (causation) {
-            expect(event.getHeader("causation")).toEqual(causation);
+            expect(event.getCausation()).toEqual(causation);
         }
     }
 
@@ -103,7 +102,7 @@ describe("application event publisher", () => {
         const message = DummyMessage.create();
         const derivative = publisher.deriveFrom(message);
         subscriber.mockImplementation((event) => {
-            const trace = asTrace(message);
+            const trace = message.asTrace();
             expectMetadata(event, {
                 correlation: trace,
                 causation: trace,
@@ -118,8 +117,8 @@ describe("application event publisher", () => {
 
     test("deriving a new instance does not affect parent, metadata-wise", async () => {
         subscriber.mockImplementation((event) => {
-            expect(event.getHeader("correlation")).toBeUndefined();
-            expect(event.getHeader("causation")).toBeUndefined();
+            expect(event.getCorrelation()).toBeUndefined();
+            expect(event.getCausation()).toBeUndefined();
         });
         publisher.subscribe(subscriber);
 
@@ -134,8 +133,8 @@ describe("application event publisher", () => {
     test("callbacks are preserved when deriving, but does not execute callbacks multiple times", async () => {
         subscriber.mockImplementation((event) => {
             // if callbacks were executed in parent too, these would be undefined
-            expect(event.getHeader("correlation")).toBeDefined();
-            expect(event.getHeader("causation")).toBeDefined();
+            expect(event.getCorrelation()).toBeDefined();
+            expect(event.getCausation()).toBeDefined();
         });
         publisher.subscribe(subscriber);
         const derivative = publisher.deriveFrom(DummyMessage.create());
@@ -157,14 +156,11 @@ describe("application event publisher", () => {
     test("reserves correlation of the message that the event publisher is deriving from", async () => {
         // root -> child -> event1
         const root = DummyMessage.create();
-        const child = DummyMessage.create().withHeader(
-            "correlation",
-            asTrace(root)
-        );
+        const child = DummyMessage.create().withCorrelation(root.asTrace());
         const derivative = publisher.deriveFrom(child);
         subscriber.mockImplementation((event) => {
-            expect(event.getHeader("correlation")).toEqual(asTrace(root));
-            expect(event.getHeader("causation")).toEqual(asTrace(child));
+            expect(event.getCorrelation()).toEqual(root.asTrace());
+            expect(event.getCausation()).toEqual(child.asTrace());
         });
         derivative.subscribe(subscriber);
 

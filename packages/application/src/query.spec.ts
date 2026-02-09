@@ -23,22 +23,22 @@ describe("Query", () => {
         });
     });
 
-    describe("withHeader", () => {
-        it("should set header and return new instance", () => {
+    describe("withCorrelation", () => {
+        it("should set correlation and return new instance", () => {
             const query1 = new TestQuery("hello");
-            const query2 = query1.withHeader("correlationId", "corr-123");
+            const query2 = query1.withCorrelation({ id: "corr-123", type: "HttpRequest" });
 
-            expect(query1.getHeader("correlationId")).toBeUndefined();
-            expect(query2.getHeader("correlationId")).toBe("corr-123");
+            expect(query1.getCorrelation()).toBeUndefined();
+            expect(query2.getCorrelation()).toEqual({ id: "corr-123", type: "HttpRequest" });
         });
 
-        it("should chain multiple withHeader calls", () => {
+        it("should chain withCorrelation with withCausation", () => {
             const query = new TestQuery("hello")
-                .withHeader("correlationId", "corr-123")
-                .withHeader("correlationType", "HttpRequest");
+                .withCorrelation({ id: "corr-123", type: "HttpRequest" })
+                .withCausation({ id: "cause-456", type: "UserAction" });
 
-            expect(query.getHeader("correlationId")).toBe("corr-123");
-            expect(query.getHeader("correlationType")).toBe("HttpRequest");
+            expect(query.getCorrelation()).toEqual({ id: "corr-123", type: "HttpRequest" });
+            expect(query.getCausation()).toEqual({ id: "cause-456", type: "UserAction" });
         });
     });
 
@@ -55,15 +55,15 @@ describe("Query", () => {
             expect(query2.getSecurityContext()).toEqual(securityContext);
         });
 
-        it("should chain withSecurityContext with withHeader", () => {
+        it("should chain withSecurityContext with withCorrelation", () => {
             const securityContext = { userId: "user-456" };
 
             const query = new TestQuery("hello")
                 .withSecurityContext(securityContext)
-                .withHeader("correlationId", "corr-789");
+                .withCorrelation({ id: "corr-789", type: "HttpRequest" });
 
             expect(query.getSecurityContext()).toEqual(securityContext);
-            expect(query.getHeader("correlationId")).toBe("corr-789");
+            expect(query.getCorrelation()).toEqual({ id: "corr-789", type: "HttpRequest" });
         });
 
         it("should return typed security context with generic", () => {

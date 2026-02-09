@@ -2,6 +2,11 @@ import { v4 as uuid } from "uuid";
 
 type Version = string | number | undefined;
 
+export interface MessageTrace {
+    id: string;
+    type: string;
+}
+
 export interface MessageHeaders {
     id: string;
     type: string;
@@ -167,6 +172,26 @@ export class Message<Payload = any> {
     public asType<M extends MessageClass>(cls: M): InstanceType<M> {
         const { headers, payload } = this.serialize();
         return cls.from(payload, headers) as InstanceType<M>;
+    }
+
+    public asTrace(): MessageTrace {
+        return { id: this.getMessageId(), type: this.getMessageType() };
+    }
+
+    public getCausation(): MessageTrace | undefined {
+        return this.getHeader<MessageTrace>("causation");
+    }
+
+    public getCorrelation(): MessageTrace | undefined {
+        return this.getHeader<MessageTrace>("correlation");
+    }
+
+    public withCausation(trace: MessageTrace): this {
+        return this.withHeader("causation", trace);
+    }
+
+    public withCorrelation(trace: MessageTrace): this {
+        return this.withHeader("correlation", trace);
     }
 }
 

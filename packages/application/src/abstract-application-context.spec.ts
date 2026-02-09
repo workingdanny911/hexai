@@ -4,7 +4,6 @@ import { Message } from "@hexaijs/core";
 import { DummyMessage } from "@hexaijs/core/test";
 import { AbstractApplicationContext } from "./abstract-application-context";
 import { Command } from "./command";
-import { asTrace } from "./messaging-support";
 
 class ApplicationContextForTest extends AbstractApplicationContext {
     public events: Message[] = [];
@@ -145,19 +144,18 @@ describe("AbstractApplicationContext", () => {
                 );
 
                 const [publishedEvent] = context.events;
-                expect(publishedEvent.getHeader("correlation")).toEqual(
-                    asTrace(command)
+                expect(publishedEvent.getCorrelation()).toEqual(
+                    command.asTrace()
                 );
-                expect(publishedEvent.getHeader("causation")).toEqual(
-                    asTrace(command)
+                expect(publishedEvent.getCausation()).toEqual(
+                    command.asTrace()
                 );
             });
 
             test("preserves existing correlation when command already has one", async () => {
                 const root = DummyMessage.create();
-                const commandWithCorrelation = command.withHeader(
-                    "correlation",
-                    asTrace(root)
+                const commandWithCorrelation = command.withCorrelation(
+                    root.asTrace()
                 );
 
                 await context.enterCommandExecutionScope(
@@ -168,11 +166,11 @@ describe("AbstractApplicationContext", () => {
                 );
 
                 const [publishedEvent] = context.events;
-                expect(publishedEvent.getHeader("correlation")).toEqual(
-                    asTrace(root)
+                expect(publishedEvent.getCorrelation()).toEqual(
+                    root.asTrace()
                 );
-                expect(publishedEvent.getHeader("causation")).toEqual(
-                    asTrace(commandWithCorrelation)
+                expect(publishedEvent.getCausation()).toEqual(
+                    commandWithCorrelation.asTrace()
                 );
             });
         });

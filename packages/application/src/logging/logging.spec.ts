@@ -20,25 +20,6 @@ import {
     CORRELATION_TRACE_KEY,
 } from "./index";
 
-// Helper to set correlation (handles immutable message)
-function withCorrelation<T extends Message<unknown>>(
-    message: T,
-    correlation: { id: string; type: string }
-): T {
-    return message
-        .withHeader("correlationId", correlation.id)
-        .withHeader("correlationType", correlation.type) as T;
-}
-
-function withCausation<T extends Message<unknown>>(
-    message: T,
-    causation: { id: string; type: string }
-): T {
-    return message
-        .withHeader("causationId", causation.id)
-        .withHeader("causationType", causation.type) as T;
-}
-
 class TestCommand extends Command<{ value: string }> {
     constructor(value: string = "test") {
         super({ value });
@@ -187,13 +168,9 @@ describe("Logging Module", () => {
                 logger: testLogger,
             });
 
-            const command = withCausation(
-                withCorrelation(new TestCommand(), {
-                    id: "corr-123",
-                    type: "HttpRequest",
-                }),
-                { id: "cause-456", type: "UserAction" }
-            );
+            const command = new TestCommand()
+                .withCorrelation({ id: "corr-123", type: "HttpRequest" })
+                .withCausation({ id: "cause-456", type: "UserAction" });
 
             const app = createApplicationBuilder()
                 .withCommandHandler(TestCommand, () =>
@@ -357,10 +334,8 @@ describe("Logging Module", () => {
                 logger: testLogger,
             });
 
-            const command = withCorrelation(new TestCommand(), {
-                id: "original-corr",
-                type: "OriginalType",
-            });
+            const command = new TestCommand()
+                .withCorrelation({ id: "original-corr", type: "OriginalType" });
 
             const app = createApplicationBuilder()
                 .withCommandHandler(TestCommand, () =>
@@ -409,12 +384,9 @@ describe("Logging Module", () => {
             });
             const eventHandler = createMockEventHandler();
 
-            // Pass headers via constructor since TestEvent doesn't support setHeader properly
             const event = new TestEvent("event-data", {
-                correlationId: "corr-evt",
-                correlationType: "Command",
-                causationId: "cause-cmd",
-                causationType: "CreateOrder",
+                correlation: { id: "corr-evt", type: "Command" },
+                causation: { id: "cause-cmd", type: "CreateOrder" },
             });
 
             const app = createApplicationBuilder()
@@ -435,13 +407,8 @@ describe("Logging Module", () => {
         it("works together for full observability", async () => {
             const testLogger = createTestLogger();
 
-            const command = withCorrelation(
-                new TestCommand("integration-test"),
-                {
-                    id: "http-req-1",
-                    type: "HttpRequest",
-                }
-            );
+            const command = new TestCommand("integration-test")
+                .withCorrelation({ id: "http-req-1", type: "HttpRequest" });
 
             const app = createApplicationBuilder()
                 .withCommandHandler(TestCommand, () =>
