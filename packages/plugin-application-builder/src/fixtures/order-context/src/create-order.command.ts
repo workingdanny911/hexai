@@ -5,6 +5,6 @@ export class CreateOrderCommand extends Command<
     { role: string }
 > {
     constructor(payload: { productId: string }, sc: { role: string }) {
-        super(payload, sc);
+        super(payload, { securityContext: sc });
     }
 }

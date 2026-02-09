@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.3.0",
+    "version": "0.3.1",
     "type": "module",
     "description": "CQRS Application Framework for Hexagonal Architecture",
     "license": "MIT",
@@ -54,7 +54,13 @@
         "pino": "^9.6.0"
     },
     "peerDependencies": {
-        "@hexaijs/core": "^0.5.0"
+        "@hexaijs/core": "^0.5.0",
+        "pino-pretty": "^13.0.0"
+    },
+    "peerDependenciesMeta": {
+        "pino-pretty": {
+            "optional": true
+        }
     },
     "devDependencies": {
         "@hexaijs/core": "workspace:^",

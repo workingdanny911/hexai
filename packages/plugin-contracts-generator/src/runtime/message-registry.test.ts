@@ -26,12 +26,12 @@ describe("MessageRegistry", () => {
             }
 
             static from(payload: Record<string, unknown>, headers?: MessageHeaders) {
-                return new this(payload, headers);
+                return new this(payload, { headers });
             }
 
             constructor(
                 public readonly payload: Record<string, unknown>,
-                public readonly headers?: MessageHeaders
+                public readonly options?: { headers?: MessageHeaders }
             ) {}
         } as unknown as MessageClass;
     }
@@ -139,7 +139,7 @@ describe("MessageRegistry", () => {
         const headers = createHeaders("headers.test");
         const result = registry.dehydrate(headers, {}) as any;
 
-        expect(result.headers).toBe(headers);
+        expect(result.options.headers).toBe(headers);
     });
 
     test("handles string schema versions", () => {

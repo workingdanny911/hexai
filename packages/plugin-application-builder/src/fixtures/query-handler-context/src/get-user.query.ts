@@ -5,6 +5,6 @@ export class GetUserQuery extends Query<{ userId: string }, { role: string }> {
         payload: { userId: string },
         securityContext?: { role: string }
     ) {
-        super(payload, {}, securityContext);
+        super(payload, { securityContext });
     }
 }

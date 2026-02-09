@@ -21,6 +21,10 @@ type RawMessageHeaders = Omit<MessageHeaders, "createdAt"> & {
     createdAt: string | Date;
 };
 
+export interface MessageOptions {
+    headers?: Record<string, unknown>;
+}
+
 export class Message<Payload = any> {
     protected headers!: MessageHeaders;
 
@@ -45,10 +49,11 @@ export class Message<Payload = any> {
         headers?: RawMessageHeaders
     ): Message {
         const payload = this.deserializeRawPayload(rawPayload);
-        return new this(
-            payload,
-            headers ? this.deserializeRawHeaders(headers) : this.newHeaders()
-        );
+        return new this(payload, {
+            headers: headers
+                ? this.deserializeRawHeaders(headers)
+                : this.newHeaders(),
+        });
     }
 
     protected static deserializeRawPayload(rawPayload: any): any {
@@ -65,10 +70,10 @@ export class Message<Payload = any> {
 
     constructor(
         protected readonly payload: Payload,
-        headers: Record<string, unknown> = {}
+        options?: MessageOptions
     ) {
         this.headers = Object.freeze(
-            (this.constructor as any).mergeHeaders(headers)
+            (this.constructor as any).mergeHeaders(options?.headers ?? {})
         );
 
         if (payload && typeof payload === "object") {
@@ -87,11 +92,23 @@ export class Message<Payload = any> {
 
     public withHeader(field: ExtraHeaderField, value: unknown): this {
         const newHeaders = { ...this.headers, [field]: value };
-        return new (this.constructor as any)(this.payload, newHeaders);
+        return this.cloneWithHeaders(newHeaders);
     }
 
     protected clone(): this {
-        return new (this.constructor as any)(this.payload, { ...this.headers });
+        const cloned = Object.create(Object.getPrototypeOf(this));
+        Object.assign(cloned, this);
+        return cloned;
+    }
+
+    protected cloneWithHeaders(headers: Record<string, unknown>): this {
+        const cloned = this.clone();
+        Object.defineProperty(cloned, "headers", {
+            value: Object.freeze(headers),
+            writable: false,
+            configurable: true,
+        });
+        return cloned;
     }
 
     public getHeader<T = string>(field: string): T | undefined {
@@ -126,16 +143,7 @@ export class Message<Payload = any> {
         return (this.constructor as MessageClass).getIntent();
     }
 
-    public serialize(): {
-        headers: MessageHeaders;
-        payload: Record<string, unknown>;
-    } {
-        // we do this to convert the Date object to a string
-        // and also to remove any reference to the original object
-        return JSON.parse(JSON.stringify(this.doSerialize()));
-    }
-
-    private doSerialize(): {
+    public toJSON(): {
         headers: MessageHeaders;
         payload: unknown;
     } {
@@ -143,6 +151,13 @@ export class Message<Payload = any> {
             headers: { ...this.headers },
             payload: this.serializePayload(this.payload),
         };
+    }
+
+    public serialize(): {
+        headers: MessageHeaders;
+        payload: Record<string, unknown>;
+    } {
+        return JSON.parse(JSON.stringify(this.toJSON()));
     }
 
     protected serializePayload(payload: Payload): unknown {

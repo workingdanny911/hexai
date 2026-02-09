@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.1] - 2026-02-09
+
+### Breaking Changes
+
+- **MessageWithAuth constructor signature changed** from `(payload, headers?, securityContext?)` to `(payload, options?: MessageWithAuthOptions)`
+  - Migration: Replace `new MyCommand(payload, headers, sc)` with `new MyCommand(payload, { headers, securityContext: sc })`
+  - This applies to `Command` and `Query` (which extend `MessageWithAuth`)
+
+### Added
+
+- `MessageWithAuthOptions<SecCtx>` interface (extends `MessageOptions`):
+  ```typescript
+  interface MessageWithAuthOptions<SecCtx> extends MessageOptions {
+      securityContext?: SecCtx;
+  }
+  ```
+
+### Removed
+
+- `clone()`, `cloneWithHeaders()`, `withHeader()` overrides in `MessageWithAuth` - now inherited from `Message` base class
+
 ## [0.2.0] - 2026-02-03
 
 ### Added

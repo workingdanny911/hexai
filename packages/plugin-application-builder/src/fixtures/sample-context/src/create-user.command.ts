@@ -5,6 +5,6 @@ export class CreateUserCommand extends Command<
     { role: string }
 > {
     constructor(payload: { name: string }, sc: { role: string }) {
-        super(payload, sc);
+        super(payload, { securityContext: sc });
     }
 }

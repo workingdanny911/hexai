@@ -1,4 +1,9 @@
-import { Message } from "@hexaijs/core";
+import { Message, MessageOptions } from "@hexaijs/core";
+
+export interface MessageWithAuthOptions<SecCtx = unknown>
+    extends MessageOptions {
+    securityContext?: SecCtx;
+}
 
 export class MessageWithAuth<
     Payload = any,
@@ -11,33 +16,10 @@ export class MessageWithAuth<
 
     constructor(
         payload: Payload,
-        headers: Record<string, unknown> = {},
-        securityContext?: SecCtx
+        options?: MessageWithAuthOptions<SecCtx>
     ) {
-        super(payload, headers);
-        this.securityContext = securityContext;
-    }
-
-    public override withHeader(field: string, value: unknown): this {
-        const newHeaders = { ...this.getHeaders(), [field]: value };
-        return this.cloneWithHeaders(newHeaders);
-    }
-
-    protected clone(): this {
-        const cloned = Object.create(Object.getPrototypeOf(this));
-        Object.assign(cloned, this);
-        return cloned;
-    }
-
-    protected cloneWithHeaders(headers: Record<string, unknown>): this {
-        const cloned = this.clone();
-        // Bypass frozen headers from parent Message class
-        Object.defineProperty(cloned, "headers", {
-            value: Object.freeze(headers),
-            writable: false,
-            configurable: true,
-        });
-        return cloned;
+        super(payload, options);
+        this.securityContext = options?.securityContext;
     }
 
     public getSecurityContext(): SecCtx {

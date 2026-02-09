@@ -92,6 +92,29 @@ const command = new SecureCreateOrderCommand({
 const user = command.getSecurityContext();  // UserSecurityContext
 ```
 
+#### MessageWithAuthOptions
+
+Both `Command` and `Query` constructors accept an optional `MessageWithAuthOptions` object:
+
+```typescript
+import { MessageWithAuthOptions } from "@hexaijs/application";
+
+interface MessageWithAuthOptions<SecCtx> extends MessageOptions {
+    securityContext?: SecCtx;
+}
+
+// Pass security context via options
+const command = new SecureCreateOrderCommand(
+    { customerId: "customer-123", items: [] },
+    { securityContext: { userId: "user-456", roles: ["admin"] } }
+);
+
+// Equivalent to using withSecurityContext():
+const command2 = new SecureCreateOrderCommand(
+    { customerId: "customer-123", items: [] }
+).withSecurityContext({ userId: "user-456", roles: ["admin"] });
+```
+
 ### CommandHandler and QueryHandler
 
 Handlers implement the `execute` method to process messages. The output type is automatically inferred from the Command/Query's `ResultType` parameter:
@@ -346,6 +369,7 @@ await compositeApp.handleEvent(event);
 | `Application` | Interface for command/query execution and event handling |
 | `ApplicationBuilder` | Fluent builder for assembling applications |
 | `Command<P, O, SC>` | Base class for commands with payload, output type, and security context |
+| `MessageWithAuthOptions<SC>` | Options for Command/Query constructor (`{ headers?, securityContext? }`) |
 | `Query<P, O, SC>` | Base class for queries with payload, output type, and security context |
 | `CommandHandler<I, Ctx>` | Interface for command handlers (output inferred from command) |
 | `QueryHandler<I, Ctx>` | Interface for query handlers (output inferred from query) |
@@ -361,19 +385,48 @@ await compositeApp.handleEvent(event);
 
 ## Migration Guide
 
+### From v0.2.0 to v0.3.0
+
+This version changes the constructor pattern for `Command`, `Query`, and `MessageWithAuth` from positional parameters to an options object.
+
+#### Constructor Pattern
+
+**Before (v0.2.x)**:
+```typescript
+const command = new CreateOrderCommand(payload, headers, securityContext);
+```
+
+**After (v0.3.0)**:
+```typescript
+const command = new CreateOrderCommand(payload, {
+    headers,
+    securityContext,
+});
+```
+
+#### Clone Methods
+
+`clone()`, `cloneWithHeaders()`, and `withHeader()` overrides have been removed from `MessageWithAuth`. These methods are now inherited from the `Message` base class in `@hexaijs/core`. No migration needed — the public API (`withHeader()`, `withSecurityContext()`) remains the same.
+
+#### Quick Migration Checklist
+
+- [ ] Update `new Command(payload, headers, sc)` to `new Command(payload, { headers, securityContext: sc })`
+- [ ] Update `new Query(payload, headers, sc)` to `new Query(payload, { headers, securityContext: sc })`
+- [ ] Remove any direct calls to `clone()` or `cloneWithHeaders()` on `MessageWithAuth` (use `withHeader()` / `withSecurityContext()` instead)
+
 ### From v0.1.x to v0.2.0
 
 This version introduces automatic output type inference with breaking changes to type parameters.
 
 #### Command and Query
 
-**Before (v0.2.x)**:
+**Before (v0.1.x)**:
 ```typescript
 // Second type parameter was SecurityContext
 class MyCommand extends Command<Payload, MySecurityContext> {}
 ```
 
-**After (v0.3.0)**:
+**After (v0.2.0)**:
 ```typescript
 // Second type parameter is now ResultType, SecurityContext moves to third
 class MyCommand extends Command<Payload, ResultType, MySecurityContext> {}
@@ -384,14 +437,14 @@ class MyCommand extends Command<Payload, ResultType> {}
 
 #### CommandHandler and QueryHandler
 
-**Before (v0.2.x)**:
+**Before (v0.1.x)**:
 ```typescript
 class MyHandler implements CommandHandler<MyCommand, OutputType, Context> {
     async execute(cmd: MyCommand, ctx: Context): Promise<OutputType> { ... }
 }
 ```
 
-**After (v0.3.0)**:
+**After (v0.2.0)**:
 ```typescript
 // Output type is automatically inferred from MyCommand's ResultType
 class MyHandler implements CommandHandler<MyCommand, Context> {
@@ -401,14 +454,14 @@ class MyHandler implements CommandHandler<MyCommand, Context> {
 
 #### Security Context Access
 
-**Before (v0.2.x)**:
+**Before (v0.1.x)**:
 ```typescript
 // SC was the second type parameter
 class MyCommand extends Command<Payload, MySecurityContext> {}
 const sc = command.getSecurityContext();  // MySecurityContext
 ```
 
-**After (v0.3.0)**:
+**After (v0.2.0)**:
 ```typescript
 // SC is now the third type parameter
 class MyCommand extends Command<Payload, ResultType, MySecurityContext> {}

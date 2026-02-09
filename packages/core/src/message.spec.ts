@@ -28,6 +28,18 @@ describe("Message", () => {
         expect(message.getHeader("new-header")).toBeUndefined();
     });
 
+    describe("toJSON", () => {
+        it("is used by JSON.stringify automatically", () => {
+            const message = new Message({ foo: "bar" });
+            const json = JSON.parse(JSON.stringify(message));
+
+            expect(json).toHaveProperty("headers");
+            expect(json).toHaveProperty("payload");
+            expect(json.payload).toEqual({ foo: "bar" });
+            expect(json.headers.type).toBe("Message");
+        });
+    });
+
     describe("immutability", () => {
         it("should freeze headers so external mutation is prevented", () => {
             const message = new Message({ foo: "bar" });

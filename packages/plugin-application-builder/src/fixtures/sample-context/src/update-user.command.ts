@@ -5,6 +5,6 @@ export class UpdateUserCommand extends Command<
     { role: string }
 > {
     constructor(payload: { id: string; name: string }, sc: { role: string }) {
-        super(payload, sc);
+        super(payload, { securityContext: sc });
     }
 }

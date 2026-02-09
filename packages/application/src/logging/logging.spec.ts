@@ -50,7 +50,7 @@ class TestEvent extends Message<{ data: string }> {
         data: string = "event-data",
         headers: Record<string, unknown> = {}
     ) {
-        super({ data }, headers);
+        super({ data }, { headers });
     }
 }
 

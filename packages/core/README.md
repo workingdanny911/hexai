@@ -51,6 +51,84 @@ command.getPayload();        // the typed payload object
 
 Every message automatically receives headers including a unique ID and timestamp. The `type` static property follows the convention `"bounded-context.message-name"`.
 
+#### MessageOptions
+
+The constructor accepts an optional `MessageOptions` object for passing custom headers:
+
+```typescript
+interface MessageOptions {
+    headers?: Record<string, unknown>;
+}
+
+// Pass custom headers
+const command = new CreateOrderCommand(
+    { customerId: "customer-123", items: [] },
+    { headers: { correlationId: "corr-abc" } }
+);
+```
+
+#### Serialization
+
+Messages provide two serialization methods:
+
+```typescript
+// toJSON() - preserves Date objects, suitable for structured output
+const json = command.toJSON();
+// { headers: { id, type, createdAt: Date, ... }, payload: { ... } }
+
+// serialize() - fully serialized plain object (dates become strings)
+const plain = command.serialize();
+// { headers: { id, type, createdAt: "2026-...", ... }, payload: { ... } }
+
+// JSON.stringify uses toJSON() automatically
+JSON.stringify(command);
+```
+
+Override `serializePayload()` to customize how the payload is serialized:
+
+```typescript
+class MyEvent extends DomainEvent<{ date: Temporal.PlainDate }> {
+    protected serializePayload(payload: { date: Temporal.PlainDate }) {
+        return { date: payload.date.toString() };
+    }
+}
+```
+
+#### Deserialization
+
+Use the static `from()` method to reconstruct a message from serialized data:
+
+```typescript
+const raw = { customerId: "c-123", items: [] };
+const headers = { id: "msg-1", type: "order.create-order", createdAt: "2026-01-01T00:00:00Z" };
+
+const command = CreateOrderCommand.from(raw, headers);
+```
+
+Override `deserializeRawPayload()` for custom deserialization:
+
+```typescript
+class MyEvent extends DomainEvent<{ date: Temporal.PlainDate }> {
+    protected static deserializeRawPayload(raw: any) {
+        return { date: Temporal.PlainDate.from(raw.date) };
+    }
+}
+```
+
+#### Fluent Header API
+
+Use `withHeader()` to create a new message instance with an additional header:
+
+```typescript
+const command = new CreateOrderCommand({ customerId: "c-123", items: [] })
+    .withHeader("correlationId", "corr-abc")
+    .withHeader("source", "api-gateway");
+
+command.getHeader("correlationId"); // "corr-abc"
+```
+
+`withHeader()` returns a new immutable instance - the original message is not modified.
+
 ### DomainEvent
 
 `DomainEvent` extends `Message` for events that represent something that happened in your domain.
@@ -257,6 +335,7 @@ throw new DuplicateObjectError("Order with this ID already exists");
 | Export | Description |
 |--------|-------------|
 | `Message<P>` | Base message class with headers and typed payload |
+| `MessageOptions` | Options for Message constructor (`{ headers? }`) |
 | `DomainEvent<P>` | Message subclass for domain events |
 | `AggregateRoot<T>` | Base class for aggregates with event collection |
 | `Id<T>` | Value object for typed identities |

@@ -10,7 +10,7 @@ interface DummySecurityContext {
 
 export class DummyCommand extends Command<null, void, DummySecurityContext> {
     constructor(sc?: DummySecurityContext) {
-        super(null, {}, sc);
+        super(null, { securityContext: sc });
     }
 }
 
@@ -20,7 +20,7 @@ export class DummyQuery extends Query<
     DummySecurityContext
 > {
     constructor(id: string = "test-id", sc?: DummySecurityContext) {
-        super({ id }, {}, sc);
+        super({ id }, { securityContext: sc });
     }
 }
 

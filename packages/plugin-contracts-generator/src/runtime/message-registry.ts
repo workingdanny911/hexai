@@ -14,7 +14,7 @@ export interface MessageClass<T = any> {
     getType(): string;
     from(rawPayload: Record<string, unknown>, header?: MessageHeaders): T;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    new (payload: any, headers?: any): T;
+    new (payload: any, options?: any): T;
 }
 
 export class MessageRegistry {

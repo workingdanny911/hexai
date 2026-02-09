@@ -17,6 +17,6 @@ export class DummyMessage extends Message<Record<never, never>> {
         _: Record<never, never>,
         headers?: MessageHeaders
     ): DummyMessage {
-        return new this({}, headers);
+        return new this({}, { headers });
     }
 }
