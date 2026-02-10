@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.5.0] - 2026-02-10
+
+### Added
+
+- `ExecutionScope` — ALS-based execution context (`run`, `current`, `getSecurityContext`, `requireSecurityContext`, `getCorrelation`, `getCausation`, `snapshot`, `restore`)
+- `ExecutionScopeSnapshot` — immutable snapshot of execution scope data
+
+### Changed
+
+- `GenericApplication` now wraps handler execution in `ExecutionScope.run()`
+- `AbstractApplicationContext` replaced with `ApplicationContext` marker interface
+- `Command` and `Query` re-exported from `@hexaijs/contracts` (2 type parameters: `Payload`, `ResultType`)
+- `CommandHandler<I, Ctx>` and `QueryHandler<Q, Ctx>` — 2 type parameters (output inferred from message)
+- **BREAKING**: `createLogger`, `createTestLogger`, `TestLogger`, `TestLogEntry` moved from `@hexaijs/application` to `@hexaijs/application/pino` subpath export
+- `pino` moved from `dependencies` to optional `peerDependencies` — no longer required unless using `@hexaijs/application/pino`
+
+### Removed
+
+- `MessageWithAuth` class and `MessageWithAuthOptions` interface
+- `request.ts` module
+- `SecurityContext` (3rd) generic parameter from `Command` and `Query`
+- `AbstractApplicationContext` hooks: `clone()`, `deriveFrom()`, `onEnter()`, `onExit()`, `enterCommandExecutionScope()`
+- `lodash` dependency
+
+### Migration
+
+- Replace `Command<P, O, SC>` with `Command<P, O>` (security context now via `ExecutionScope`)
+- Replace `request.getSecurityContext()` with `ExecutionScope.getSecurityContext()` in handlers
+- Replace `command.withSecurityContext(sc)` with `ExecutionScope.run({ securityContext: sc }, fn)`
+- Remove `MessageWithAuth` imports and usages
+- Remove `BaseCommand`/`BaseQuery` wrappers if they only existed to fix SecurityContext type
+- Requires `@hexaijs/contracts` `^0.1.0` as peer dependency
+- Pino logging: replace `import { createLogger } from "@hexaijs/application"` with `import { createLogger } from "@hexaijs/application/pino"`
+
 ## [0.4.0] - 2026-02-09
 
 ### Changed

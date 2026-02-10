@@ -119,7 +119,7 @@ describe("E2E: Symbol Extraction", () => {
                         [
                             "CommandHandlerMarker",
                             "BaseUseCase",
-                            "SecurityContextHelper",
+                            "ExecutionScope",
                             "UserRepository",
                         ]
                     );
@@ -235,7 +235,7 @@ describe("E2E: Symbol Extraction", () => {
                         [
                             "CommandHandlerMarker",
                             "BaseUseCase",
-                            "SecurityContextHelper",
+                            "ExecutionScope",
                             "UserRepository",
                         ]
                     );

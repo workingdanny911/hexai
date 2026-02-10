@@ -31,10 +31,6 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.js"
         },
-        "./decorators": {
-            "types": "./dist/decorators/index.d.ts",
-            "import": "./dist/decorators/index.js"
-        },
         "./runtime": {
             "types": "./dist/runtime/index.d.ts",
             "import": "./dist/runtime/index.js"
@@ -49,9 +45,9 @@
         "build": "tsup"
     },
     "dependencies": {
+        "@hexaijs/contracts": "workspace:^",
         "glob": "^10.3.0",
-        "minimatch": "^9.0.0",
-        "reflect-metadata": "^0.2.2"
+        "minimatch": "^9.0.0"
     },
     "peerDependencies": {
         "@hexaijs/cli": "^0.2.0",

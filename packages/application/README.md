@@ -26,10 +26,9 @@ npm install @hexaijs/application
 
 `Command` and `Query` extend the core `Message` class to represent different intents. Commands change state; queries read state.
 
-Both classes accept three type parameters:
+Both classes accept two type parameters:
 - `Payload` - The data the message carries
 - `ResultType` - The output type (enables automatic type inference)
-- `SecurityContext` - Optional security context type (defaults to `unknown`)
 
 ```typescript
 import { Command, Query } from "@hexaijs/application";
@@ -62,57 +61,6 @@ const result = await app.executeCommand(new CreateOrderCommand({
 
 const orderResult = await app.executeQuery(new GetOrderQuery({ orderId: "o-456" }));
 // orderResult type: Result<OrderDto> - automatically inferred!
-```
-
-Both support security contexts for authorization. To get typed security context access, specify it as the third type parameter:
-
-```typescript
-// Define a security context type
-interface UserSecurityContext {
-    userId: string;
-    roles: string[];
-}
-
-// Command with typed security context (third parameter)
-export class SecureCreateOrderCommand extends Command<
-    { customerId: string; items: { productId: string; quantity: number }[] },
-    { orderId: string },
-    UserSecurityContext
-> {
-    static readonly type = "order.secure-create-order";
-}
-
-// Attach security context
-const command = new SecureCreateOrderCommand({
-    customerId: "customer-123",
-    items: []
-}).withSecurityContext({ userId: "user-456", roles: ["admin"] });
-
-// Access in handler - type is inferred from Command's third parameter
-const user = command.getSecurityContext();  // UserSecurityContext
-```
-
-#### MessageWithAuthOptions
-
-Both `Command` and `Query` constructors accept an optional `MessageWithAuthOptions` object:
-
-```typescript
-import { MessageWithAuthOptions } from "@hexaijs/application";
-
-interface MessageWithAuthOptions<SecCtx> extends MessageOptions {
-    securityContext?: SecCtx;
-}
-
-// Pass security context via options
-const command = new SecureCreateOrderCommand(
-    { customerId: "customer-123", items: [] },
-    { securityContext: { userId: "user-456", roles: ["admin"] } }
-);
-
-// Equivalent to using withSecurityContext():
-const command2 = new SecureCreateOrderCommand(
-    { customerId: "customer-123", items: [] }
-).withSecurityContext({ userId: "user-456", roles: ["admin"] });
 ```
 
 ### CommandHandler and QueryHandler
@@ -241,25 +189,25 @@ if (result.isError) {
 const data = result.getOrThrow();
 ```
 
-### AbstractApplicationContext
+### ApplicationContext
 
-Extend `AbstractApplicationContext` to define your application's dependencies. The context provides event publishing and hooks for transaction management:
+`ApplicationContext` is a marker interface that your application context must implement. Define your context as a plain interface with the dependencies your handlers need:
 
 ```typescript
-import { AbstractApplicationContext } from "@hexaijs/application";
+import { ApplicationContext } from "@hexaijs/application";
 import { UnitOfWork } from "@hexaijs/core";
 
-export abstract class OrderApplicationContext extends AbstractApplicationContext {
-    abstract getUnitOfWork(): UnitOfWork;
-    abstract getOrderRepository(): OrderRepository;
-    abstract getEmailService(): EmailService;
+export interface OrderApplicationContext extends ApplicationContext {
+    getUnitOfWork(): UnitOfWork;
+    getOrderRepository(): OrderRepository;
+    getEmailService(): EmailService;
 }
 ```
 
-The context provides `publish()` for emitting domain events:
+Event publishing is handled by `ApplicationEventPublisher`, which the `Application` wires automatically. In handlers, publish events through the application's event infrastructure:
 
 ```typescript
-// Inside a handler
+// Inside a handler — events receive causation/correlation headers automatically
 await ctx.publish(
     new OrderPlaced({
         orderId: order.getId().getValue(),
@@ -268,7 +216,67 @@ await ctx.publish(
 );
 ```
 
-Events published through the context automatically receive causation and correlation headers, enabling distributed tracing.
+### ExecutionScope
+
+`ExecutionScope` provides ALS-based (AsyncLocalStorage) execution context that scopes handler execution with SecurityContext, correlation, and causation data. It replaces the old pattern of passing SecurityContext through message generics.
+
+```typescript
+import { ExecutionScope } from "@hexaijs/application";
+
+// Wrap handler execution with security context
+await ExecutionScope.run(
+    { securityContext: { userId: "user-123", roles: ["admin"] } },
+    async () => {
+        // Inside this scope, security context is available
+        const user = ExecutionScope.requireSecurityContext<UserSecurityContext>();
+        console.log(user.userId); // "user-123"
+    }
+);
+```
+
+#### Accessing Scope Data
+
+```typescript
+// Optional access (returns undefined if not in scope)
+const sc = ExecutionScope.getSecurityContext<UserSecurityContext>();
+
+// Required access (throws if not in scope)
+const sc = ExecutionScope.requireSecurityContext<UserSecurityContext>();
+
+// Correlation and causation
+const correlation = ExecutionScope.getCorrelation();
+const causation = ExecutionScope.getCausation();
+```
+
+#### Snapshot and Restore
+
+For async boundaries (e.g., spawning background tasks), capture and restore scope:
+
+```typescript
+// Capture current scope
+const snapshot = ExecutionScope.snapshot();
+
+// Later, in a different async context
+if (snapshot) {
+    await ExecutionScope.restore(snapshot, async () => {
+        // Security context and trace data restored
+        const sc = ExecutionScope.requireSecurityContext();
+    });
+}
+```
+
+#### Parent Scope Inheritance
+
+Nested `run()` calls inherit from the parent scope. Only explicitly provided fields override parent values:
+
+```typescript
+await ExecutionScope.run({ securityContext: user }, async () => {
+    await ExecutionScope.run({ correlation: trace }, async () => {
+        // securityContext: inherited from parent (user)
+        // correlation: overridden (trace)
+    });
+});
+```
 
 ## Interceptors
 
@@ -368,13 +376,14 @@ await compositeApp.handleEvent(event);
 |--------|-------------|
 | `Application` | Interface for command/query execution and event handling |
 | `ApplicationBuilder` | Fluent builder for assembling applications |
-| `Command<P, O, SC>` | Base class for commands with payload, output type, and security context |
-| `MessageWithAuthOptions<SC>` | Options for Command/Query constructor (`{ headers?, securityContext? }`) |
-| `Query<P, O, SC>` | Base class for queries with payload, output type, and security context |
+| `Command<P, O>` | Base class for commands with payload and output type |
+| `Query<P, O>` | Base class for queries with payload and output type |
+| `ExecutionScope` | ALS-based execution context for security context, correlation, and causation |
+| `ExecutionScopeSnapshot` | Immutable snapshot of execution scope data |
 | `CommandHandler<I, Ctx>` | Interface for command handlers (output inferred from command) |
 | `QueryHandler<I, Ctx>` | Interface for query handlers (output inferred from query) |
 | `EventHandler<E, Ctx>` | Interface for event handlers |
-| `AbstractApplicationContext` | Base class for application contexts |
+| `ApplicationContext` | Marker interface for application contexts |
 | `Result<R, E>` | Union type of `SuccessResult` or `ErrorResult` |
 | `SelectorBasedEventHandler` | Base class for decorator-based event routing |
 | `SimpleCompositeApplication` | Composes multiple applications by message prefix |
@@ -384,6 +393,55 @@ await compositeApp.handleEvent(event);
 | `Interceptor` | Interceptor type for all messages |
 
 ## Migration Guide
+
+### From v0.4.0 to v0.5.0
+
+This version replaces message-level SecurityContext with ALS-based `ExecutionScope` and simplifies the application context.
+
+#### Command and Query
+
+**Before (v0.4.x)**:
+```typescript
+class MyCommand extends Command<Payload, ResultType, MySecurityContext> {}
+const sc = command.getSecurityContext(); // from message
+```
+
+**After (v0.5.0)**:
+```typescript
+class MyCommand extends Command<Payload, ResultType> {}
+const sc = ExecutionScope.requireSecurityContext<MySecurityContext>(); // from ALS
+```
+
+#### SecurityContext Access in Handlers
+
+**Before (v0.4.x)**:
+```typescript
+async execute(command: MyCommand, ctx: MyContext) {
+    const user = command.getSecurityContext();
+}
+```
+
+**After (v0.5.0)**:
+```typescript
+import { ExecutionScope } from "@hexaijs/application";
+
+async execute(command: MyCommand, ctx: MyContext) {
+    const user = ExecutionScope.requireSecurityContext<UserSecurityContext>();
+}
+```
+
+#### ApplicationContext
+
+`AbstractApplicationContext` replaced with `ApplicationContext` marker interface. Define contexts as plain interfaces instead of extending an abstract class.
+
+#### Quick Migration Checklist
+
+- [ ] Replace `Command<P, O, SC>` with `Command<P, O>`
+- [ ] Replace `Query<P, O, SC>` with `Query<P, O>`
+- [ ] Replace `command.getSecurityContext()` / `command.withSecurityContext()` with `ExecutionScope` methods
+- [ ] Remove `MessageWithAuth` and `MessageWithAuthOptions` imports
+- [ ] Remove `clone()`, `deriveFrom()`, `onEnter()`, `onExit()`, `enterCommandExecutionScope()` overrides from ApplicationContext subclasses
+- [ ] Add `@hexaijs/contracts` `^0.1.0` as peer dependency
 
 ### From v0.3.1 to v0.4.0
 
@@ -422,6 +480,8 @@ The utility functions (`causationOf`, `correlationOf`, `setCausationOf`, `setCor
 
 ### From v0.2.0 to v0.3.0
 
+> **Note**: `MessageWithAuth` and constructor options described here were removed in v0.5.0. See v0.4.0 → v0.5.0 migration guide.
+
 This version changes the constructor pattern for `Command`, `Query`, and `MessageWithAuth` from positional parameters to an options object.
 
 #### Constructor Pattern
@@ -450,6 +510,8 @@ const command = new CreateOrderCommand(payload, {
 - [ ] Remove any direct calls to `clone()` or `cloneWithHeaders()` on `MessageWithAuth` (use `withHeader()` / `withSecurityContext()` instead)
 
 ### From v0.1.x to v0.2.0
+
+> **Note**: The `SecurityContext` (SC) generic described here was removed in v0.5.0. Command is now `Command<P, O>`. See v0.4.0 → v0.5.0 migration guide.
 
 This version introduces automatic output type inference with breaking changes to type parameters.
 

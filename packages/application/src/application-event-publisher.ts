@@ -1,21 +1,18 @@
 import { AnyMessage, Message } from "@hexaijs/core";
+
 import { EventPublisher } from "./event-publisher";
+import { ExecutionScope } from "./execution-scope";
 
 interface PublishCallback {
     (event: AnyMessage): void | Promise<void>;
 }
 
+interface SecurityContextAwareMessage extends Message {
+    withSecurityContext(securityContext: unknown): Message;
+}
+
 export class ApplicationEventPublisher implements EventPublisher<Message> {
     private callbacks: Set<PublishCallback> = new Set();
-    private context?: Message;
-
-    public deriveFrom(message: Message): ApplicationEventPublisher {
-        const derived = new ApplicationEventPublisher();
-        derived.context = message;
-        derived.callbacks = new Set(this.callbacks);
-
-        return derived;
-    }
 
     public subscribe(callback: PublishCallback): () => void {
         this.callbacks.add(callback);
@@ -27,16 +24,36 @@ export class ApplicationEventPublisher implements EventPublisher<Message> {
     }
 
     public async publish(...events: Message[]): Promise<void> {
-        for (let event of events) {
-            if (this.context) {
-                const trace = this.context.asTrace();
+        const causation = ExecutionScope.getCausation();
+        const correlation = ExecutionScope.getCorrelation();
+        const securityContext = ExecutionScope.getSecurityContext();
 
+        for (let event of events) {
+            if (causation) {
                 event = event
-                    .withCausation(trace)
-                    .withCorrelation(this.context.getCorrelation() ?? trace);
+                    .withCausation(causation)
+                    .withCorrelation(correlation ?? causation);
+            }
+            if (securityContext !== undefined) {
+                event = this.withSecurityContext(event, securityContext);
             }
             await this.runCallbacks(event);
         }
+    }
+
+    private withSecurityContext(event: Message, securityContext: unknown): Message {
+        if (!this.isSecurityContextAwareMessage(event)) {
+            return event;
+        }
+
+        return event.withSecurityContext(securityContext);
+    }
+
+    private isSecurityContextAwareMessage(
+        event: Message
+    ): event is SecurityContextAwareMessage {
+        const candidate = event as { withSecurityContext?: unknown };
+        return typeof candidate.withSecurityContext === "function";
     }
 
     private async runCallbacks(event: Message): Promise<void> {

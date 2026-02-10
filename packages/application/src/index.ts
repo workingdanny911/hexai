@@ -1,5 +1,4 @@
 export * from "./application";
-export * from "./message-with-auth";
 export * from "./command";
 export * from "./query";
 export * from "./command-handler";
@@ -15,3 +14,4 @@ export * from "./logging";
 export * from "./event-publisher";
 export * from "./application-event-publisher";
 export * from "./error";
+export * from "./execution-scope";

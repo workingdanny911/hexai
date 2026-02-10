@@ -1,13 +1,6 @@
 export type { Logger, LoggerConfig, LogContext, LogLevel } from "./logger";
 
 export {
-    createLogger,
-    createTestLogger,
-    type TestLogger,
-    type TestLogEntry,
-} from "./create-logger";
-
-export {
     type LoggingInterceptorConfig,
     type MessageKind,
     serializeError,

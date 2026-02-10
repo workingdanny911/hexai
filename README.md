@@ -38,6 +38,7 @@ hexai provides a structured way to keep your domain logic pure and your infrastr
 |---------|-------------|
 | [`@hexaijs/core`](./packages/core/README.md) | Domain primitives, messaging, and infrastructure interfaces |
 | [`@hexaijs/application`](./packages/application/README.md) | Application layer with command handlers, contexts, and interceptors |
+| [`@hexaijs/contracts`](./packages/contracts/README.md) | Zero-dependency marker decorators and base Command/Query classes |
 
 ### Infrastructure
 
@@ -93,7 +94,6 @@ import { OrderPlaced } from "./events";
 
 export class CreateOrderHandler implements CommandHandler<
     CreateOrderCommand,
-    CreateOrderResult,
     OrderApplicationContext
 > {
     async execute(
@@ -133,7 +133,6 @@ export class GetOrderQuery extends Query<{ orderId: string }> {
 
 export class GetOrderHandler implements QueryHandler<
     GetOrderQuery,
-    OrderDetails,
     OrderApplicationContext
 > {
     async execute(
@@ -312,7 +311,6 @@ import { OrderApplicationContext } from "../../application-context";
 @CommandHandlerMarker(CreateOrderCommand)
 export class CreateOrderHandler implements CommandHandler<
     CreateOrderCommand,
-    CreateOrderResult,
     OrderApplicationContext
 > {
     async execute(
@@ -375,7 +373,7 @@ Share type definitions between backend and frontend.
 ```typescript
 // commands/create-order/command.ts
 import { Command } from "@hexaijs/application";
-import { PublicCommand } from "@hexaijs/plugin-contracts-generator";
+import { PublicCommand } from "@hexaijs/contracts/decorators";
 
 @PublicCommand()
 export class CreateOrderCommand extends Command<{
@@ -393,7 +391,7 @@ export type CreateOrderResult = {
 ```typescript
 // domain/events.ts
 import { DomainEvent } from "@hexaijs/core";
-import { PublicEvent } from "@hexaijs/plugin-contracts-generator";
+import { PublicEvent } from "@hexaijs/contracts/decorators";
 
 @PublicEvent()
 export class OrderPlaced extends DomainEvent<{

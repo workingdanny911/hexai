@@ -1,21 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-
-import { ApplicationBuilder, ErrorResult } from "@/application";
-import { ApplicationError } from "@/error";
-import { AbstractApplicationContext } from "@/abstract-application-context";
-import { Command } from "@/command";
-import {
-    CommandInterceptor,
-    EventInterceptor,
-    Interceptor,
-} from "@/interceptor";
 import { Message } from "@hexaijs/core";
 
+import { ApplicationBuilder } from "@/application";
+import { ApplicationContext } from "@/application-context";
+import { Command } from "@/command";
+import { ApplicationError } from "@/error";
+import { CommandInterceptor, EventInterceptor } from "@/interceptor";
+import { createTestLogger } from "@/pino";
+
 import {
-    createTestLogger,
     createLoggingInterceptor,
     traceCommandInterceptor,
-    traceEventInterceptor,
     CURRENT_MESSAGE_TRACE_KEY,
     CORRELATION_TRACE_KEY,
 } from "./index";
@@ -35,7 +30,7 @@ class TestEvent extends Message<{ data: string }> {
     }
 }
 
-class TestApplicationContext extends AbstractApplicationContext {}
+class TestApplicationContext implements ApplicationContext {}
 
 function createApplicationBuilder() {
     return new ApplicationBuilder().withApplicationContext(

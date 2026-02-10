@@ -30,14 +30,14 @@ npm install @hexaijs/plugin-contracts-generator
 The package provides three decorators that mark messages for extraction. These decorators have **no runtime overhead** - they simply tag classes for discovery during the build process.
 
 ```typescript
-import { PublicEvent, PublicCommand, PublicQuery } from "@hexaijs/plugin-contracts-generator/decorators";
+import { PublicEvent, PublicCommand, PublicQuery } from "@hexaijs/contracts/decorators";
 ```
 
 **@PublicEvent()** - Marks a domain event as part of the public contract:
 
 ```typescript
 import { DomainEvent } from "@hexaijs/core";
-import { PublicEvent } from "@hexaijs/plugin-contracts-generator/decorators";
+import { PublicEvent } from "@hexaijs/contracts/decorators";
 
 @PublicEvent()
 export class OrderPlaced extends DomainEvent<{
@@ -52,7 +52,7 @@ export class OrderPlaced extends DomainEvent<{
 **@PublicCommand()** - Marks a command as part of the public contract:
 
 ```typescript
-import { PublicCommand } from "@hexaijs/plugin-contracts-generator/decorators";
+import { PublicCommand } from "@hexaijs/contracts/decorators";
 
 @PublicCommand()
 export class CreateOrderRequest extends BaseRequest<{
@@ -70,7 +70,7 @@ export type CreateOrderResponse = {
 **@PublicQuery()** - Marks a query as part of the public contract:
 
 ```typescript
-import { PublicQuery } from "@hexaijs/plugin-contracts-generator/decorators";
+import { PublicQuery } from "@hexaijs/contracts/decorators";
 
 @PublicQuery({ response: "OrderDetails" })
 export class GetOrderQuery extends BaseRequest<{

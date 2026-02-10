@@ -3,6 +3,30 @@ import { beforeEach, describe, expect, Mock, test, vi } from "vitest";
 import { Message, MessageTrace } from "@hexaijs/core";
 import { DummyMessage } from "@hexaijs/core/test";
 import { ApplicationEventPublisher } from "./application-event-publisher";
+import { ExecutionScope } from "./execution-scope";
+
+class SecurityAwareEvent extends Message<null> {
+    private securityContext?: { role: string };
+
+    constructor(options?: { securityContext?: { role: string } }) {
+        super(null);
+        this.securityContext = options?.securityContext;
+    }
+
+    getSecurityContext(): { role: string } {
+        if (!this.securityContext) {
+            throw new Error("security context is not set");
+        }
+
+        return this.securityContext;
+    }
+
+    withSecurityContext(securityContext: { role: string }): this {
+        const cloned = this.clone();
+        cloned.securityContext = securityContext;
+        return cloned;
+    }
+}
 
 describe("application event publisher", () => {
     let publisher: ApplicationEventPublisher;
@@ -98,74 +122,97 @@ describe("application event publisher", () => {
         }
     }
 
-    test("derived instance adds correlation & causation metadata to publishing events", async () => {
-        const message = DummyMessage.create();
-        const derivative = publisher.deriveFrom(message);
-        subscriber.mockImplementation((event) => {
-            const trace = message.asTrace();
-            expectMetadata(event, {
-                correlation: trace,
-                causation: trace,
-            });
-        });
-        derivative.subscribe(subscriber);
-
-        await derivative.publish(event1);
-
-        expect(subscriber).toBeCalled();
-    });
-
-    test("deriving a new instance does not affect parent, metadata-wise", async () => {
-        subscriber.mockImplementation((event) => {
+    test("publishes events without metadata when outside execution scope", async () => {
+        subscriber.mockImplementation((event: Message) => {
             expect(event.getCorrelation()).toBeUndefined();
             expect(event.getCausation()).toBeUndefined();
         });
         publisher.subscribe(subscriber);
 
-        const derivative = publisher.deriveFrom(DummyMessage.create());
-        expect(derivative).not.toBe(publisher);
-
         await publisher.publish(event1);
 
         expect(subscriber).toBeCalled();
     });
 
-    test("callbacks are preserved when deriving, but does not execute callbacks multiple times", async () => {
-        subscriber.mockImplementation((event) => {
-            // if callbacks were executed in parent too, these would be undefined
-            expect(event.getCorrelation()).toBeDefined();
-            expect(event.getCausation()).toBeDefined();
+    test("adds causation and falls back to causation as correlation when no correlation in scope", async () => {
+        const command = DummyMessage.create();
+
+        await ExecutionScope.run({ causation: command.asTrace() }, async () => {
+            subscriber.mockImplementation((event: Message) => {
+                const trace = command.asTrace();
+                expectMetadata(event, {
+                    causation: trace,
+                    correlation: trace,
+                });
+            });
+            publisher.subscribe(subscriber);
+
+            await publisher.publish(event1);
+
+            expect(subscriber).toBeCalled();
+        });
+    });
+
+    test("uses correlation from execution scope when available", async () => {
+        const root = DummyMessage.create();
+        const child = DummyMessage.create();
+
+        await ExecutionScope.run(
+            { causation: child.asTrace(), correlation: root.asTrace() },
+            async () => {
+                subscriber.mockImplementation((event: Message) => {
+                    expectMetadata(event, {
+                        causation: child.asTrace(),
+                        correlation: root.asTrace(),
+                    });
+                });
+                publisher.subscribe(subscriber);
+
+                await publisher.publish(event1);
+
+                expect(subscriber).toBeCalled();
+            }
+        );
+    });
+
+    test("adds security context when execution scope has it", async () => {
+        const securityContext = { role: "admin" };
+        const event = new SecurityAwareEvent();
+        let publishedEvent: SecurityAwareEvent | undefined;
+
+        subscriber.mockImplementation((published: SecurityAwareEvent) => {
+            publishedEvent = published;
         });
         publisher.subscribe(subscriber);
-        const derivative = publisher.deriveFrom(DummyMessage.create());
 
-        await derivative.publish(event1);
-
-        expect(subscriber).toBeCalledTimes(1);
-    });
-
-    test("adding callbacks to derived instance does not affect parent", async () => {
-        const derivative = publisher.deriveFrom(DummyMessage.create());
-        derivative.subscribe(subscriber);
-
-        await publisher.publish(event1);
-
-        expect(subscriber).not.toBeCalled();
-    });
-
-    test("reserves correlation of the message that the event publisher is deriving from", async () => {
-        // root -> child -> event1
-        const root = DummyMessage.create();
-        const child = DummyMessage.create().withCorrelation(root.asTrace());
-        const derivative = publisher.deriveFrom(child);
-        subscriber.mockImplementation((event) => {
-            expect(event.getCorrelation()).toEqual(root.asTrace());
-            expect(event.getCausation()).toEqual(child.asTrace());
+        await ExecutionScope.run({ securityContext }, async () => {
+            await publisher.publish(event);
         });
-        derivative.subscribe(subscriber);
 
-        await derivative.publish(event1);
+        expect(() => event.getSecurityContext()).toThrow();
+        expect(publishedEvent?.getSecurityContext()).toEqual(securityContext);
+    });
 
-        expect(subscriber).toBeCalled();
+    test("same publisher instance works across different scopes", async () => {
+        publisher.subscribe(subscriber);
+
+        const command1 = DummyMessage.create();
+        const command2 = DummyMessage.create();
+
+        await ExecutionScope.run({ causation: command1.asTrace() }, async () => {
+            await publisher.publish(event1);
+        });
+
+        await ExecutionScope.run({ causation: command2.asTrace() }, async () => {
+            await publisher.publish(event2);
+        });
+
+        expect(subscriber).toHaveBeenCalledTimes(2);
+
+        const publishedEvent1 = subscriber.mock.calls[0][0] as Message;
+        const publishedEvent2 = subscriber.mock.calls[1][0] as Message;
+
+        expect(publishedEvent1.getCausation()).toEqual(command1.asTrace());
+        expect(publishedEvent2.getCausation()).toEqual(command2.asTrace());
     });
 });

@@ -5,8 +5,7 @@ export default defineConfig(
   createTsupConfig({
     entry: {
       index: 'src/index.ts',
-      'runtime/index': 'src/runtime/index.ts',
-      cli: 'src/cli.ts',
+      'decorators/index': 'src/decorators/index.ts',
     },
     tsconfig: 'tsconfig.build.json',
   })

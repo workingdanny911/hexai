@@ -2,8 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { Message } from "@hexaijs/core";
 import { waitForMs } from "@hexaijs/core/test";
 
-import { AbstractApplicationContext } from "@/abstract-application-context";
-import { Command } from "@/command";
+import { ApplicationContext } from "@/application-context";
 import { ApplicationError, ApplicationErrorTransformingContext } from "@/error";
 import { ApplicationBuilder, SuccessResult } from "@/application";
 import { MessageHandler } from "@/message-handler";
@@ -24,20 +23,12 @@ describe("Application, handling message", () => {
         execute: vi.fn(),
     };
 
-    class TestApplicationContext extends AbstractApplicationContext {
-        public lastCommand: Command | null = null;
-
-        protected async onEnter(message: Message): Promise<void> {
-            await super.onEnter(message);
-            this.lastCommand = message as Command;
-        }
-    }
+    class TestApplicationContext implements ApplicationContext {}
 
     let applicationContext: TestApplicationContext;
 
     let sutBuilder: ApplicationBuilder;
-    const defaultSecurityContext = { role: "TEST" };
-    const command = new DummyCommand(defaultSecurityContext);
+    const command = new DummyCommand();
     const event = new DummyEvent();
 
     beforeEach(() => {
@@ -72,9 +63,8 @@ describe("Application, handling message", () => {
                 ctx?: TestApplicationContext
             ): Promise<string>;
         } = {
-            async execute(request: any, ctx?: TestApplicationContext) {
+            async execute(_request: any, ctx?: TestApplicationContext) {
                 expect(ctx).toBeInstanceOf(TestApplicationContext);
-                expect(ctx!.lastCommand).toBe(request);
                 return "ok";
             },
         };

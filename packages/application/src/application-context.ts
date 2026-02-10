@@ -1,1 +1,1 @@
-export { AbstractApplicationContext } from "./abstract-application-context";
+export interface ApplicationContext {}

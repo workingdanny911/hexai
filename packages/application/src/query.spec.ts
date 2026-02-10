@@ -42,50 +42,6 @@ describe("Query", () => {
         });
     });
 
-    describe("withSecurityContext", () => {
-        it("should set security context and return new instance", () => {
-            const securityContext = { userId: "user-123", roles: ["admin"] };
-            const query1 = new TestQuery("hello");
-
-            const query2 = query1.withSecurityContext(securityContext);
-
-            expect(() => query1.getSecurityContext()).toThrow(
-                "security context is not set"
-            );
-            expect(query2.getSecurityContext()).toEqual(securityContext);
-        });
-
-        it("should chain withSecurityContext with withCorrelation", () => {
-            const securityContext = { userId: "user-456" };
-
-            const query = new TestQuery("hello")
-                .withSecurityContext(securityContext)
-                .withCorrelation({ id: "corr-789", type: "HttpRequest" });
-
-            expect(query.getSecurityContext()).toEqual(securityContext);
-            expect(query.getCorrelation()).toEqual({ id: "corr-789", type: "HttpRequest" });
-        });
-
-        it("should return typed security context with generic", () => {
-            interface MySecurityContext {
-                userId: string;
-                permissions: string[];
-            }
-
-            const sc: MySecurityContext = {
-                userId: "u1",
-                permissions: ["read", "write"],
-            };
-            const query = new TestQuery("test").withSecurityContext(sc);
-
-            const retrieved = query.getSecurityContext<MySecurityContext>();
-
-            expect(retrieved.userId).toBe("u1");
-            expect(retrieved.permissions).toEqual(["read", "write"]);
-            expectTypeOf(retrieved).toEqualTypeOf<MySecurityContext>();
-        });
-    });
-
     describe("ResultType indexed access", () => {
         it("extracts output type from Query", () => {
             class GetUsers extends Query<{ filter: string }, { users: string[] }> {

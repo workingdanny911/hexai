@@ -3,7 +3,7 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.4.0",
+    "version": "0.5.0",
     "type": "module",
     "description": "CQRS Application Framework for Hexagonal Architecture",
     "license": "MIT",
@@ -43,30 +43,32 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.js"
         },
-        "./request": {
-            "types": "./dist/request.d.ts",
-            "import": "./dist/request.js"
+        "./pino": {
+            "types": "./dist/pino/index.d.ts",
+            "import": "./dist/pino/index.js"
         },
         "./package.json": "./package.json"
     },
-    "dependencies": {
-        "lodash": "^4.17.21",
-        "pino": "^9.6.0"
-    },
     "peerDependencies": {
+        "@hexaijs/contracts": "^0.1.0",
         "@hexaijs/core": "^0.6.0",
+        "pino": "^9.6.0",
         "pino-pretty": "^13.0.0"
     },
     "peerDependenciesMeta": {
+        "pino": {
+            "optional": true
+        },
         "pino-pretty": {
             "optional": true
         }
     },
     "devDependencies": {
+        "@hexaijs/contracts": "workspace:^",
         "@hexaijs/core": "workspace:^",
         "@hexaijs/tooling": "workspace:*",
-        "@types/lodash": "^4.17.20",
         "@types/node": "^20.0.0",
+        "pino": "^9.6.0",
         "pino-pretty": "^13.0.0"
     }
 }

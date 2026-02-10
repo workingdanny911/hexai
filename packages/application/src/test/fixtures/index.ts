@@ -4,23 +4,18 @@ import { Command } from "@/command";
 import { Query } from "@/query";
 import { Message } from "@hexaijs/core";
 
-interface DummySecurityContext {
-    role: string;
-}
-
-export class DummyCommand extends Command<null, void, DummySecurityContext> {
-    constructor(sc?: DummySecurityContext) {
-        super(null, { securityContext: sc });
+export class DummyCommand extends Command<null, void> {
+    constructor() {
+        super(null);
     }
 }
 
 export class DummyQuery extends Query<
     { id: string },
-    { name: string },
-    DummySecurityContext
+    { name: string }
 > {
-    constructor(id: string = "test-id", sc?: DummySecurityContext) {
-        super({ id }, { securityContext: sc });
+    constructor(id: string = "test-id") {
+        super({ id });
     }
 }
 

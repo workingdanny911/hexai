@@ -28,7 +28,7 @@ describe("ReexportGenerator", () => {
                 pathAliasRewrites: new Map([
                     ["@libera/common", "@libera/contracts/common"],
                     [
-                        "@hexaijs/plugin-contracts-generator/decorators",
+                        "@hexaijs/contracts/decorators",
                         "@libera/contracts/decorators",
                     ],
                 ]),
@@ -50,7 +50,7 @@ describe("ReexportGenerator", () => {
             );
             expect(decorators).toBeDefined();
             expect(decorators!.originalModule).toBe(
-                "@hexaijs/plugin-contracts-generator/decorators"
+                "@hexaijs/contracts/decorators"
             );
             expect(decorators!.symbols).toEqual(["PublicCommand"]);
         });
@@ -217,7 +217,7 @@ describe("ReexportGenerator", () => {
                 {
                     relativePath: "decorators.ts",
                     originalModule:
-                        "@hexaijs/plugin-contracts-generator/decorators",
+                        "@hexaijs/contracts/decorators",
                     symbols: ["PublicCommand", "PublicEvent"],
                     isTypeOnly: false,
                 },
@@ -237,7 +237,7 @@ describe("ReexportGenerator", () => {
 
             const decoratorsContent = fs.files.get("/output/decorators.ts");
             expect(decoratorsContent).toBe(
-                `export { PublicCommand, PublicEvent } from "@hexaijs/plugin-contracts-generator/decorators";\n`
+                `export { PublicCommand, PublicEvent } from "@hexaijs/contracts/decorators";\n`
             );
         });
 

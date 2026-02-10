@@ -13,8 +13,6 @@ src/
 ├── cli.ts                # Command-line interface
 ├── hexai-plugin.ts       # hexai CLI plugin integration
 ├── errors.ts             # Domain error classes (hierarchical error types)
-├── decorators/           # @PublicEvent/@PublicCommand decorators
-│   └── index.ts
 ├── domain/               # Core type definitions
 │   ├── types.ts
 │   └── index.ts
@@ -45,36 +43,18 @@ src/
 
 ## Module Overview
 
-### 1. Decorators (`src/decorators/`)
+### 1. Decorators (moved to `@hexaijs/contracts`)
 
-Provides decorators that add metadata at runtime. Since the Parser performs static analysis only, actual runtime effects are optional.
+**Note**: Decorators have been moved to the `@hexaijs/contracts` package (`@hexaijs/contracts/decorators`). They are pure no-op class decorators used as markers for the Scanner's static analysis. No `reflect-metadata` dependency.
 
 ```typescript
-// Public Interface
-@PublicEvent(options?: PublicEventOptions)
-@PublicCommand(options?: PublicCommandOptions)
-
-interface PublicEventOptions {
-  version?: number;
-  context?: string;
-}
-
-interface PublicCommandOptions {
-  context?: string;
-}
-
-// Metadata Symbols
-const PUBLIC_EVENT_METADATA: symbol
-const PUBLIC_COMMAND_METADATA: symbol
-
-// Metadata Helpers
-getPublicEventMetadata(target: object): PublicEventOptions | undefined
-getPublicCommandMetadata(target: object): PublicCommandOptions | undefined
-isPublicEventClass(target: object): boolean
-isPublicCommandClass(target: object): boolean
+// @hexaijs/contracts/decorators
+@PublicEvent(options?: PublicEventOptions)   // { version?, context? }
+@PublicCommand(options?: PublicCommandOptions) // { context?, response? }
+@PublicQuery(options?: PublicQueryOptions)    // { context?, response? }
 ```
 
-**Dependencies**: `reflect-metadata`
+The Scanner finds files containing these decorator patterns via text search, then the Parser extracts class metadata from AST.
 
 ---
 
@@ -288,24 +268,30 @@ class FileCopier {
 
 ### 7. Context Config (`src/context-config.ts`)
 
-Loads path alias configuration from tsconfig.json.
+Encapsulates context configuration with path resolution capabilities. Created via factory method to ensure proper initialization.
 
 ```typescript
-interface PathAliasConfig {
-  readonly baseUrl: string
-  readonly paths: Map<string, string[]>  // Alias pattern → target paths
+interface InputContextConfig {
+  readonly name: string             // Context name (e.g., 'lecture')
+  readonly path: string             // Base path to context (e.g., 'packages/lecture')
+  readonly sourceDir?: string       // Source subdirectory (default: 'src')
+  readonly tsconfigPath?: string    // TypeScript config (default: 'tsconfig.json', auto-detected)
 }
 
-class TsconfigLoader {
-  load(tsconfigPath: string): PathAliasConfig
+class ContextConfig {
+  readonly name: string
+  readonly sourceDir: string        // Absolute path
+
+  static async create(input: InputContextConfig, configDir: string): Promise<ContextConfig>
+  async resolvePath(moduleSpecifier: string): Promise<{ resolvedPath: string | null; isExternal: boolean }>
 }
 ```
 
 **Features**:
-- Recursive `extends` resolution
-- JSON with Comments support
-- `compilerOptions.paths` interpretation
-- Parent/child config merging
+- Factory method with async initialization (`create()`)
+- Path alias resolution via tsconfig.json (recursive `extends` support)
+- Module specifier resolution (relative, alias, external)
+- Convention over Configuration defaults (`src/`, `tsconfig.json`)
 
 ---
 
@@ -331,16 +317,13 @@ class ContextConfig {
   async resolvePath(moduleSpecifier: string): Promise<{ resolvedPath: string | null; isExternal: boolean }>
 }
 
-interface OutputPackageConfig {
-  readonly name: string           // Package name (e.g., '@libera/contracts')
-  readonly dir: string            // Package directory (e.g., 'packages/contracts')
-}
-
 interface ContractsConfig {
   readonly contexts: readonly ContextConfig[]
-  readonly outputPackage: OutputPackageConfig
   readonly pathAliasRewrites?: Readonly<Record<string, string>>
   readonly externalDependencies?: Readonly<Record<string, string>>
+  readonly decoratorNames: Required<DecoratorNames>
+  readonly responseNamingConventions?: readonly ResponseNamingConvention[]
+  readonly removeDecorators?: boolean
 }
 
 class ConfigLoader {
@@ -794,7 +777,7 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 │  ConfigLoader                                                                  │
 │  ─────────────                                                                 │
 │  application.config.ts → ContractsConfig                                       │
-│  (contexts, outputPackage, pathAliasRewrites)                                  │
+│  (contexts, pathAliasRewrites, decoratorNames, ...)                            │
 └───────────────────────────────────┬───────────────────────────────────────────┘
                                     │
                     ┌───────────────┴───────────────┐
@@ -973,7 +956,7 @@ PipelineDependencies, PipelineOptions, PipelineResult, ParsedMessages
 ProcessContextOptions, ProcessContextResult
 
 // Config Types
-ContractsConfig, ContextConfig, OutputPackageConfig
+ContractsConfig, ContextConfig
 ScannerOptions, ParseResult
 
 // Runtime Types
@@ -988,7 +971,7 @@ RewrittenImport, ReexportFile, ReexportGeneratorOptions
 ```typescript
 // Core Classes
 Scanner, Parser, FileGraphResolver, FileCopier
-TsconfigLoader, ConfigLoader
+ContextConfig, ConfigLoader
 ContractsPipeline, RegistryGenerator, ReexportGenerator
 
 // Runtime Classes
@@ -1018,10 +1001,11 @@ MessageParserError
 processContext(options: ProcessContextOptions): Promise<ProcessContextResult>
 ```
 
-### Decorators
+### Decorators (in `@hexaijs/contracts/decorators`)
 ```typescript
 @PublicEvent(options?: PublicEventOptions)
 @PublicCommand(options?: PublicCommandOptions)
+@PublicQuery(options?: PublicQueryOptions)
 ```
 
 ### CLI

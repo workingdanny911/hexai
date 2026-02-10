@@ -1,12 +1,10 @@
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { processContext, ProcessContextResult, RegistryGenerator, ContextMessages } from "@/index";
 import type { ResponseNamingConvention, MessageType } from "@/domain/types";
-
-const PRODUCTION_SOURCE_DIR = join(__dirname, "..", "..", "src");
 
 export interface RunParserOptions {
     contextName?: string;
@@ -71,20 +69,12 @@ export class E2ETestContext {
         return join(this.getOutputDir(), ...paths);
     }
 
-    /**
-     * Builds the default path alias rewrites for @/decorators.
-     * Can be extended with additional rewrites if provided.
-     */
     buildPathAliasRewrites(
-        contextName: string,
+        _contextName: string,
         additionalRewrites?: Map<string, string>
     ): Map<string, string> {
-        const decoratorsPath = join(PRODUCTION_SOURCE_DIR, "decorators");
-        const outputContextDir = join(this.getOutputDir(), contextName);
-        const relativeDecoratorsPath = relative(outputContextDir, decoratorsPath);
-
         const rewrites = new Map<string, string>([
-            ["@/decorators", relativeDecoratorsPath],
+            ["@/decorators", "@hexaijs/contracts/decorators"],
         ]);
 
         if (additionalRewrites) {

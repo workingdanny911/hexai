@@ -5,7 +5,7 @@ export default defineConfig(
   createTsupConfig({
     entry: {
       index: 'src/index.ts',
-      request: 'src/request.ts',
+      'pino/index': 'src/pino/index.ts',
     },
     tsconfig: 'tsconfig.build.json',
   })

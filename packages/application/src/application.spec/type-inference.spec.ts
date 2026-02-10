@@ -1,12 +1,12 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { AbstractApplicationContext } from "@/abstract-application-context";
+import { ApplicationContext } from "@/application-context";
 import { ApplicationBuilder, SuccessResult } from "@/application";
 import { Command } from "@/command";
 import { Query } from "@/query";
 import { expectSuccessResult } from "@/test";
 
-class TestApplicationContext extends AbstractApplicationContext {}
+class TestApplicationContext implements ApplicationContext {}
 
 describe("Application type inference", () => {
     describe("executeCommand", () => {

@@ -70,7 +70,7 @@ export {
     type PublicEventOptions,
     type PublicCommandOptions,
     type PublicQueryOptions,
-} from "./decorators";
+} from "@hexaijs/contracts/decorators";
 
 export { Scanner, type ScannerOptions } from "./scanner";
 export { Parser, type ParseResult } from "./parser";

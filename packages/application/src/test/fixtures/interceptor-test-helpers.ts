@@ -1,16 +1,16 @@
 import { vi } from "vitest";
-import { ApplicationBuilder, SuccessResult } from "@/application";
-import { AbstractApplicationContext } from "@/abstract-application-context";
+import { ApplicationBuilder } from "@/application";
+import { ApplicationContext } from "@/application-context";
 import { CommandInterceptor, EventInterceptor } from "@/interceptor";
 
 /**
  * Shared test helpers for interceptor tests
  */
 
-export class DummyApplicationContext extends AbstractApplicationContext {}
+export class DummyApplicationContext implements ApplicationContext {}
 
 /**
- * Creates a mock command handler that returns a SuccessResult
+ * Creates a mock command handler that resolves with the given data
  */
 export function createMockCommandHandler(data: any = { foo: "bar" }) {
     return {

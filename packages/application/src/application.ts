@@ -1,8 +1,9 @@
 import { Message, MessageClass } from "@hexaijs/core";
 
-import { AbstractApplicationContext } from "./abstract-application-context";
+import { ApplicationContext } from "./application-context";
 import { CommandHandler } from "./command-handler";
 import { Command } from "./command";
+import { ExecutionScope } from "./execution-scope";
 import { QueryHandler } from "./query-handler";
 import { Query } from "./query";
 import {
@@ -88,7 +89,7 @@ export interface Application
 
 class GenericApplication implements Application {
     private constructor(
-        private applicationContext: AbstractApplicationContext,
+        private applicationContext: ApplicationContext,
         private commandHandlers: CommandHandlerRegistry,
         private queryHandlers: QueryHandlerRegistry,
         private eventHandlers: Array<EventHandler>,
@@ -98,22 +99,30 @@ class GenericApplication implements Application {
     public async executeCommand<C extends Command>(
         command: C
     ): Promise<Result<C['ResultType']>> {
-        try {
-            const result = await this.doExecuteCommand<C['ResultType']>(command);
-            return new SuccessResult(result);
-        } catch (e) {
-            let error: ApplicationError;
+        return ExecutionScope.run(
+            {
+                correlation: command.getCorrelation(),
+                causation: command.asTrace(),
+            },
+            async () => {
+                try {
+                    const result = await this.doExecuteCommand<C['ResultType']>(command);
+                    return new SuccessResult(result);
+                } catch (e) {
+                    let error: ApplicationError;
 
-            if (e instanceof ApplicationError) {
-                error = e;
-            } else {
-                error = this.errorTransformer(e as Error, {
-                    message: command,
-                });
+                    if (e instanceof ApplicationError) {
+                        error = e;
+                    } else {
+                        error = this.errorTransformer(e as Error, {
+                            message: command,
+                        });
+                    }
+
+                    return new ErrorResult(error);
+                }
             }
-
-            return new ErrorResult(error);
-        }
+        );
     }
 
     public async handleEvent(
@@ -121,59 +130,66 @@ class GenericApplication implements Application {
     ): Promise<Result<EventHandlingResult>> {
         const selected = this.eventHandlers.filter((eh) => eh.canHandle(event));
 
-        try {
-            await this.applicationContext.enterCommandExecutionScope(
-                event,
-                async (context) => {
+        return ExecutionScope.run(
+            {
+                causation: event.asTrace(),
+                correlation: event.getCorrelation(),
+            },
+            async () => {
+                try {
                     await Promise.all(
-                        selected.map((eh) => eh.handle(event, context))
+                        selected.map((eh) => eh.handle(event, this.applicationContext))
+                    );
+                    return new SuccessResult(null);
+                } catch (e) {
+                    if (e instanceof ApplicationError) {
+                        return new ErrorResult(e);
+                    }
+                    return new ErrorResult(
+                        this.errorTransformer(e as Error, { message: event })
                     );
                 }
-            );
-            return new SuccessResult(null);
-        } catch (e) {
-            if (e instanceof ApplicationError) {
-                return new ErrorResult(e);
             }
-            return new ErrorResult(
-                this.errorTransformer(e as Error, { message: event })
-            );
-        }
+        );
     }
 
     public async executeQuery<Q extends Query>(
         query: Q
     ): Promise<Result<Q['ResultType']>> {
-        try {
-            const result = await this.doExecuteQuery<Q['ResultType']>(query);
-            return new SuccessResult(result);
-        } catch (e) {
-            let error: ApplicationError;
+        return ExecutionScope.run(
+            {
+                correlation: query.getCorrelation(),
+                causation: query.asTrace(),
+            },
+            async () => {
+                try {
+                    const result = await this.doExecuteQuery<Q['ResultType']>(query);
+                    return new SuccessResult(result);
+                } catch (e) {
+                    let error: ApplicationError;
 
-            if (e instanceof ApplicationError) {
-                error = e;
-            } else {
-                error = this.errorTransformer(e as Error, {
-                    message: query,
-                });
+                    if (e instanceof ApplicationError) {
+                        error = e;
+                    } else {
+                        error = this.errorTransformer(e as Error, {
+                            message: query,
+                        });
+                    }
+
+                    return new ErrorResult(error);
+                }
             }
-
-            return new ErrorResult(error);
-        }
+        );
     }
 
     private async doExecuteCommand<T>(command: Command): Promise<T> {
         const handler = this.getCommandHandler(command);
 
         try {
-            let result: T;
-            await this.applicationContext.enterCommandExecutionScope(
+            return (await handler.execute(
                 command,
-                async (context) => {
-                    result = (await handler.execute(command, context)) as unknown as T;
-                }
-            );
-            return result!;
+                this.applicationContext
+            )) as unknown as T;
         } catch (e) {
             if (e instanceof ApplicationError) {
                 throw e;
@@ -199,14 +215,10 @@ class GenericApplication implements Application {
         const handler = this.getQueryHandler(query);
 
         try {
-            let result: T;
-            await this.applicationContext.enterCommandExecutionScope(
+            return (await handler.execute(
                 query,
-                async (context) => {
-                    result = (await handler.execute(query, context)) as unknown as T;
-                }
-            );
-            return result!;
+                this.applicationContext
+            )) as unknown as T;
         } catch (e) {
             if (e instanceof ApplicationError) {
                 throw e;
@@ -236,7 +248,7 @@ export class ApplicationBuilder {
         new TypeBasedHandlerRegistry();
     private eventHandlers: Array<EventHandler> = [];
     private eventHandlerNames: Set<string> = new Set();
-    private applicationContext: AbstractApplicationContext | null = null;
+    private applicationContext: ApplicationContext | null = null;
     private errorTransformer: ApplicationErrorTransformer | null = null;
     private commandInterceptors: Array<CommandInterceptor> = [];
     private queryInterceptors: Array<QueryInterceptor> = [];
@@ -297,7 +309,7 @@ export class ApplicationBuilder {
     }
 
     public withApplicationContext(
-        applicationContext: AbstractApplicationContext
+        applicationContext: ApplicationContext
     ): this {
         this.applicationContext = applicationContext;
 

@@ -16,11 +16,12 @@ import { DomainEvent, Message } from "@hexaijs/core";
 import {
     PublicEvent,
     PublicCommand,
-} from "@hexaijs/plugin-contracts-generator/decorators";
+} from "@hexaijs/contracts/decorators";
 
 // Handler-only imports (should be excluded when extracting messages)
 import { CommandHandlerMarker } from "@hexaijs/plugin-application-builder";
-import { BaseUseCase, SecurityContextHelper } from "@student-planner/common";
+import { ExecutionScope } from "@hexaijs/application";
+import { BaseUseCase } from "@student-planner/common";
 import { UserRepository } from "./repository";
 
 // ===== Event and its dependencies =====
@@ -68,9 +69,9 @@ export class RegisterUserHandler extends BaseUseCase<
     protected async doExecute(
         request: RegisterUser
     ): Promise<RegisterUserResponse> {
-        const sc = request.getSecurityContext();
+        const sc = ExecutionScope.requireSecurityContext<{ role: string }>();
 
-        if (!SecurityContextHelper.isAnonymous(sc)) {
+        if (sc.role !== "anonymous") {
             throw new Error("Already authenticated");
         }
 

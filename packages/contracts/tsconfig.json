@@ -8,6 +8,6 @@
             "@/*": ["src/*"]
         }
     },
-    "include": ["src", "e2e", "test"],
+    "include": ["src"],
     "exclude": ["node_modules", "dist"]
 }

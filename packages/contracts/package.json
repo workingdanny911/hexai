@@ -1,21 +1,17 @@
 {
-    "name": "@hexaijs/plugin-application-builder",
+    "name": "@hexaijs/contracts",
     "publishConfig": {
         "access": "public"
     },
-    "version": "0.2.2",
+    "version": "0.1.0",
     "type": "module",
-    "description": "Build plugin for generating ApplicationBuilder code from decorated handlers",
+    "description": "Zero-dependency marker decorators for hexai contract definitions",
     "license": "MIT",
     "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
-    "contributors": [
-        "Seungcheol Baek <victoryiron.baek@gmail.com>",
-        "Donghyun Lee <edonghyun@naver.com>"
-    ],
     "repository": {
         "type": "git",
         "url": "git+https://github.com/workingdanny911/hexai.git",
-        "directory": "packages/plugin-application-builder"
+        "directory": "packages/contracts"
     },
     "homepage": "https://github.com/workingdanny911/hexai#readme",
     "bugs": {
@@ -26,22 +22,14 @@
         "hexagonal",
         "clean-architecture",
         "ddd",
-        "cqrs",
-        "application-builder",
-        "code-generation",
+        "contracts",
+        "decorators",
         "typescript"
     ],
     "files": [
         "dist",
         "LICENSE"
     ],
-    "bin": {
-        "generate-app-builder": "./dist/cli.js"
-    },
-    "scripts": {
-        "test": "vitest run",
-        "build": "tsup"
-    },
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
@@ -53,20 +41,15 @@
         },
         "./package.json": "./package.json"
     },
-    "dependencies": {
-        "glob": "^10.0.0"
+    "scripts": {
+        "test": "vitest run",
+        "build": "tsup"
     },
     "peerDependencies": {
-        "@hexaijs/core": "^0.6.0",
-        "@hexaijs/application": "^0.5.0",
-        "@hexaijs/cli": "^0.2.0",
-        "typescript": "^5.0.0"
+        "@hexaijs/core": "^0.6.0"
     },
     "devDependencies": {
-        "@hexaijs/application": "workspace:^",
-        "@hexaijs/cli": "workspace:^",
         "@hexaijs/core": "workspace:^",
-        "@hexaijs/tooling": "workspace:*",
-        "@types/node": "^20.0.0"
+        "@hexaijs/tooling": "workspace:*"
     }
 }
