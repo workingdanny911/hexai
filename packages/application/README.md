@@ -363,11 +363,12 @@ const compositeApp = new SimpleCompositeApplication({
 await compositeApp.executeCommand(new CreateOrderCommand(...));
 ```
 
-For event handling across bounded contexts, provide a `UnitOfWork` to ensure all handlers execute in the same transaction:
+For event handling across bounded contexts, provide a `UnitOfWork` to ensure all handlers execute in the same transaction. `handleEvent` uses `scope()` internally for lazy transaction management:
 
 ```typescript
 compositeApp.setUnitOfWork(unitOfWork);
 await compositeApp.handleEvent(event);
+// All event handlers run within a single scope() transaction
 ```
 
 ## API Highlights

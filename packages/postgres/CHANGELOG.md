@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.6.0] - 2026-02-12
+
+### Added
+
+- `scope()` implementation in `DefaultPostgresUnitOfWork` — lazy transaction with deferred connection acquisition
+  - Connection and `BEGIN` are deferred until the first `withClient()` call inside the scope
+  - Supports all propagation options: `NEW`, `EXISTING` (default), `NESTED`
+- `scope()` in `PostgresUnitOfWorkForTesting` — savepoint-based, consistent with production behavior
+
+### Deprecated
+
+- `wrap()` — use `scope()` instead for all new code
+  - `wrap()` eagerly acquires a connection and issues `BEGIN` immediately
+  - `scope()` defers both until first `withClient()`, reducing unnecessary resource consumption
+
+### Migration (v0.5.1 → v0.6.0)
+
+```typescript
+// Before (wrap — eager)
+await unitOfWork.wrap(async (client) => {
+    await client.query("INSERT INTO orders ...", [...]);
+});
+
+// After (scope — lazy)
+await unitOfWork.scope(async () => {
+    await unitOfWork.withClient(async (client) => {
+        await client.query("INSERT INTO orders ...", [...]);
+    });
+});
+```
+
+Requires `@hexaijs/core` `^0.7.0`.
+
 ## [0.4.0] - 2026-02-04
 
 ### Breaking Changes

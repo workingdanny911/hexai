@@ -59,25 +59,47 @@ The client factory creates a new client for each transaction. The optional clean
 
 ### Transaction Execution
 
-Use `wrap()` to execute operations within a transaction:
+Use `scope()` to define a transaction boundary. Client access happens through `withClient()`:
 
 ```typescript
-import { Propagation } from "@hexaijs/core";
-
 // Execute within a transaction
-const result = await unitOfWork.wrap(async (client) => {
-    await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", [orderId, "pending"]);
-    await client.query("INSERT INTO order_items (order_id, product_id) VALUES ($1, $2)", [orderId, productId]);
+const result = await unitOfWork.scope(async () => {
+    await unitOfWork.withClient(async (client) => {
+        await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", [orderId, "pending"]);
+        await client.query("INSERT INTO order_items (order_id, product_id) VALUES ($1, $2)", [orderId, productId]);
+    });
     return { orderId };
 });
 ```
 
-Within a command handler, access the client through `getClient()`:
+#### Lazy Transaction Initialization
+
+`scope()` does **not** issue `BEGIN` immediately. The transaction starts lazily on the first `withClient()` call. This means if the scope exits without any client access, no database connection is acquired at all.
 
 ```typescript
-// Inside a command handler
-const client = ctx.getUnitOfWork().getClient();
-await client.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
+await unitOfWork.scope(async () => {
+    // No BEGIN yet - transaction hasn't started
+
+    if (!needsUpdate) return;  // Early exit: no connection acquired
+
+    await unitOfWork.withClient(async (client) => {
+        // BEGIN is issued here, on first withClient() call
+        await client.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
+    });
+    // COMMIT on scope exit
+});
+```
+
+#### wrap() (Deprecated)
+
+`wrap()` is the legacy API that eagerly starts a transaction and passes the client directly:
+
+```typescript
+/** @deprecated Use scope() for transaction boundaries and withClient() for client access. */
+const result = await unitOfWork.wrap(async (client) => {
+    await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", [orderId, "pending"]);
+    return { orderId };
+});
 ```
 
 ### Client Access Without Transaction
@@ -107,24 +129,26 @@ const users = await unitOfWork.withClient(async (client) => {
     return await client.query("SELECT * FROM users");
 });
 
-// Inside wrap() - reuses the transaction's client
-await unitOfWork.wrap(async (txClient) => {
-    await txClient.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+// Inside scope() - reuses the transaction's client
+await unitOfWork.scope(async () => {
+    await unitOfWork.withClient(async (client) => {
+        await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+    });
 
-    // Uses the same txClient, sees uncommitted changes
+    // Same transaction, sees uncommitted changes
     const order = await unitOfWork.withClient(async (client) => {
-        // client === txClient
         return await client.query("SELECT * FROM orders WHERE id = $1", [orderId]);
     });
 });
 ```
 
-**When to use `wrap()` vs `withClient()`:**
+**When to use which method:**
 
-| Method | Transaction | Overhead | Use Case |
-|--------|-------------|----------|----------|
-| `wrap()` | Yes | BEGIN + COMMIT | Commands (INSERT, UPDATE, DELETE) |
-| `withClient()` | No | Connection only | Queries (SELECT) |
+| Method | Transaction | Connection | Use Case |
+|--------|-------------|------------|----------|
+| `scope()` | Yes (lazy) | On first `withClient()` | Commands — recommended |
+| `wrap()` | Yes (eager) | Immediate | Legacy — deprecated |
+| `withClient()` | No | Per-call | Queries (SELECT) |
 
 ### Transaction Propagation
 
@@ -134,25 +158,23 @@ Control how nested operations participate in transactions using `Propagation`:
 import { Propagation } from "@hexaijs/core";
 
 // EXISTING (default): Join current transaction, or create new if none exists
-await unitOfWork.wrap(async () => {
-    // This joins the outer transaction
-    await unitOfWork.wrap(async (client) => {
+await unitOfWork.scope(async () => {
+    await unitOfWork.scope(async () => {
         // Same transaction as outer
     }, { propagation: Propagation.EXISTING });
 });
 
 // NEW: Always start a new transaction
-await unitOfWork.wrap(async () => {
-    // This runs in a separate transaction
-    await unitOfWork.wrap(async (client) => {
-        // Independent transaction
+await unitOfWork.scope(async () => {
+    await unitOfWork.scope(async () => {
+        // Independent transaction with separate connection
     }, { propagation: Propagation.NEW });
 });
 
 // NESTED: Create a savepoint within the current transaction
-await unitOfWork.wrap(async () => {
+await unitOfWork.scope(async () => {
     try {
-        await unitOfWork.wrap(async (client) => {
+        await unitOfWork.scope(async () => {
             // Runs in a savepoint
             throw new Error("Rollback this part only");
         }, { propagation: Propagation.NESTED });
@@ -169,10 +191,12 @@ Configure transaction isolation levels when stricter guarantees are needed:
 ```typescript
 import { IsolationLevel } from "@hexaijs/postgres";
 
-await unitOfWork.wrap(async (client) => {
-    // Serializable isolation prevents phantom reads
-    const result = await client.query("SELECT * FROM inventory WHERE product_id = $1", [productId]);
-    // ...
+await unitOfWork.scope(async () => {
+    await unitOfWork.withClient(async (client) => {
+        // Serializable isolation prevents phantom reads
+        const result = await client.query("SELECT * FROM inventory WHERE product_id = $1", [productId]);
+        // ...
+    });
 }, { isolationLevel: IsolationLevel.SERIALIZABLE });
 ```
 
@@ -354,8 +378,10 @@ describe("OrderService", () => {
     });
 
     it("should create order", async () => {
-        await uow.wrap(async (c) => {
-            await c.query("INSERT INTO orders (id) VALUES ($1)", ["order-1"]);
+        await uow.scope(async () => {
+            await uow.withClient(async (c) => {
+                await c.query("INSERT INTO orders (id) VALUES ($1)", ["order-1"]);
+            });
         });
 
         // Verify within the same transaction
@@ -385,35 +411,35 @@ describe("OrderService", () => {
 
 ```typescript
 // abortError behavior - matches production
-await uow.wrap(async (c) => {
-    await insertOrder(c, 1);
+await uow.scope(async () => {
+    await insertOrder(1);
 
     try {
-        await uow.wrap(async () => {
+        await uow.scope(async () => {
             throw new Error("fails");
         });
     } catch {
         // Caught, but transaction is already marked as aborted
     }
 
-    await insertOrder(c, 2);  // Executes, but will be rolled back
+    await insertOrder(2);  // Executes, but will be rolled back
 });
 // Result: Both orders rolled back (abortError propagation)
 
 // NESTED savepoint - independent rollback
-await uow.wrap(async (c) => {
-    await insertOrder(c, 1);
+await uow.scope(async () => {
+    await insertOrder(1);
 
     try {
-        await uow.wrap(async (sp) => {
-            await insertOrder(sp, 2);
+        await uow.scope(async () => {
+            await insertOrder(2);
             throw new Error("fails");
         }, { propagation: Propagation.NESTED });
     } catch {
         // Only savepoint rolled back
     }
 
-    await insertOrder(c, 3);
+    await insertOrder(3);
 });
 // Result: Orders 1 and 3 committed, order 2 rolled back
 ```
@@ -437,6 +463,38 @@ await uow.wrap(async (c) => {
 | `ensureConnection` | Safe connection helper |
 
 ## Migration Guide
+
+### v0.5.1 → v0.6.0
+
+**New API: `scope()` replaces `wrap()` for transaction boundaries**
+
+`scope()` is the new recommended way to define transaction boundaries. Unlike `wrap()`, it does not pass the database client directly — use `withClient()` instead.
+
+```typescript
+// Before (v0.5.1) - wrap() passes client directly
+await unitOfWork.wrap(async (client) => {
+    await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+});
+
+// After (v0.6.0) - scope() + withClient()
+await unitOfWork.scope(async () => {
+    await unitOfWork.withClient(async (client) => {
+        await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+    });
+});
+```
+
+**Key differences:**
+
+| Aspect | `wrap()` | `scope()` |
+|--------|----------|-----------|
+| Transaction start | Eager (`BEGIN` immediately) | Lazy (`BEGIN` on first `withClient()`) |
+| Client access | Passed as callback argument | Via `withClient()` |
+| Status | Deprecated | Recommended |
+
+**`wrap()` is deprecated** but continues to work. No urgent migration needed — update at your own pace.
+
+**Peer dependency:** Update `@hexaijs/core` to `^0.7.0`.
 
 ### v0.3.x → v0.4.0
 

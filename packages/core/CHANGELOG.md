@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0] - 2026-02-12
+
+### Added
+
+- `UnitOfWork.scope()` — lazy transaction API that only begins a transaction on first resource access
+  - Signature: `scope<T>(fn: () => Promise<T>, options?): Promise<T>`
+  - Supports propagation options: `NEW`, `EXISTING` (default), `NESTED`
+
+### Deprecated
+
+- `UnitOfWork.wrap()` — use `scope()` instead
+  - `wrap()` eagerly acquires a connection and begins a transaction immediately
+  - `scope()` defers connection acquisition until first use, reducing unnecessary resource consumption
+
 ## [0.6.0] - 2026-02-09
 
 ### Added

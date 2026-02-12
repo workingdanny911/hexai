@@ -56,10 +56,11 @@ Unlike PostgreSQL's unit of work which accepts a client factory, `SqliteUnitOfWo
 
 ### Transaction Execution
 
-Use `wrap()` to execute operations within a transaction:
+Use `scope()` to define a transaction boundary:
 
 ```typescript
-const result = await unitOfWork.wrap(async (db) => {
+const result = await unitOfWork.scope(async () => {
+    const db = unitOfWork.getClient();
     await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
     await db.run("INSERT INTO order_items (order_id, product_id) VALUES (?, ?)", [orderId, productId]);
     return { orderId };
@@ -67,11 +68,22 @@ const result = await unitOfWork.wrap(async (db) => {
 // Transaction commits if successful
 ```
 
+`wrap()` is also available but deprecated. In SQLite, `scope()` delegates to `wrap()` internally — both behave identically.
+
+```typescript
+/** @deprecated Use scope() instead. */
+const result = await unitOfWork.wrap(async (db) => {
+    await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
+    return { orderId };
+});
+```
+
 If an error is thrown, the transaction rolls back:
 
 ```typescript
 try {
-    await unitOfWork.wrap(async (db) => {
+    await unitOfWork.scope(async () => {
+        const db = unitOfWork.getClient();
         await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
         throw new Error("Something went wrong");
     });
@@ -90,17 +102,19 @@ const db = ctx.getUnitOfWork().getClient();
 await db.run("UPDATE orders SET status = ? WHERE id = ?", ["confirmed", orderId]);
 ```
 
-Note: `getClient()` throws an error if called outside of a `wrap()` call.
+Note: `getClient()` throws an error if called outside of a `scope()` or `wrap()` call.
 
 ### Nested Transactions
 
-Nested `wrap()` calls participate in the same transaction:
+Nested `scope()` calls participate in the same transaction:
 
 ```typescript
-await unitOfWork.wrap(async (db) => {
+await unitOfWork.scope(async () => {
+    const db = unitOfWork.getClient();
     await db.run("INSERT INTO orders (id) VALUES (?)", ["order-1"]);
 
-    await unitOfWork.wrap(async (db) => {
+    await unitOfWork.scope(async () => {
+        const db = unitOfWork.getClient();
         await db.run("INSERT INTO order_items (order_id) VALUES (?)", ["order-1"]);
     });
     // Both inserts are in the same transaction
@@ -112,10 +126,12 @@ If any nested call throws, the entire transaction rolls back:
 
 ```typescript
 try {
-    await unitOfWork.wrap(async (db) => {
+    await unitOfWork.scope(async () => {
+        const db = unitOfWork.getClient();
         await db.run("INSERT INTO orders (id) VALUES (?)", ["order-1"]);
 
-        await unitOfWork.wrap(async (db) => {
+        await unitOfWork.scope(async () => {
+            const db = unitOfWork.getClient();
             await db.run("INSERT INTO order_items (order_id) VALUES (?)", ["order-1"]);
             throw new Error("Nested failure");
         });
@@ -160,7 +176,8 @@ describe("OrderRepository", () => {
     });
 
     it("should persist orders", async () => {
-        await unitOfWork.wrap(async (db) => {
+        await unitOfWork.scope(async () => {
+            const db = unitOfWork.getClient();
             await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", ["order-1", "pending"]);
         });
 

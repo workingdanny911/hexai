@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.1] - 2026-02-12
+
+### Changed
+
+- `SimpleCompositeApplication.handleEvent()` now uses `unitOfWork.scope()` instead of `unitOfWork.wrap()` internally
+  - No behavioral change for consumers — lazy transaction initialization is an internal optimization
+
+Requires `@hexaijs/core` `^0.7.0`.
+
 ## [0.5.0] - 2026-02-10
 
 ### Added

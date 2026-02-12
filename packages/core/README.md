@@ -273,7 +273,7 @@ async function confirmOrder(
 
 ### UnitOfWork
 
-Interface for transaction management. Controls transaction propagation and provides access to the underlying database client.
+Interface for transaction management. The primary API is `scope()` for defining transaction boundaries.
 
 ```typescript
 import { UnitOfWork, Propagation } from "@hexaijs/core";
@@ -284,10 +284,29 @@ interface OrderApplicationContext {
     getOrderRepository(): OrderRepository;
 }
 
+// Define a transaction boundary with scope()
+await unitOfWork.scope(async () => {
+    const order = Order.create(orderId, customerId);
+    await orderRepository.add(order);
+});
+```
+
+#### scope() vs wrap()
+
+| Method | Signature | Status |
+|--------|-----------|--------|
+| `scope(fn)` | `fn: () => Promise<T>` | **Recommended** |
+| `wrap(fn)` | `fn: (client) => Promise<T>` | **Deprecated** |
+
+`scope()` defines a transaction boundary without exposing the database client. Client access is handled separately through infrastructure methods (e.g., `withClient()` in `@hexaijs/postgres`). This separation enables lazy transaction initialization — the actual `BEGIN` is deferred until the first client access.
+
+#### Transaction Propagation
+
+```typescript
 // Transaction propagation options
-Propagation.NEW       // Start new transaction
-Propagation.EXISTING  // Use existing transaction (error if none)
-Propagation.NESTED    // Nested transaction (savepoint)
+Propagation.NEW       // Always start a new transaction
+Propagation.EXISTING  // Join existing transaction, or create new if none
+Propagation.NESTED    // Create a savepoint within current transaction
 ```
 
 ### EventStore
@@ -369,7 +388,7 @@ throw new DuplicateObjectError("Order with this ID already exists");
 | `Id<T>` | Value object for typed identities |
 | `Identifiable<T>` | Interface for entities with identity |
 | `Repository<T>` | Interface for aggregate persistence |
-| `UnitOfWork` | Interface for transaction management |
+| `UnitOfWork` | Interface for transaction management (`scope()` for boundaries, `wrap()` deprecated) |
 | `Propagation` | Enum for transaction propagation modes |
 | `EventStore` | Interface for event store implementations |
 
