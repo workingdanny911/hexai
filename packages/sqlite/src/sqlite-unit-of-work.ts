@@ -28,6 +28,10 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
         return this.db;
     }
 
+    async scope<T>(fn: () => Promise<T>): Promise<T> {
+        return this.wrap(fn);
+    }
+
     async wrap<T>(fn: (client: Database) => Promise<T>): Promise<T> {
         const current = SqliteUnitOfWork.transactions.get(this.db)!;
         if (++current.level === 1) {

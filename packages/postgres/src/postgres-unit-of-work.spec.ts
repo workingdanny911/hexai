@@ -350,6 +350,196 @@ describe("PostgresUnitOfWork", () => {
         });
     });
 
+    describe("scope()", () => {
+        async function runFailingScopeTransaction(
+            fn: (client: pg.ClientBase) => Promise<void>
+        ): Promise<void> {
+            try {
+                await uow.scope(async () => {
+                    await uow.withClient(fn);
+                    throw new Error("scope failure");
+                });
+            } catch {
+                // expected
+            }
+        }
+
+        describe("transaction lifecycle", () => {
+            test("commits on success when withClient is used", async () => {
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                await expectRecordExists(1);
+            });
+
+            test("rolls back on error when withClient is used", async () => {
+                await runFailingScopeTransaction(async (client) => {
+                    await insertRecord(client, 1);
+                });
+
+                await expectRecordNotExists(1);
+            });
+
+            test("no-op when withClient is never called", async () => {
+                await uow.scope(async () => {
+                    // intentionally empty — no withClient() call
+                });
+
+                await expectRecordCount(0);
+            });
+
+            test("consistent client reference across multiple withClient calls", async () => {
+                const txids: string[] = [];
+
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                    });
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                    });
+                });
+
+                expect(areSameTransaction(...txids)).toBe(true);
+            });
+        });
+
+        describe("lazy initialization", () => {
+            test("withClient() triggers transaction start", async () => {
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                await expectRecordExists(1);
+            });
+
+            test("getClient() throws if withClient was never called", async () => {
+                await uow.scope(async () => {
+                    expect(() => uow.getClient()).toThrow(
+                        "Transaction not initialized"
+                    );
+                });
+            });
+        });
+
+        describe("nesting", () => {
+            test("scope → wrap(EXISTING): wrap triggers init, same transaction", async () => {
+                const txids: string[] = [];
+
+                await uow.scope(async () => {
+                    await uow.wrap(
+                        async (client) => {
+                            txids.push(await getTransactionId(client));
+                        },
+                        { propagation: Propagation.EXISTING }
+                    );
+
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                    });
+                });
+
+                expect(areSameTransaction(...txids)).toBe(true);
+            });
+
+            test("scope → scope(EXISTING): same transaction, both lazy until withClient", async () => {
+                const txids: string[] = [];
+
+                await uow.scope(async () => {
+                    await uow.scope(
+                        async () => {
+                            await uow.withClient(async (client) => {
+                                txids.push(await getTransactionId(client));
+                            });
+                        },
+                        { propagation: Propagation.EXISTING }
+                    );
+
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                    });
+                });
+
+                expect(areSameTransaction(...txids)).toBe(true);
+            });
+
+            test("scope → scope(NEW): independent transactions", async () => {
+                const txids: string[] = [];
+
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                    });
+
+                    await uow.scope(
+                        async () => {
+                            await uow.withClient(async (client) => {
+                                txids.push(await getTransactionId(client));
+                            });
+                        },
+                        { propagation: Propagation.NEW }
+                    );
+                });
+
+                expect(areDistinctTransactions(...txids)).toBe(true);
+            });
+
+            test("scope → scope(NESTED): outer forced init + savepoint", async () => {
+                const txids: string[] = [];
+
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                        txids.push(await getTransactionId(client));
+                    });
+
+                    try {
+                        await uow.scope(
+                            async () => {
+                                await uow.withClient(async (client) => {
+                                    await insertRecord(client, 2);
+                                    txids.push(await getTransactionId(client));
+                                });
+                                throw new Error("savepoint failure");
+                            },
+                            { propagation: Propagation.NESTED }
+                        );
+                    } catch {
+                        // expected
+                    }
+                });
+
+                expect(areSameTransaction(...txids)).toBe(true);
+                await expectRecordExists(1);
+                await expectRecordNotExists(2);
+            });
+
+            test("wrap → scope(EXISTING): already initialized, scope participates", async () => {
+                const txids: string[] = [];
+
+                await uow.wrap(async (wrapClient) => {
+                    txids.push(await getTransactionId(wrapClient));
+
+                    await uow.scope(
+                        async () => {
+                            await uow.withClient(async (client) => {
+                                txids.push(await getTransactionId(client));
+                            });
+                        },
+                        { propagation: Propagation.EXISTING }
+                    );
+                });
+
+                expect(areSameTransaction(...txids)).toBe(true);
+            });
+        });
+    });
+
     describe("withClient method", () => {
         test("executes query without transaction", async () => {
             await uow.withClient(async (client) => {

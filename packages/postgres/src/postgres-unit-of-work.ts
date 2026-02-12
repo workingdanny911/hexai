@@ -18,6 +18,7 @@ export interface PostgresUnitOfWork
 }
 
 export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
+    private static wrapDeprecationEmitted = false;
     private transactionStorage = new AsyncLocalStorage<PostgresTransaction>();
 
     constructor(
@@ -35,10 +36,30 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
         return current.getClient();
     }
 
+    async scope<T = unknown>(
+        fn: () => Promise<T>,
+        options: Partial<PostgresTransactionOptions> = {}
+    ): Promise<T> {
+        const resolvedOptions = this.resolveOptions(options);
+        const transaction = this.resolveTransaction(resolvedOptions);
+
+        return this.executeInContext(transaction, (tx) =>
+            tx.executeScope(fn, resolvedOptions)
+        );
+    }
+
     async wrap<T = unknown>(
         fn: (client: pg.ClientBase) => Promise<T>,
         options: Partial<PostgresTransactionOptions> = {}
     ): Promise<T> {
+        if (!DefaultPostgresUnitOfWork.wrapDeprecationEmitted) {
+            DefaultPostgresUnitOfWork.wrapDeprecationEmitted = true;
+            process.emitWarning(
+                "UnitOfWork.wrap() is deprecated. Use scope() + withClient() instead.",
+                { type: "DeprecationWarning" }
+            );
+        }
+
         const resolvedOptions = this.resolveOptions(options);
         const transaction = this.resolveTransaction(resolvedOptions);
 
@@ -51,7 +72,8 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
         const currentTransaction = this.getCurrentTransaction();
 
         if (currentTransaction) {
-            return fn(currentTransaction.getClient());
+            const client = await currentTransaction.getClientLazy();
+            return fn(client);
         }
 
         const client = await this.clientFactory();
@@ -128,7 +150,32 @@ class PostgresTransaction {
             : executor.execute(fn, options);
     }
 
+    public async executeScope<T>(
+        fn: () => Promise<T>,
+        options: PostgresTransactionOptions
+    ): Promise<T> {
+        this.options = options;
+
+        if (this.nestingDepth > 0 && options.propagation === Propagation.NESTED) {
+            await this.ensureStarted();
+            const savepoint = this.createSavepoint();
+            return savepoint.execute(() => fn());
+        }
+
+        return this.runScopedLifecycle(fn);
+    }
+
+    public async getClientLazy(): Promise<pg.ClientBase> {
+        await this.ensureStarted();
+        return this.client;
+    }
+
     public getClient(): pg.ClientBase {
+        if (!this.initialized) {
+            throw new Error(
+                "Transaction not initialized. Use withClient() inside scope() to trigger lazy initialization."
+            );
+        }
         return this.client;
     }
 
@@ -180,6 +227,19 @@ class PostgresTransaction {
         }
     }
 
+    private async runScopedLifecycle<T>(fn: () => Promise<T>): Promise<T> {
+        this.nestingDepth++;
+        try {
+            return await fn();
+        } catch (e) {
+            this.markAsAborted(e as Error);
+            throw e;
+        } finally {
+            this.nestingDepth--;
+            await this.finalizeIfRoot();
+        }
+    }
+
     private async executeWithNesting<T>(
         fn: (client: pg.ClientBase) => Promise<T>
     ): Promise<T> {
@@ -197,6 +257,7 @@ class PostgresTransaction {
 
     private async finalizeIfRoot(): Promise<void> {
         if (this.nestingDepth === 0) {
+            if (!this.initialized) return;
             await (this.isAborted() ? this.rollback() : this.commit());
         }
     }

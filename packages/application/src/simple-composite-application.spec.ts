@@ -17,16 +17,17 @@ import {
 import { SimpleCompositeApplication } from "./simple-composite-application";
 
 function createMockUnitOfWork(): UnitOfWork<void, never> & {
-    wrapSpy: ReturnType<typeof vi.fn>;
+    scopeSpy: ReturnType<typeof vi.fn>;
 } {
-    const wrapSpy = vi.fn();
+    const scopeSpy = vi.fn();
     return {
         getClient: () => null,
-        wrap: async <T>(fn: () => Promise<T>): Promise<T> => {
-            wrapSpy();
+        scope: async <T>(fn: () => Promise<T>): Promise<T> => {
+            scopeSpy();
             return fn();
         },
-        wrapSpy,
+        wrap: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+        scopeSpy,
     };
 }
 
@@ -246,7 +247,7 @@ describe("SimpleCompositeApplication", () => {
         );
     });
 
-    test("event handling runs inside UnitOfWork.wrap()", async () => {
+    test("event handling runs inside UnitOfWork.scope()", async () => {
         const application = createApplicationMock();
         const unitOfWork = createMockUnitOfWork();
 
@@ -259,7 +260,7 @@ describe("SimpleCompositeApplication", () => {
 
         await sut.handleEvent(event);
 
-        expect(unitOfWork.wrapSpy).toHaveBeenCalledTimes(1);
+        expect(unitOfWork.scopeSpy).toHaveBeenCalledTimes(1);
     });
 
     test("can set UnitOfWork using setUnitOfWork() method", async () => {
@@ -273,7 +274,7 @@ describe("SimpleCompositeApplication", () => {
 
         await sut.handleEvent(event);
 
-        expect(unitOfWork.wrapSpy).toHaveBeenCalledTimes(1);
+        expect(unitOfWork.scopeSpy).toHaveBeenCalledTimes(1);
         expect(application.handleEvent).toBeCalledWith(event);
     });
 

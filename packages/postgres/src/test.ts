@@ -65,6 +65,13 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
         return fn(this.client);
     }
 
+    async scope<T = unknown>(
+        fn: () => Promise<T>,
+        options: Partial<PostgresTransactionOptions> = {}
+    ): Promise<T> {
+        return this.wrap(fn, options);
+    }
+
     async wrap<T = unknown>(
         fn: (client: ClientBase) => Promise<T>,
         options: Partial<PostgresTransactionOptions> = {}

@@ -80,7 +80,7 @@ export class SimpleCompositeApplication implements Application {
             }
         };
 
-        return await this.unitOfWork.wrap(async () => {
+        return await this.unitOfWork.scope(async () => {
             try {
                 await Promise.all(apps.map((app) => throwIfError(app)));
             } catch (e) {
