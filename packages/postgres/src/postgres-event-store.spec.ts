@@ -1,14 +1,15 @@
-import * as pg from "pg";
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { Message } from "@hexaijs/core";
 
-import { DatabaseManager } from "./helpers";
 import { PostgresEventStore } from "./postgres-event-store";
-import { useDatabase, useTableManager, useClient } from "@/test-fixtures";
+import {
+    useDatabase,
+    useClient,
+    useUnitOfWork,
+} from "@/test-fixtures";
 import { runHexaiMigrations } from "@/run-hexai-migrations";
 
 const DATABASE = "test_hexai__event_store";
-const TABLE_NAME = "hexai__events";
 
 class TestEvent extends Message<{ value: string }> {
     static readonly type = "TestEvent";
@@ -37,7 +38,8 @@ describe("PostgresEventStore", () => {
     });
 
     const conn = useClient(DATABASE);
-    const eventStore = new PostgresEventStore(conn);
+    const uow = useUnitOfWork(DATABASE);
+    const eventStore = new PostgresEventStore(uow);
 
     beforeEach(async () => {
         await conn.query(`TRUNCATE TABLE hexai__events RESTART IDENTITY`);

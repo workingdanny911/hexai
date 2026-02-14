@@ -208,7 +208,7 @@ Available levels:
 
 ### PostgresEventStore
 
-The `PostgresEventStore` implements `EventStore` from `@hexaijs/core` for storing and retrieving domain events.
+The `PostgresEventStore` implements `EventStore` from `@hexaijs/core` for storing and retrieving domain events. It accepts a `PostgresUnitOfWork`, so it automatically participates in the current transaction when used inside `scope()`.
 
 ```typescript
 import { PostgresEventStore } from "@hexaijs/postgres";
@@ -218,9 +218,8 @@ class OrderPlaced extends DomainEvent<{ orderId: string; customerId: string }> {
     static readonly type = "order.order-placed";
 }
 
-// Create event store with the transaction client
-const client = unitOfWork.getClient();
-const eventStore = new PostgresEventStore(client);
+// Create event store with UnitOfWork
+const eventStore = new PostgresEventStore(unitOfWork);
 
 // Store events
 const stored = await eventStore.store(new OrderPlaced({
@@ -238,10 +237,20 @@ const { events, lastPosition } = await eventStore.fetch(0, 100);
 // lastPosition: number - highest position in store (for catchup detection)
 ```
 
+Inside a transaction scope, the event store shares the same client with repositories:
+
+```typescript
+await unitOfWork.scope(async () => {
+    await repository.save(aggregate);
+    await eventStore.storeAll(aggregate.getEventsOccurred());
+    // Both operations commit or rollback together
+});
+```
+
 Custom table name:
 
 ```typescript
-const eventStore = new PostgresEventStore(client, {
+const eventStore = new PostgresEventStore(unitOfWork, {
     tableName: "my_bounded_context_events"
 });
 ```
