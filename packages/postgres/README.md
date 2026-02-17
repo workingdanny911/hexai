@@ -19,7 +19,7 @@ npm install @hexaijs/postgres
 **Peer dependencies:**
 
 ```bash
-npm install @hexaijs/core @hexaijs/utils pg
+npm install @hexaijs/core ezcfg pg
 ```
 
 ## Core Concepts
@@ -183,6 +183,45 @@ await unitOfWork.scope(async () => {
     }
 });
 ```
+
+### Transaction Lifecycle Hooks
+
+Register callbacks that execute at specific points in the transaction lifecycle:
+
+```typescript
+await unitOfWork.scope(async () => {
+    // Validate before committing
+    unitOfWork.beforeCommit(async () => {
+        const count = await unitOfWork.withClient(async (client) => {
+            const result = await client.query("SELECT count(*) FROM order_items WHERE order_id = $1", [orderId]);
+            return parseInt(result.rows[0].count);
+        });
+        if (count === 0) throw new Error("Order must have at least one item");
+    });
+
+    // Send notification after successful commit
+    unitOfWork.afterCommit(async () => {
+        await notificationService.send("Order confirmed");
+    });
+
+    // Clean up on failure
+    unitOfWork.afterRollback(async () => {
+        await fileStorage.deleteUploadedFiles(orderId);
+    });
+
+    await unitOfWork.withClient(async (client) => {
+        await client.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
+    });
+});
+```
+
+**Key behaviors:**
+
+- `beforeCommit` hooks run **before** the `COMMIT` — if any hook throws, the transaction rolls back instead
+- `afterCommit` and `afterRollback` hooks run **best-effort**: all hooks execute even if some fail, with errors collected into an `AggregateError`
+- Hooks are **scope-local**: registered within a `scope()`, cleared after the transaction completes
+- `Propagation.NESTED` scopes maintain their own independent hook registries
+- Calling hook registration methods outside a `scope()` throws an error
 
 ### Isolation Levels
 
@@ -472,6 +511,26 @@ await uow.scope(async () => {
 | `ensureConnection` | Safe connection helper |
 
 ## Migration Guide
+
+### v0.6.0 → v0.8.0
+
+**New: Transaction lifecycle hooks**
+
+`beforeCommit()`, `afterCommit()`, and `afterRollback()` are now available on `PostgresUnitOfWork`:
+
+```typescript
+await unitOfWork.scope(async () => {
+    unitOfWork.beforeCommit(async () => { /* validate */ });
+    unitOfWork.afterCommit(async () => { /* notify */ });
+    unitOfWork.afterRollback(async () => { /* cleanup */ });
+
+    await unitOfWork.withClient(async (client) => {
+        await client.query("INSERT INTO orders ...", [...]);
+    });
+});
+```
+
+**Peer dependency:** Update `@hexaijs/core` to `^0.8.0`.
 
 ### v0.5.1 → v0.6.0
 

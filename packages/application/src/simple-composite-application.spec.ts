@@ -27,6 +27,9 @@ function createMockUnitOfWork(): UnitOfWork<void, never> & {
             return fn();
         },
         wrap: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+        beforeCommit() {},
+        afterCommit() {},
+        afterRollback() {},
         scopeSpy,
     };
 }

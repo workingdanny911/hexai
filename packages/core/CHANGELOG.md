@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.0] - 2026-02-15
+
+### Breaking Changes
+
+- **`UnitOfWork` interface: 3 new required methods** — all implementations must add these methods
+  - `beforeCommit(hook: TransactionHook): void` — register a hook that runs before commit
+  - `afterCommit(hook: TransactionHook): void` — register a hook that runs after commit (best-effort)
+  - `afterRollback(hook: TransactionHook): void` — register a hook that runs after rollback (best-effort)
+  - Hooks can only be registered inside an active `scope()` — calling outside throws an error
+
+### Added
+
+- `TransactionHook` type: `() => void | Promise<void>`
+- `TransactionHooks` class: reusable hook registry with `executeCommit()` / `executeRollback()` lifecycle methods
+  - `beforeCommit` hooks run sequentially; if any fails, triggers rollback instead of commit
+  - `afterCommit` / `afterRollback` hooks run best-effort (all execute even if some fail, errors collected into `AggregateError`)
+
 ## [0.7.0] - 2026-02-12
 
 ### Added

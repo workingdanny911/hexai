@@ -104,6 +104,39 @@ await db.run("UPDATE orders SET status = ? WHERE id = ?", ["confirmed", orderId]
 
 Note: `getClient()` throws an error if called outside of a `scope()` or `wrap()` call.
 
+### Transaction Lifecycle Hooks
+
+Register callbacks that execute at specific points in the transaction lifecycle:
+
+```typescript
+await unitOfWork.scope(async () => {
+    unitOfWork.beforeCommit(async () => {
+        // Validate before committing
+    });
+
+    unitOfWork.afterCommit(async () => {
+        // Notify after successful commit
+    });
+
+    unitOfWork.afterRollback(async () => {
+        // Clean up on failure
+    });
+
+    const db = unitOfWork.getClient();
+    await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
+});
+```
+
+Hooks follow the same semantics as `@hexaijs/postgres`:
+
+| Hook | When | On failure |
+|------|------|------------|
+| `beforeCommit` | Before COMMIT | Transaction rolls back instead |
+| `afterCommit` | After COMMIT | Best-effort (errors → `AggregateError`) |
+| `afterRollback` | After ROLLBACK | Best-effort (errors → `AggregateError`) |
+
+Hooks are scope-local and can only be registered inside an active `scope()`.
+
 ### Nested Transactions
 
 Nested `scope()` calls participate in the same transaction:

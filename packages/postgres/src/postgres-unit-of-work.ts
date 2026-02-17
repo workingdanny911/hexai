@@ -2,7 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import * as pg from "pg";
 
-import { Propagation, UnitOfWork } from "@hexaijs/core";
+import { Propagation, TransactionHooks, UnitOfWork } from "@hexaijs/core";
+import type { TransactionHook } from "@hexaijs/core";
 import { PostgresConfig } from "./config";
 import { IsolationLevel } from "./types";
 import {
@@ -68,6 +69,21 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
         );
     }
 
+    beforeCommit(hook: TransactionHook): void {
+        const tx = this.getRequiredTransaction("beforeCommit");
+        tx.addBeforeCommitHook(hook);
+    }
+
+    afterCommit(hook: TransactionHook): void {
+        const tx = this.getRequiredTransaction("afterCommit");
+        tx.addAfterCommitHook(hook);
+    }
+
+    afterRollback(hook: TransactionHook): void {
+        const tx = this.getRequiredTransaction("afterRollback");
+        tx.addAfterRollbackHook(hook);
+    }
+
     async withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T> {
         const currentTransaction = this.getCurrentTransaction();
 
@@ -87,6 +103,16 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
 
     private getCurrentTransaction(): PostgresTransaction | null {
         return this.transactionStorage.getStore() ?? null;
+    }
+
+    private getRequiredTransaction(hookName: string): PostgresTransaction {
+        const tx = this.getCurrentTransaction();
+        if (!tx) {
+            throw new Error(
+                `Cannot register ${hookName} hook outside of a transaction scope`
+            );
+        }
+        return tx;
     }
 
     private resolveOptions(
@@ -131,11 +157,24 @@ class PostgresTransaction {
 
     private client!: pg.ClientBase;
     private savepoints: Savepoint[] = [];
+    private hooks = new TransactionHooks();
 
     constructor(
         private clientFactory: ClientFactory,
         private clientCleanUp?: ClientCleanUp
     ) {}
+
+    public addBeforeCommitHook(hook: TransactionHook): void {
+        this.hooks.addBeforeCommit(hook);
+    }
+
+    public addAfterCommitHook(hook: TransactionHook): void {
+        this.hooks.addAfterCommit(hook);
+    }
+
+    public addAfterRollbackHook(hook: TransactionHook): void {
+        this.hooks.addAfterRollback(hook);
+    }
 
     public async execute<T>(
         fn: (client: pg.ClientBase) => Promise<T>,
@@ -258,7 +297,18 @@ class PostgresTransaction {
     private async finalizeIfRoot(): Promise<void> {
         if (this.nestingDepth === 0) {
             if (!this.initialized) return;
-            await (this.isAborted() ? this.rollback() : this.commit());
+
+            if (this.isAborted()) {
+                await this.hooks.executeRollback(
+                    () => this.rollback(),
+                    this.abortError
+                );
+            } else if (!this.closed) {
+                await this.hooks.executeCommit(
+                    () => this.commit(),
+                    () => this.rollback()
+                );
+            }
         }
     }
 

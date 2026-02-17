@@ -4,6 +4,8 @@ export enum Propagation {
     NESTED = "nested",
 }
 
+export type TransactionHook = () => void | Promise<void>;
+
 export interface BaseUnitOfWorkOptions {
     propagation: Propagation;
 }
@@ -24,5 +26,9 @@ export interface UnitOfWork<
         fn: (client: Client) => Promise<T>,
         options?: Partial<Options>
     ): Promise<T>;
+
+    beforeCommit(hook: TransactionHook): void;
+    afterCommit(hook: TransactionHook): void;
+    afterRollback(hook: TransactionHook): void;
 }
 

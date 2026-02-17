@@ -300,6 +300,41 @@ await unitOfWork.scope(async () => {
 
 `scope()` defines a transaction boundary without exposing the database client. Client access is handled separately through infrastructure methods (e.g., `withClient()` in `@hexaijs/postgres`). This separation enables lazy transaction initialization — the actual `BEGIN` is deferred until the first client access.
 
+#### Transaction Lifecycle Hooks
+
+Register callbacks that execute at specific points in the transaction lifecycle. Hooks must be registered inside an active `scope()`.
+
+```typescript
+await unitOfWork.scope(async () => {
+    // Runs before COMMIT — if it throws, transaction rolls back instead
+    unitOfWork.beforeCommit(async () => {
+        await validateBusinessRules();
+    });
+
+    // Runs after successful COMMIT (best-effort)
+    unitOfWork.afterCommit(async () => {
+        await sendNotification();
+    });
+
+    // Runs after ROLLBACK (best-effort)
+    unitOfWork.afterRollback(async () => {
+        await cleanupResources();
+    });
+
+    await repository.save(order);
+});
+```
+
+**Hook execution semantics:**
+
+| Hook | When | On failure |
+|------|------|------------|
+| `beforeCommit` | Before COMMIT, sequentially | Transaction rolls back instead of committing |
+| `afterCommit` | After COMMIT, sequentially | Best-effort: all hooks run, errors collected into `AggregateError` |
+| `afterRollback` | After ROLLBACK, sequentially | Best-effort: all hooks run, errors collected into `AggregateError` |
+
+Hooks are scope-local — they are cleared after the transaction completes. Calling `beforeCommit()` / `afterCommit()` / `afterRollback()` outside a `scope()` throws an error.
+
 #### Transaction Propagation
 
 ```typescript
@@ -389,6 +424,8 @@ throw new DuplicateObjectError("Order with this ID already exists");
 | `Identifiable<T>` | Interface for entities with identity |
 | `Repository<T>` | Interface for aggregate persistence |
 | `UnitOfWork` | Interface for transaction management (`scope()` for boundaries, `wrap()` deprecated) |
+| `TransactionHook` | Type for hook callbacks: `() => void \| Promise<void>` |
+| `TransactionHooks` | Reusable hook registry with commit/rollback lifecycle execution |
 | `Propagation` | Enum for transaction propagation modes |
 | `EventStore` | Interface for event store implementations |
 

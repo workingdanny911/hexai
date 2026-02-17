@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Client, ClientBase } from "pg";
 
-import { Propagation } from "@hexaijs/core";
+import { Propagation, TransactionHooks } from "@hexaijs/core";
+import type { TransactionHook } from "@hexaijs/core";
 import { DatabaseManager, isDatabaseError, TableManager } from "@/helpers";
 import { PostgresConfig } from "@/config";
 import { runHexaiMigrations } from "@/run-hexai-migrations";
@@ -61,6 +62,21 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
         return this.client;
     }
 
+    beforeCommit(hook: TransactionHook): void {
+        const executor = this.getRequiredExecutor("beforeCommit");
+        executor.addBeforeCommitHook(hook);
+    }
+
+    afterCommit(hook: TransactionHook): void {
+        const executor = this.getRequiredExecutor("afterCommit");
+        executor.addAfterCommitHook(hook);
+    }
+
+    afterRollback(hook: TransactionHook): void {
+        const executor = this.getRequiredExecutor("afterRollback");
+        executor.addAfterRollbackHook(hook);
+    }
+
     async withClient<T>(fn: (client: ClientBase) => Promise<T>): Promise<T> {
         return fn(this.client);
     }
@@ -86,6 +102,16 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
 
     private getCurrentExecutor(): TestTransactionExecutor | null {
         return this.executorStorage.getStore() ?? null;
+    }
+
+    private getRequiredExecutor(hookName: string): TestTransactionExecutor {
+        const executor = this.getCurrentExecutor();
+        if (!executor) {
+            throw new Error(
+                `Cannot register ${hookName} hook outside of a transaction scope`
+            );
+        }
+        return executor;
     }
 
     private resolveOptions(
@@ -130,9 +156,22 @@ class TestTransactionExecutor {
     private savepointCounter = 0;
     private savepoints: TestSavepoint[] = [];
     private savepointName: string;
+    private hooks = new TransactionHooks();
 
     constructor(private readonly client: ClientBase) {
         this.savepointName = `test_sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    public addBeforeCommitHook(hook: TransactionHook): void {
+        this.hooks.addBeforeCommit(hook);
+    }
+
+    public addAfterCommitHook(hook: TransactionHook): void {
+        this.hooks.addAfterCommit(hook);
+    }
+
+    public addAfterRollbackHook(hook: TransactionHook): void {
+        this.hooks.addAfterRollback(hook);
     }
 
     public async execute<T>(
@@ -190,7 +229,17 @@ class TestTransactionExecutor {
 
     private async finalizeIfRoot(): Promise<void> {
         if (this.nestingDepth === 0) {
-            await (this.isAborted() ? this.rollback() : this.commit());
+            if (this.isAborted()) {
+                await this.hooks.executeRollback(
+                    () => this.rollback(),
+                    this.abortError
+                );
+            } else if (!this.closed) {
+                await this.hooks.executeCommit(
+                    () => this.commit(),
+                    () => this.rollback()
+                );
+            }
         }
     }
 

@@ -192,7 +192,6 @@ describe("Logging Module", () => {
             });
 
             const appError = new ApplicationError({
-                category: "TEST",
                 code: "TEST_ERROR",
                 message: "Something failed",
             });
@@ -212,6 +211,7 @@ describe("Logging Module", () => {
             expect(errorLog).toBeDefined();
             expect(errorLog?.error).toMatchObject({
                 name: "ApplicationError",
+                code: "TEST_ERROR",
                 message: "Something failed",
             });
         });

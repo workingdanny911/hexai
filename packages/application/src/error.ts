@@ -5,18 +5,21 @@ import { CommandHandler } from "./command-handler";
 import { QueryHandler } from "./query-handler";
 
 interface ApplicationErrorParams {
+    code?: string;
     message?: string;
     cause?: Error;
     data?: Record<string, any>;
 }
 
 export class ApplicationError extends Error {
+    public readonly code?: string;
     public readonly data: Record<string, any>;
 
     constructor(params: ApplicationErrorParams) {
         super(params.message, {
             cause: params.cause,
         });
+        this.code = params.code;
         this.data = params.data || {};
     }
 }

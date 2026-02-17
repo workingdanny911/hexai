@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.8.0] - 2026-02-15
+
+### Added
+
+- Transaction lifecycle hooks in `DefaultPostgresUnitOfWork` and `PostgresUnitOfWorkForTesting`
+  - `beforeCommit(hook)` — runs before COMMIT; failure triggers ROLLBACK instead
+  - `afterCommit(hook)` — runs after COMMIT (best-effort)
+  - `afterRollback(hook)` — runs after ROLLBACK (best-effort)
+  - Hooks are scope-local: registered within `scope()`, cleared after transaction completes
+  - NESTED scopes maintain independent hook registries
+
+### Changed
+
+- Peer dependency: `@hexaijs/core` `^0.7.0` → `^0.8.0`
+
+## [0.7.0] - 2026-02-15
+
+### Changed
+
+- Version alignment with `@hexaijs/core` 0.7.0
+- No functional changes
+
 ## [0.6.0] - 2026-02-12
 
 ### Added

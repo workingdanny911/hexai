@@ -597,4 +597,336 @@ describe("PostgresUnitOfWork", () => {
             });
         });
     });
+
+    describe("transaction lifecycle hooks", () => {
+        describe("beforeCommit", () => {
+            test("executes before COMMIT and can access DB", async () => {
+                await uow.scope(async () => {
+                    uow.beforeCommit(async () => {
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 99);
+                        });
+                    });
+
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                await expectRecordExists(1);
+                await expectRecordExists(99);
+            });
+
+            test("executes in registration order", async () => {
+                const order: number[] = [];
+
+                await uow.scope(async () => {
+                    uow.beforeCommit(() => { order.push(1); });
+                    uow.beforeCommit(() => { order.push(2); });
+                    uow.beforeCommit(() => { order.push(3); });
+
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                expect(order).toEqual([1, 2, 3]);
+            });
+
+            test("triggers rollback when hook throws", async () => {
+                try {
+                    await uow.scope(async () => {
+                        uow.beforeCommit(() => {
+                            throw new Error("hook failure");
+                        });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                    });
+                } catch (e) {
+                    expect((e as Error).message).toBe("hook failure");
+                }
+
+                await expectRecordNotExists(1);
+            });
+        });
+
+        describe("afterCommit", () => {
+            test("executes after successful commit", async () => {
+                let called = false;
+
+                await uow.scope(async () => {
+                    uow.afterCommit(() => { called = true; });
+
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                expect(called).toBe(true);
+                await expectRecordExists(1);
+            });
+
+            test("does not execute when scope fails", async () => {
+                let called = false;
+
+                try {
+                    await uow.scope(async () => {
+                        uow.afterCommit(() => { called = true; });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                        throw new Error("scope failure");
+                    });
+                } catch {
+                    // expected
+                }
+
+                expect(called).toBe(false);
+            });
+
+            test("does not execute when beforeCommit fails", async () => {
+                let afterCommitCalled = false;
+
+                try {
+                    await uow.scope(async () => {
+                        uow.beforeCommit(() => {
+                            throw new Error("beforeCommit failure");
+                        });
+                        uow.afterCommit(() => { afterCommitCalled = true; });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                    });
+                } catch {
+                    // expected
+                }
+
+                expect(afterCommitCalled).toBe(false);
+            });
+        });
+
+        describe("afterRollback", () => {
+            test("executes after rollback on scope failure", async () => {
+                let called = false;
+
+                try {
+                    await uow.scope(async () => {
+                        uow.afterRollback(() => { called = true; });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                        throw new Error("scope failure");
+                    });
+                } catch {
+                    // expected
+                }
+
+                expect(called).toBe(true);
+            });
+
+            test("executes after rollback caused by beforeCommit failure", async () => {
+                let afterRollbackCalled = false;
+
+                try {
+                    await uow.scope(async () => {
+                        uow.beforeCommit(() => {
+                            throw new Error("hook failure");
+                        });
+                        uow.afterRollback(() => { afterRollbackCalled = true; });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                    });
+                } catch {
+                    // expected
+                }
+
+                expect(afterRollbackCalled).toBe(true);
+            });
+
+            test("does not execute on successful commit", async () => {
+                let called = false;
+
+                await uow.scope(async () => {
+                    uow.afterRollback(() => { called = true; });
+
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                expect(called).toBe(false);
+            });
+        });
+
+        describe("hook registration outside scope", () => {
+            test("throws when registering beforeCommit outside scope", () => {
+                expect(() => uow.beforeCommit(() => {})).toThrow(
+                    /outside of a transaction scope/
+                );
+            });
+
+            test("throws when registering afterCommit outside scope", () => {
+                expect(() => uow.afterCommit(() => {})).toThrow(
+                    /outside of a transaction scope/
+                );
+            });
+
+            test("throws when registering afterRollback outside scope", () => {
+                expect(() => uow.afterRollback(() => {})).toThrow(
+                    /outside of a transaction scope/
+                );
+            });
+        });
+
+        describe("lazy init edge case", () => {
+            test("hooks do not execute when no DB operation occurs", async () => {
+                let beforeCalled = false;
+                let afterCalled = false;
+
+                await uow.scope(async () => {
+                    uow.beforeCommit(() => { beforeCalled = true; });
+                    uow.afterCommit(() => { afterCalled = true; });
+                });
+
+                expect(beforeCalled).toBe(false);
+                expect(afterCalled).toBe(false);
+            });
+        });
+
+        describe("nesting", () => {
+            test("hooks registered in NESTED scope execute at root commit", async () => {
+                let hookCalled = false;
+
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+
+                    await uow.scope(
+                        async () => {
+                            uow.afterCommit(() => { hookCalled = true; });
+
+                            await uow.withClient(async (client) => {
+                                await insertRecord(client, 2);
+                            });
+                        },
+                        { propagation: Propagation.NESTED }
+                    );
+                });
+
+                expect(hookCalled).toBe(true);
+                await expectRecordExists(1);
+                await expectRecordExists(2);
+            });
+        });
+
+        describe("best-effort execution", () => {
+            test("afterCommit runs all hooks even when one throws", async () => {
+                let secondHookCalled = false;
+
+                await expect(
+                    uow.scope(async () => {
+                        uow.afterCommit(() => {
+                            throw new Error("first hook fails");
+                        });
+                        uow.afterCommit(() => { secondHookCalled = true; });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                    })
+                ).rejects.toBeInstanceOf(AggregateError);
+
+                expect(secondHookCalled).toBe(true);
+                await expectRecordExists(1);
+            });
+
+            test("afterRollback runs all hooks even when one throws", async () => {
+                let secondHookCalled = false;
+
+                await expect(
+                    uow.scope(async () => {
+                        uow.afterRollback(() => {
+                            throw new Error("first hook fails");
+                        });
+                        uow.afterRollback(() => { secondHookCalled = true; });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                        throw new Error("scope failure");
+                    })
+                ).rejects.toBeInstanceOf(AggregateError);
+
+                expect(secondHookCalled).toBe(true);
+                await expectRecordNotExists(1);
+            });
+        });
+
+        describe("error cause chaining", () => {
+            test("scope failure is preserved as cause when afterRollback hook fails", async () => {
+                const scopeError = new Error("scope failure");
+
+                try {
+                    await uow.scope(async () => {
+                        uow.afterRollback(() => {
+                            throw new Error("hook failure");
+                        });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                        throw scopeError;
+                    });
+                } catch (e) {
+                    expect(e).toBeInstanceOf(AggregateError);
+                    expect((e as AggregateError).cause).toBe(scopeError);
+                }
+            });
+
+            test("beforeCommit failure is preserved as cause when afterRollback hook fails", async () => {
+                const beforeCommitError = new Error("beforeCommit failure");
+
+                try {
+                    await uow.scope(async () => {
+                        uow.beforeCommit(() => { throw beforeCommitError; });
+                        uow.afterRollback(() => {
+                            throw new Error("hook failure");
+                        });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                    });
+                } catch (e) {
+                    expect(e).toBeInstanceOf(AggregateError);
+                    expect((e as AggregateError).cause).toBe(beforeCommitError);
+                }
+            });
+
+            test("afterCommit failure has no cause on success path", async () => {
+                try {
+                    await uow.scope(async () => {
+                        uow.afterCommit(() => {
+                            throw new Error("hook failure");
+                        });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                    });
+                } catch (e) {
+                    expect(e).toBeInstanceOf(AggregateError);
+                    expect((e as AggregateError).cause).toBeUndefined();
+                }
+            });
+        });
+    });
 });
