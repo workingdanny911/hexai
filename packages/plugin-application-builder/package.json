@@ -57,7 +57,7 @@
         "glob": "^10.0.0"
     },
     "peerDependencies": {
-        "@hexaijs/core": "^0.8.0",
+        "@hexaijs/core": "^0.9.0",
         "@hexaijs/application": "^0.5.0",
         "@hexaijs/cli": "^0.2.0",
         "typescript": "^5.0.0"

@@ -186,14 +186,12 @@ export function createTestContext(db: Database): OrderApplicationContext & {
 
 ```typescript
 // commands/create-order/handler.test.ts
-import { setExpect, expectMessageToMatch } from "@hexaijs/core/test";
+import { expectMessageToMatch } from "@hexaijs/core/test";
 import { getSqliteConnection } from "@hexaijs/sqlite/test";
 import { CreateOrderHandler } from "./handler";
 import { CreateOrderCommand } from "./command";
 import { OrderPlaced } from "./events";
 import { createTestContext } from "../../test/fixtures";
-
-setExpect(expect);
 
 describe("CreateOrderHandler", () => {
     it("creates an order and publishes OrderPlaced", async () => {

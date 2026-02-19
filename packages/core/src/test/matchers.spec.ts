@@ -6,9 +6,6 @@ import {
     expectMessagesToBeFullyEqual,
     expectMessagesToContain,
 } from "./matchers";
-import { setExpect } from "@/test/expect";
-
-setExpect(expect);
 
 class OrderPlaced extends Message<{ orderId: string; amount: number }> {
     static getType() {

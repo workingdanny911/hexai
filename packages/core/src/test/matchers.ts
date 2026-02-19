@@ -2,7 +2,7 @@ import _ from "lodash";
 
 import { Message, MessageClass } from "@/message";
 import { partialMatch } from "./utils";
-import { expect } from "./expect";
+import { expect } from "vitest";
 
 export function expectMessagesToBeFullyEqual(
     messages: Message[],

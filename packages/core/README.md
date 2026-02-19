@@ -244,7 +244,14 @@ order.confirm();
 // Events are collected, not immediately published
 const events = order.getEventsOccurred();
 // [OrderPlaced, OrderConfirmed]
+
+// flushEvents() returns events AND clears the internal list
+const flushed = order.flushEvents();
+// [OrderPlaced, OrderConfirmed]
+order.getEventsOccurred(); // [] — now empty
 ```
+
+`flushEvents()` is useful in repository implementations where you need to publish events after persisting the aggregate, and want to ensure events are not accidentally re-published.
 
 ### Repository
 
@@ -420,6 +427,7 @@ throw new DuplicateObjectError("Order with this ID already exists");
 | `Message.withCorrelation(trace)` | Sets correlation, returns new instance |
 | `DomainEvent<P>` | Message subclass for domain events |
 | `AggregateRoot<T>` | Base class for aggregates with event collection |
+| `AggregateRoot.flushEvents()` | Returns collected events and clears the internal list |
 | `Id<T>` | Value object for typed identities |
 | `Identifiable<T>` | Interface for entities with identity |
 | `Repository<T>` | Interface for aggregate persistence |

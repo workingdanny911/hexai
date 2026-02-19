@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0] - 2026-02-19
+
+### Breaking Changes
+
+- **`setExpect()` removed** — `@hexaijs/core/test` testing helpers now import vitest directly
+  - Migration: Remove `setExpect(expect)` calls from your test setup
+  - `vitest` is added as an optional peerDependency (only needed in test environments)
+
+### Added
+
+- **`AggregateRoot.flushEvents()`** — returns collected events and clears the internal list
+  - Unlike `getEventsOccurred()`, this resets the internal state
+  - Useful for repository implementations that publish events after save
+
 ## [0.8.0] - 2026-02-15
 
 ### Breaking Changes

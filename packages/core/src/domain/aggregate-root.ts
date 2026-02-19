@@ -19,4 +19,10 @@ export class AggregateRoot<T extends Id<string | number>>
     public getEventsOccurred(): DomainEvent[] {
         return [...this.events];
     }
+
+    public flushEvents(): DomainEvent[] {
+        const flushed = [...this.events];
+        this.events = [];
+        return flushed;
+    }
 }
