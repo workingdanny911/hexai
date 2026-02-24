@@ -1,20 +1,16 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { Database, open } from "sqlite";
-import sqlite3 from "sqlite3";
+import Database from "better-sqlite3";
 
 import { SqliteUnitOfWork } from "./sqlite-unit-of-work";
 
 describe("unit of work", () => {
-    let db: Database;
+    let db: InstanceType<typeof Database>;
     let uow: SqliteUnitOfWork;
 
-    beforeEach(async () => {
-        db = await open({
-            filename: ":memory:",
-            driver: sqlite3.Database,
-        });
+    beforeEach(() => {
+        db = new Database(":memory:");
 
-        await db.run(`
+        db.exec(`
             CREATE TABLE test (
                 value TEXT
             )
@@ -22,8 +18,8 @@ describe("unit of work", () => {
 
         uow = new SqliteUnitOfWork(db);
 
-        return async () => {
-            await db.close();
+        return () => {
+            db.close();
         };
     });
 
@@ -35,48 +31,48 @@ describe("unit of work", () => {
         uow = new SqliteUnitOfWork(db);
 
         const result = await uow.wrap(async () => {
-            await db.run("INSERT INTO test VALUES ('foo')");
+            db.prepare("INSERT INTO test VALUES ('foo')").run();
             return "result";
         });
 
         expect(result).toBe("result");
-        const rows = await db.all("SELECT * FROM test");
+        const rows = db.prepare("SELECT * FROM test").all();
         expect(rows).toEqual([{ value: "foo" }]);
     });
 
     test("rolling back", async () => {
         try {
             await uow.wrap(async () => {
-                await db.run("INSERT INTO test VALUES ('foo')");
+                db.prepare("INSERT INTO test VALUES ('foo')").run();
                 throw new Error("rollback");
             });
         } catch (e) {
             expect((e as Error).message).toBe("rollback");
         }
 
-        const rows = await db.all("SELECT * FROM test");
+        const rows = db.prepare("SELECT * FROM test").all();
         expect(rows).toEqual([]);
     });
 
     test("when nested", async () => {
         await uow.wrap(async () => {
-            await db.run("INSERT INTO test VALUES ('foo')");
+            db.prepare("INSERT INTO test VALUES ('foo')").run();
             await uow.wrap(async () => {
-                await db.run("INSERT INTO test VALUES ('bar')");
+                db.prepare("INSERT INTO test VALUES ('bar')").run();
             });
         });
 
-        const rows = await db.all("SELECT * FROM test");
+        const rows = db.prepare("SELECT * FROM test").all();
         expect(rows).toEqual([{ value: "foo" }, { value: "bar" }]);
     });
 
     test("when error in nested", async () => {
         try {
             await uow.wrap(async () => {
-                await db.run("INSERT INTO test VALUES ('foo')");
+                db.prepare("INSERT INTO test VALUES ('foo')").run();
 
                 await uow.wrap(async () => {
-                    await db.run("INSERT INTO test VALUES ('bar')");
+                    db.prepare("INSERT INTO test VALUES ('bar')").run();
                     throw new Error("rollback");
                 });
             });
@@ -84,7 +80,7 @@ describe("unit of work", () => {
             expect((e as Error).message).toBe("rollback");
         }
 
-        const rows = await db.all("SELECT * FROM test");
+        const rows = db.prepare("SELECT * FROM test").all();
         expect(rows).toEqual([]);
     });
 
@@ -92,13 +88,13 @@ describe("unit of work", () => {
         describe("beforeCommit", () => {
             test("executes before COMMIT", async () => {
                 await uow.wrap(async () => {
-                    await db.run("INSERT INTO test VALUES ('scope')");
-                    uow.beforeCommit(async () => {
-                        await db.run("INSERT INTO test VALUES ('hook')");
+                    db.prepare("INSERT INTO test VALUES ('scope')").run();
+                    uow.beforeCommit(() => {
+                        db.prepare("INSERT INTO test VALUES ('hook')").run();
                     });
                 });
 
-                const rows = await db.all("SELECT * FROM test");
+                const rows = db.prepare("SELECT * FROM test").all();
                 expect(rows).toEqual([
                     { value: "scope" },
                     { value: "hook" },
@@ -109,9 +105,9 @@ describe("unit of work", () => {
                 const order: number[] = [];
 
                 await uow.wrap(async () => {
-                    uow.beforeCommit(async () => { order.push(1); });
-                    uow.beforeCommit(async () => { order.push(2); });
-                    uow.beforeCommit(async () => { order.push(3); });
+                    uow.beforeCommit(() => { order.push(1); });
+                    uow.beforeCommit(() => { order.push(2); });
+                    uow.beforeCommit(() => { order.push(3); });
                 });
 
                 expect(order).toEqual([1, 2, 3]);
@@ -120,8 +116,8 @@ describe("unit of work", () => {
             test("triggers rollback when hook throws", async () => {
                 try {
                     await uow.wrap(async () => {
-                        await db.run("INSERT INTO test VALUES ('foo')");
-                        uow.beforeCommit(async () => {
+                        db.prepare("INSERT INTO test VALUES ('foo')").run();
+                        uow.beforeCommit(() => {
                             throw new Error("hook failure");
                         });
                     });
@@ -129,7 +125,7 @@ describe("unit of work", () => {
                     expect((e as Error).message).toBe("hook failure");
                 }
 
-                const rows = await db.all("SELECT * FROM test");
+                const rows = db.prepare("SELECT * FROM test").all();
                 expect(rows).toEqual([]);
             });
         });
@@ -139,7 +135,7 @@ describe("unit of work", () => {
                 let called = false;
 
                 await uow.wrap(async () => {
-                    uow.afterCommit(async () => { called = true; });
+                    uow.afterCommit(() => { called = true; });
                 });
 
                 expect(called).toBe(true);
@@ -150,7 +146,7 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.afterCommit(async () => { called = true; });
+                        uow.afterCommit(() => { called = true; });
                         throw new Error("scope failure");
                     });
                 } catch {
@@ -165,10 +161,10 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.beforeCommit(async () => {
+                        uow.beforeCommit(() => {
                             throw new Error("beforeCommit failure");
                         });
-                        uow.afterCommit(async () => { called = true; });
+                        uow.afterCommit(() => { called = true; });
                     });
                 } catch {
                     // expected
@@ -184,7 +180,7 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.afterRollback(async () => { called = true; });
+                        uow.afterRollback(() => { called = true; });
                         throw new Error("scope failure");
                     });
                 } catch {
@@ -199,10 +195,10 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.beforeCommit(async () => {
+                        uow.beforeCommit(() => {
                             throw new Error("beforeCommit failure");
                         });
-                        uow.afterRollback(async () => { called = true; });
+                        uow.afterRollback(() => { called = true; });
                     });
                 } catch {
                     // expected
@@ -215,7 +211,7 @@ describe("unit of work", () => {
                 let called = false;
 
                 await uow.wrap(async () => {
-                    uow.afterRollback(async () => { called = true; });
+                    uow.afterRollback(() => { called = true; });
                 });
 
                 expect(called).toBe(false);
@@ -247,16 +243,16 @@ describe("unit of work", () => {
                 let called = false;
 
                 await uow.wrap(async () => {
-                    await db.run("INSERT INTO test VALUES ('outer')");
+                    db.prepare("INSERT INTO test VALUES ('outer')").run();
 
                     await uow.wrap(async () => {
-                        await db.run("INSERT INTO test VALUES ('inner')");
-                        uow.afterCommit(async () => { called = true; });
+                        db.prepare("INSERT INTO test VALUES ('inner')").run();
+                        uow.afterCommit(() => { called = true; });
                     });
                 });
 
                 expect(called).toBe(true);
-                const rows = await db.all("SELECT * FROM test");
+                const rows = db.prepare("SELECT * FROM test").all();
                 expect(rows).toEqual([
                     { value: "outer" },
                     { value: "inner" },
@@ -270,10 +266,10 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.afterCommit(async () => {
+                        uow.afterCommit(() => {
                             throw new Error("first hook fails");
                         });
-                        uow.afterCommit(async () => { secondCalled = true; });
+                        uow.afterCommit(() => { secondCalled = true; });
                     });
                 } catch (e) {
                     expect(e).toBeInstanceOf(AggregateError);
@@ -287,10 +283,10 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.afterRollback(async () => {
+                        uow.afterRollback(() => {
                             throw new Error("first hook fails");
                         });
-                        uow.afterRollback(async () => { secondCalled = true; });
+                        uow.afterRollback(() => { secondCalled = true; });
                         throw new Error("scope failure");
                     });
                 } catch (e) {
@@ -307,7 +303,7 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.afterRollback(async () => {
+                        uow.afterRollback(() => {
                             throw new Error("hook failure");
                         });
                         throw scopeError;
@@ -323,8 +319,8 @@ describe("unit of work", () => {
 
                 try {
                     await uow.wrap(async () => {
-                        uow.beforeCommit(async () => { throw beforeCommitError; });
-                        uow.afterRollback(async () => {
+                        uow.beforeCommit(() => { throw beforeCommitError; });
+                        uow.afterRollback(() => {
                             throw new Error("hook failure");
                         });
                     });
@@ -337,7 +333,7 @@ describe("unit of work", () => {
             test("afterCommit failure has no cause on success path", async () => {
                 try {
                     await uow.wrap(async () => {
-                        uow.afterCommit(async () => {
+                        uow.afterCommit(() => {
                             throw new Error("hook failure");
                         });
                     });

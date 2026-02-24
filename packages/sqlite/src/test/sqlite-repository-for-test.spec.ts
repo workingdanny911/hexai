@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, test } from "vitest";
-import { Database, open } from "sqlite";
-import sqlite3 from "sqlite3";
+import Database from "better-sqlite3";
 
 import { AggregateRoot, DuplicateObjectError, Id } from "@hexaijs/core";
 import { SqliteRepositoryForTest } from "./sqlite-repository-for-test";
@@ -41,29 +40,26 @@ class Counter extends AggregateRoot<CounterId> {
 }
 
 describe("SqliteRepository", () => {
-    let db: Database;
+    let db: InstanceType<typeof Database>;
     let repository: SqliteRepositoryForTest<Counter, CounterMemento>;
 
-    beforeEach(async () => {
-        db = await open({
-            filename: ":memory:",
-            driver: sqlite3.Database,
-        });
+    beforeEach(() => {
+        db = new Database(":memory:");
         repository = new SqliteRepositoryForTest<Counter, CounterMemento>(db, {
             namespace: "counter",
             hydrate: (m) => Counter.fromMemento(m),
             dehydrate: (c) => c.toMemento(),
         });
 
-        return async () => {
-            await db.close();
+        return () => {
+            db.close();
         };
     });
 
-    async function isTableCreated(name: string): Promise<boolean> {
-        const rows = await db.all(
+    function isTableCreated(name: string): boolean {
+        const rows = db.prepare(
             `SELECT * FROM sqlite_master WHERE name = 'counter'`
-        );
+        ).all() as { type: string; name: string }[];
 
         return !!rows.find((row) => row.type === "table" && row.name === name);
     }
@@ -91,13 +87,13 @@ describe("SqliteRepository", () => {
     ])(
         "creates a new table if it does not exist - $description",
         async ({ operation }) => {
-            await expect(isTableCreated("counter")).resolves.toBe(false);
+            expect(isTableCreated("counter")).toBe(false);
 
             try {
                 await operation();
             } catch {}
 
-            await expect(isTableCreated("counter")).resolves.toBe(true);
+            expect(isTableCreated("counter")).toBe(true);
         }
     );
 
@@ -106,7 +102,7 @@ describe("SqliteRepository", () => {
 
         await repository.add(counter);
 
-        const [row] = await db.all(`SELECT * FROM counter`);
+        const [row] = db.prepare(`SELECT * FROM counter`).all() as { id: string; data: string }[];
         expect(row).toEqual({
             id: "counter-id",
             data: JSON.stringify(counter.toMemento()),
@@ -134,7 +130,7 @@ describe("SqliteRepository", () => {
         counter.increment();
         await repository.update(counter);
 
-        const [row] = await db.all(`SELECT * FROM counter`);
+        const [row] = db.prepare(`SELECT * FROM counter`).all() as { id: string; data: string }[];
         expect(row).toEqual({
             id: "counter-id",
             data: JSON.stringify(counter.toMemento()),

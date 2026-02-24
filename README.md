@@ -160,7 +160,7 @@ Use SQLite for fast, isolated tests.
 
 ```typescript
 // test/fixtures.ts
-import type { Database } from "sqlite";
+import type { Database } from "better-sqlite3";
 import { Message } from "@hexaijs/core";
 import { SqliteUnitOfWork } from "@hexaijs/sqlite";
 import { OrderApplicationContext } from "../application-context";
@@ -195,7 +195,7 @@ import { createTestContext } from "../../test/fixtures";
 
 describe("CreateOrderHandler", () => {
     it("creates an order and publishes OrderPlaced", async () => {
-        const db = await getSqliteConnection();
+        const db = getSqliteConnection();
         const ctx = createTestContext(db);
         const handler = new CreateOrderHandler();
 

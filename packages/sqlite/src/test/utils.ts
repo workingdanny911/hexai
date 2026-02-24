@@ -1,12 +1,8 @@
-import type { Database } from "sqlite";
+import Database from "better-sqlite3";
+import type { Database as DatabaseInstance } from "better-sqlite3";
 
-export async function getSqliteConnection(
+export function getSqliteConnection(
     filename = ":memory:"
-): Promise<Database> {
-    const sqlite = await import("sqlite");
-    const sqlite3 = await import("sqlite3");
-    return await sqlite.open({
-        filename,
-        driver: sqlite3.default.Database,
-    });
+): DatabaseInstance {
+    return new Database(filename);
 }

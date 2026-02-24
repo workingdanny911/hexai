@@ -28,7 +28,7 @@ npm install @hexaijs/sqlite
 **Peer dependencies:**
 
 ```bash
-npm install @hexaijs/core sqlite sqlite3
+npm install @hexaijs/core better-sqlite3
 ```
 
 ## Core Concepts
@@ -38,15 +38,11 @@ npm install @hexaijs/core sqlite sqlite3
 The `SqliteUnitOfWork` implements `UnitOfWork<Database>` from `@hexaijs/core`. It manages transaction lifecycle for a given SQLite database connection.
 
 ```typescript
-import { open } from "sqlite";
-import sqlite3 from "sqlite3";
+import Database from "better-sqlite3";
 import { SqliteUnitOfWork } from "@hexaijs/sqlite";
 
 // Create an in-memory database
-const db = await open({
-    filename: ":memory:",
-    driver: sqlite3.Database,
-});
+const db = new Database(":memory:");
 
 // Create unit of work
 const unitOfWork = new SqliteUnitOfWork(db);
@@ -61,8 +57,8 @@ Use `scope()` to define a transaction boundary:
 ```typescript
 const result = await unitOfWork.scope(async () => {
     const db = unitOfWork.getClient();
-    await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
-    await db.run("INSERT INTO order_items (order_id, product_id) VALUES (?, ?)", [orderId, productId]);
+    db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run(orderId, "pending");
+    db.prepare("INSERT INTO order_items (order_id, product_id) VALUES (?, ?)").run(orderId, productId);
     return { orderId };
 });
 // Transaction commits if successful
@@ -73,7 +69,7 @@ const result = await unitOfWork.scope(async () => {
 ```typescript
 /** @deprecated Use scope() instead. */
 const result = await unitOfWork.wrap(async (db) => {
-    await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
+    db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run(orderId, "pending");
     return { orderId };
 });
 ```
@@ -84,7 +80,7 @@ If an error is thrown, the transaction rolls back:
 try {
     await unitOfWork.scope(async () => {
         const db = unitOfWork.getClient();
-        await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
+        db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run(orderId, "pending");
         throw new Error("Something went wrong");
     });
 } catch (error) {
@@ -99,7 +95,7 @@ Within a transaction, access the database through `getClient()`:
 ```typescript
 // Inside a command handler
 const db = ctx.getUnitOfWork().getClient();
-await db.run("UPDATE orders SET status = ? WHERE id = ?", ["confirmed", orderId]);
+db.prepare("UPDATE orders SET status = ? WHERE id = ?").run("confirmed", orderId);
 ```
 
 Note: `getClient()` throws an error if called outside of a `scope()` or `wrap()` call.
@@ -110,20 +106,20 @@ Register callbacks that execute at specific points in the transaction lifecycle:
 
 ```typescript
 await unitOfWork.scope(async () => {
-    unitOfWork.beforeCommit(async () => {
+    unitOfWork.beforeCommit(() => {
         // Validate before committing
     });
 
-    unitOfWork.afterCommit(async () => {
+    unitOfWork.afterCommit(() => {
         // Notify after successful commit
     });
 
-    unitOfWork.afterRollback(async () => {
+    unitOfWork.afterRollback(() => {
         // Clean up on failure
     });
 
     const db = unitOfWork.getClient();
-    await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", [orderId, "pending"]);
+    db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run(orderId, "pending");
 });
 ```
 
@@ -144,11 +140,11 @@ Nested `scope()` calls participate in the same transaction:
 ```typescript
 await unitOfWork.scope(async () => {
     const db = unitOfWork.getClient();
-    await db.run("INSERT INTO orders (id) VALUES (?)", ["order-1"]);
+    db.prepare("INSERT INTO orders (id) VALUES (?)").run("order-1");
 
     await unitOfWork.scope(async () => {
         const db = unitOfWork.getClient();
-        await db.run("INSERT INTO order_items (order_id) VALUES (?)", ["order-1"]);
+        db.prepare("INSERT INTO order_items (order_id) VALUES (?)").run("order-1");
     });
     // Both inserts are in the same transaction
 });
@@ -161,11 +157,11 @@ If any nested call throws, the entire transaction rolls back:
 try {
     await unitOfWork.scope(async () => {
         const db = unitOfWork.getClient();
-        await db.run("INSERT INTO orders (id) VALUES (?)", ["order-1"]);
+        db.prepare("INSERT INTO orders (id) VALUES (?)").run("order-1");
 
         await unitOfWork.scope(async () => {
             const db = unitOfWork.getClient();
-            await db.run("INSERT INTO order_items (order_id) VALUES (?)", ["order-1"]);
+            db.prepare("INSERT INTO order_items (order_id) VALUES (?)").run("order-1");
             throw new Error("Nested failure");
         });
     });
@@ -181,7 +177,7 @@ try {
 Use the test utilities for fast, isolated integration tests:
 
 ```typescript
-import type { Database } from "sqlite";
+import type { Database } from "better-sqlite3";
 import { SqliteUnitOfWork } from "@hexaijs/sqlite";
 import { getSqliteConnection } from "@hexaijs/sqlite/test";
 
@@ -189,12 +185,12 @@ describe("OrderRepository", () => {
     let db: Database;
     let unitOfWork: SqliteUnitOfWork;
 
-    beforeEach(async () => {
+    beforeEach(() => {
         // Create fresh in-memory database
-        db = await getSqliteConnection();
+        db = getSqliteConnection();
 
         // Create schema
-        await db.run(`
+        db.exec(`
             CREATE TABLE orders (
                 id TEXT PRIMARY KEY,
                 status TEXT NOT NULL
@@ -204,17 +200,17 @@ describe("OrderRepository", () => {
         unitOfWork = new SqliteUnitOfWork(db);
     });
 
-    afterEach(async () => {
-        await db.close();
+    afterEach(() => {
+        db.close();
     });
 
     it("should persist orders", async () => {
         await unitOfWork.scope(async () => {
             const db = unitOfWork.getClient();
-            await db.run("INSERT INTO orders (id, status) VALUES (?, ?)", ["order-1", "pending"]);
+            db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run("order-1", "pending");
         });
 
-        const result = await db.get("SELECT * FROM orders WHERE id = ?", ["order-1"]);
+        const result = db.prepare("SELECT * FROM orders WHERE id = ?").get("order-1") as any;
         expect(result.status).toBe("pending");
     });
 });
@@ -251,7 +247,7 @@ interface OrderMemento {
 }
 
 // Create repository
-const db = await getSqliteConnection();
+const db = getSqliteConnection();
 const orderRepository = new SqliteRepositoryForTest<Order, OrderMemento>(db, {
     namespace: "orders",
     hydrate: (m) => new Order(new OrderId(m.id), m.status),
@@ -275,7 +271,7 @@ For scenarios requiring persistence across test runs or debugging:
 import { getSqliteConnection } from "@hexaijs/sqlite/test";
 
 // File-based database instead of in-memory
-const db = await getSqliteConnection("./test-database.sqlite");
+const db = getSqliteConnection("./test-database.sqlite");
 ```
 
 ## API Highlights

@@ -1,4 +1,4 @@
-import type { Database } from "sqlite";
+import type { Database } from "better-sqlite3";
 
 import {
     DuplicateObjectError,
@@ -34,12 +34,11 @@ export class SqliteRepositoryForTest<
     }
 
     async get(id: IdOf<E>): Promise<E> {
-        await this.ensureTableExists();
+        this.ensureTableExists();
 
-        const row = await this.db.get(
-            `SELECT * FROM ${this.namespace} WHERE id = ?`,
-            id.getValue()
-        );
+        const row = this.db.prepare(
+            `SELECT * FROM ${this.namespace} WHERE id = ?`
+        ).get(id.getValue()) as { data: string } | undefined;
         if (!row) {
             throw new ObjectNotFoundError(
                 `entity with id '${id.getValue()}' not found`
@@ -50,12 +49,13 @@ export class SqliteRepositoryForTest<
     }
 
     async add(entity: E): Promise<void> {
-        await this.ensureTableExists();
+        this.ensureTableExists();
 
         try {
-            await this.db.run(
+            this.db.prepare(
                 `INSERT INTO ${this.namespace} (id, data)
-                 VALUES (?, ?)`,
+                 VALUES (?, ?)`
+            ).run(
                 entity.getId().getValue(),
                 JSON.stringify(this.dehydrate(entity))
             );
@@ -73,12 +73,13 @@ export class SqliteRepositoryForTest<
     }
 
     async update(entity: E): Promise<void> {
-        await this.ensureTableExists();
+        this.ensureTableExists();
 
-        const result = await this.db.run(
+        const result = this.db.prepare(
             `UPDATE ${this.namespace}
                  SET data = ?
-                 WHERE id = ?`,
+                 WHERE id = ?`
+        ).run(
             JSON.stringify(this.dehydrate(entity)),
             entity.getId().getValue()
         );
@@ -91,17 +92,17 @@ export class SqliteRepositoryForTest<
     }
 
     async count(): Promise<number> {
-        await this.ensureTableExists();
+        this.ensureTableExists();
 
-        const result = await this.db.get(
+        const result = this.db.prepare(
             `SELECT COUNT(*) AS count FROM ${this.namespace}`
-        );
+        ).get() as { count: number };
 
         return result.count;
     }
 
-    protected async ensureTableExists(): Promise<void> {
-        await this.db.run(`
+    protected ensureTableExists(): void {
+        this.db.exec(`
             CREATE TABLE IF NOT EXISTS ${this.namespace} (
                 id TEXT NOT NULL PRIMARY KEY UNIQUE,
                 data TEXT NOT NULL

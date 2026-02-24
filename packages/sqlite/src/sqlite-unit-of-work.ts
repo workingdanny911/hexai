@@ -1,4 +1,4 @@
-import type { Database } from "sqlite";
+import type { Database } from "better-sqlite3";
 
 import { TransactionHooks, UnitOfWork } from "@hexaijs/core";
 import type { TransactionHook } from "@hexaijs/core";
@@ -53,7 +53,7 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
     async wrap<T>(fn: (client: Database) => Promise<T>): Promise<T> {
         const current = SqliteUnitOfWork.transactions.get(this.db)!;
         if (++current.level === 1) {
-            await this.db.run("BEGIN TRANSACTION");
+            this.db.exec("BEGIN TRANSACTION");
         }
 
         let abortError: unknown;
@@ -76,13 +76,13 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
 
                 if (wasAborted) {
                     await hooks.executeRollback(
-                        async () => { await this.db.run("ROLLBACK"); },
+                        async () => { this.db.exec("ROLLBACK"); },
                         abortError
                     );
                 } else {
                     await hooks.executeCommit(
-                        async () => { await this.db.run("COMMIT"); },
-                        async () => { await this.db.run("ROLLBACK"); }
+                        async () => { this.db.exec("COMMIT"); },
+                        async () => { this.db.exec("ROLLBACK"); }
                     );
                 }
             }
