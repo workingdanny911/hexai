@@ -61,13 +61,15 @@ export class PostgresConfig implements DatabaseConfig {
      */
     public static fromEnv(
         prefix: string,
-        options?: FromEnvOptions
+        options?: FromEnvOptions,
+        envSource?: Record<string, string>
     ): PostgresConfig {
+        const source = envSource ?? process.env;
         const mode = options?.mode ?? "url";
 
         if (mode === "url") {
             const envKey = `${prefix}_URL`;
-            const url = process.env[envKey];
+            const url = source[envKey];
 
             if (!url) {
                 throw new Error(`Environment variable ${envKey} is not set`);
@@ -77,7 +79,7 @@ export class PostgresConfig implements DatabaseConfig {
         }
 
         // fields mode
-        const database = process.env[`${prefix}_DATABASE`];
+        const database = source[`${prefix}_DATABASE`];
         if (!database) {
             throw new Error(
                 `Environment variable ${prefix}_DATABASE is not set`
@@ -86,12 +88,12 @@ export class PostgresConfig implements DatabaseConfig {
 
         return new PostgresConfig({
             database,
-            host: process.env[`${prefix}_HOST`],
-            port: process.env[`${prefix}_PORT`]
-                ? parseInt(process.env[`${prefix}_PORT`]!)
+            host: source[`${prefix}_HOST`],
+            port: source[`${prefix}_PORT`]
+                ? parseInt(source[`${prefix}_PORT`]!)
                 : undefined,
-            user: process.env[`${prefix}_USER`],
-            password: process.env[`${prefix}_PASSWORD`],
+            user: source[`${prefix}_USER`],
+            password: source[`${prefix}_PASSWORD`],
         });
     }
 

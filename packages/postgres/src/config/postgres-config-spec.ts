@@ -9,9 +9,9 @@ export class PostgresConfigSpec implements ConfigSpec<PostgresConfig> {
         private readonly mode: FromEnvOptions["mode"] = "url"
     ) {}
 
-    resolve(errors: string[]): PostgresConfig | undefined {
+    resolve(errors: string[], envSource?: Record<string, string>): PostgresConfig | undefined {
         try {
-            return PostgresConfig.fromEnv(this.prefix, { mode: this.mode });
+            return PostgresConfig.fromEnv(this.prefix, { mode: this.mode }, envSource);
         } catch (e) {
             errors.push((e as Error).message);
             return undefined;

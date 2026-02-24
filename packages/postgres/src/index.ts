@@ -10,5 +10,5 @@ export {
 export * from "./postgres-event-store";
 export * from "./types";
 
-// Config exports
-export * from "./config";
+// Re-exported from ezcfg/postgres
+export { PostgresConfig, PostgresConfigSpec, postgresConfig, type PoolOptions, type FromEnvOptions } from "ezcfg/postgres";
