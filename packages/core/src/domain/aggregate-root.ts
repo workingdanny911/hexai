@@ -1,5 +1,5 @@
-import { DomainEvent } from "./domain-event";
-import { Id, Identifiable } from "./identifiable";
+import { DomainEvent } from "./domain-event.js";
+import { Id, Identifiable } from "./identifiable.js";
 
 export class AggregateRoot<T extends Id<string | number>>
     implements Identifiable<T>

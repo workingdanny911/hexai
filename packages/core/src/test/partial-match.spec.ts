@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { partialMatch } from "./partial-match";
+import { partialMatch } from "./partial-match.js";
 
 describe("partialMatch", () => {
     test("empty", () => {

@@ -1,2 +1,2 @@
-export * from "./postgres-config";
-export * from "./postgres-config-spec";
+export * from "./postgres-config.js";
+export * from "./postgres-config-spec.js";

@@ -2,11 +2,7 @@
     "extends": "@hexaijs/tooling/tsconfig/base.json",
     "compilerOptions": {
         "rootDir": "./src",
-        "baseUrl": ".",
-        "outDir": "./dist",
-        "paths": {
-            "@/*": ["src/*"]
-        }
+        "outDir": "./dist"
     },
     "include": ["src", "e2e", "test"],
     "exclude": ["node_modules", "dist"]

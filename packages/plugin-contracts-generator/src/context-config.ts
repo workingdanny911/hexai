@@ -1,9 +1,9 @@
 import path from "path";
 import ts from "typescript";
 
-import type { FileSystem } from "./file-system";
-import { nodeFileSystem } from "./file-system";
-import type { ResponseNamingConvention } from "./domain/types";
+import type { FileSystem } from "./file-system.js";
+import { nodeFileSystem } from "./file-system.js";
+import type { ResponseNamingConvention } from "./domain/types.js";
 
 const TYPESCRIPT_EXTENSIONS = [".ts", ".tsx", ".d.ts"];
 const INDEX_FILE = "index.ts";

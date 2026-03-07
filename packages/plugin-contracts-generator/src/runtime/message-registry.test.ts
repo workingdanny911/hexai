@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "vitest";
 
-import { MessageRegistry, MessageClass, MessageHeaders } from "./message-registry";
+import { MessageRegistry, MessageClass, MessageHeaders } from "./message-registry.js";
 
 describe("MessageRegistry", () => {
     let registry: MessageRegistry;

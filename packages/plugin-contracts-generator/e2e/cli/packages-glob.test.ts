@@ -4,7 +4,7 @@ import { mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { run } from "@/cli";
+import { run } from "../../src/cli.js";
 
 describe("Packages Glob Pattern E2E", () => {
     const fixturesDir = join(__dirname, "..", "fixtures", "packages-glob");

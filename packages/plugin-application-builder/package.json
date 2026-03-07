@@ -1,72 +1,73 @@
 {
-    "name": "@hexaijs/plugin-application-builder",
-    "publishConfig": {
-        "access": "public"
+  "name": "@hexaijs/plugin-application-builder",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.2.4",
+  "type": "module",
+  "description": "Build plugin for generating ApplicationBuilder code from decorated handlers",
+  "license": "MIT",
+  "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+  "contributors": [
+    "Seungcheol Baek <victoryiron.baek@gmail.com>",
+    "Donghyun Lee <edonghyun@naver.com>"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/workingdanny911/hexai.git",
+    "directory": "packages/plugin-application-builder"
+  },
+  "homepage": "https://github.com/workingdanny911/hexai#readme",
+  "bugs": {
+    "url": "https://github.com/workingdanny911/hexai/issues"
+  },
+  "keywords": [
+    "hexai",
+    "hexagonal",
+    "clean-architecture",
+    "ddd",
+    "cqrs",
+    "application-builder",
+    "code-generation",
+    "typescript"
+  ],
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "bin": {
+    "generate-app-builder": "./dist/cli.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsgo -p tsconfig.build.json"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
-    "version": "0.2.3",
-    "type": "module",
-    "description": "Build plugin for generating ApplicationBuilder code from decorated handlers",
-    "license": "MIT",
-    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
-    "contributors": [
-        "Seungcheol Baek <victoryiron.baek@gmail.com>",
-        "Donghyun Lee <edonghyun@naver.com>"
-    ],
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/workingdanny911/hexai.git",
-        "directory": "packages/plugin-application-builder"
+    "./decorators": {
+      "types": "./dist/decorators/index.d.ts",
+      "import": "./dist/decorators/index.js"
     },
-    "homepage": "https://github.com/workingdanny911/hexai#readme",
-    "bugs": {
-        "url": "https://github.com/workingdanny911/hexai/issues"
-    },
-    "keywords": [
-        "hexai",
-        "hexagonal",
-        "clean-architecture",
-        "ddd",
-        "cqrs",
-        "application-builder",
-        "code-generation",
-        "typescript"
-    ],
-    "files": [
-        "dist",
-        "LICENSE"
-    ],
-    "bin": {
-        "generate-app-builder": "./dist/cli.js"
-    },
-    "scripts": {
-        "test": "vitest run",
-        "build": "tsup"
-    },
-    "exports": {
-        ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
-        },
-        "./decorators": {
-            "types": "./dist/decorators/index.d.ts",
-            "import": "./dist/decorators/index.js"
-        },
-        "./package.json": "./package.json"
-    },
-    "dependencies": {
-        "glob": "^10.0.0"
-    },
-    "peerDependencies": {
-        "@hexaijs/core": "^0.9.0",
-        "@hexaijs/application": "^0.5.0",
-        "@hexaijs/cli": "^0.2.0",
-        "typescript": "^5.0.0"
-    },
-    "devDependencies": {
-        "@hexaijs/application": "workspace:^",
-        "@hexaijs/cli": "workspace:^",
-        "@hexaijs/core": "workspace:^",
-        "@hexaijs/tooling": "workspace:*",
-        "@types/node": "^20.0.0"
-    }
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "glob": "^10.0.0"
+  },
+  "peerDependencies": {
+    "@hexaijs/core": "^0.9.0",
+    "@hexaijs/application": "^0.5.0",
+    "@hexaijs/cli": "^0.2.0",
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@hexaijs/application": "workspace:^",
+    "@hexaijs/cli": "workspace:^",
+    "@hexaijs/core": "workspace:^",
+    "@hexaijs/tooling": "workspace:*",
+    "@typescript/native-preview": "^7.0.0-dev",
+    "@types/node": "^20.0.0"
+  }
 }

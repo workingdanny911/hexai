@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, Mock, test, vi } from "vitest";
 
 import { Message, MessageTrace } from "@hexaijs/core";
 import { DummyMessage } from "@hexaijs/core/test";
-import { ApplicationEventPublisher } from "./application-event-publisher";
-import { ExecutionScope } from "./execution-scope";
+import { ApplicationEventPublisher } from "./application-event-publisher.js";
+import { ExecutionScope } from "./execution-scope.js";
 
 class SecurityAwareEvent extends Message<null> {
     private securityContext?: { role: string };

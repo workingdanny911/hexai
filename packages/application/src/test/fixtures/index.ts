@@ -1,7 +1,7 @@
-export * from "./interceptor-test-helpers";
+export * from "./interceptor-test-helpers.js";
 
-import { Command } from "@/command";
-import { Query } from "@/query";
+import { Command } from "../../command.js";
+import { Query } from "../../query.js";
 import { Message } from "@hexaijs/core";
 
 export class DummyCommand extends Command<null, void> {

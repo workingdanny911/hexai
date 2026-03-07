@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "vitest";
-import { Message } from "./message";
+import { Message } from "./message.js";
 
 describe("Message", () => {
     it("deserializes date string to Date object - for timestamp", () => {

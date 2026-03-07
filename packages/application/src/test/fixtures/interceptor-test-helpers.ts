@@ -1,7 +1,7 @@
 import { vi } from "vitest";
-import { ApplicationBuilder } from "@/application";
-import { ApplicationContext } from "@/application-context";
-import { CommandInterceptor, EventInterceptor } from "@/interceptor";
+import { ApplicationBuilder } from "../../application.js";
+import { ApplicationContext } from "../../application-context.js";
+import { CommandInterceptor, EventInterceptor } from "../../interceptor.js";
 
 /**
  * Shared test helpers for interceptor tests

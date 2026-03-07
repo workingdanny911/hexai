@@ -7,7 +7,7 @@ import {
     StoredEvent,
 } from "@hexaijs/core";
 
-import type { PostgresUnitOfWork } from "./postgres-unit-of-work";
+import type { PostgresUnitOfWork } from "./postgres-unit-of-work.js";
 
 const DEFAULT_TABLE_NAME = "hexai__events";
 const COLUMNS_PER_EVENT = 3;

@@ -1,26 +1,26 @@
 import { Message, MessageClass } from "@hexaijs/core";
 
-import { ApplicationContext } from "./application-context";
-import { CommandHandler } from "./command-handler";
-import { Command } from "./command";
-import { ExecutionScope } from "./execution-scope";
-import { QueryHandler } from "./query-handler";
-import { Query } from "./query";
+import { ApplicationContext } from "./application-context.js";
+import { CommandHandler } from "./command-handler.js";
+import { Command } from "./command.js";
+import { ExecutionScope } from "./execution-scope.js";
+import { QueryHandler } from "./query-handler.js";
+import { Query } from "./query.js";
 import {
     ApplicationError,
     ApplicationErrorFactory,
     ApplicationErrorTransformer,
-} from "./error";
-import { EventHandler } from "./event-handler";
+} from "./error.js";
+import { EventHandler } from "./event-handler.js";
 import {
     CommandInterceptor,
     QueryInterceptor,
     EventInterceptor,
     Interceptor,
-} from "./interceptor";
-import { InterceptedApplication } from "./intercepted-application";
-import { SuccessResult, ErrorResult } from "./result";
-import type { Result } from "./result";
+} from "./interceptor.js";
+import { InterceptedApplication } from "./intercepted-application.js";
+import { SuccessResult, ErrorResult } from "./result.js";
+import type { Result } from "./result.js";
 
 export { SuccessResult, ErrorResult };
 export type { Result };

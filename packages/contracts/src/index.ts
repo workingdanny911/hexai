@@ -5,6 +5,6 @@ export {
   type PublicEventOptions,
   type PublicCommandOptions,
   type PublicQueryOptions,
-} from "./decorators";
-export { Command } from "./command";
-export { Query } from "./query";
+} from "./decorators/index.js";
+export { Command } from "./command.js";
+export { Query } from "./query.js";

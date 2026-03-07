@@ -7,7 +7,7 @@ import {
     PluginExportError,
     PluginNotFoundError,
     PluginValidationError,
-} from "./plugin-loader";
+} from "./plugin-loader.js";
 
 describe("plugin-loader", () => {
     const testDir = path.join(__dirname, "__test-plugin-fixtures__");

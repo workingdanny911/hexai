@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { HexaiConfig, PluginEntry } from "./types";
+import { HexaiConfig, PluginEntry } from "./types.js";
 
 /**
  * Supported config file names in order of priority.

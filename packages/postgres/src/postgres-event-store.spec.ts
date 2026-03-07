@@ -1,13 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { Message } from "@hexaijs/core";
 
-import { PostgresEventStore } from "./postgres-event-store";
+import { PostgresEventStore } from "./postgres-event-store.js";
 import {
     useDatabase,
     useClient,
     useUnitOfWork,
-} from "@/test-fixtures";
-import { runHexaiMigrations } from "@/run-hexai-migrations";
+} from "./test-fixtures/index.js";
+import { runHexaiMigrations } from "./run-hexai-migrations.js";
 
 const DATABASE = "test_hexai__event_store";
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ApplicationBuilder } from "@hexaijs/application";
-import { makeContext, useContext } from "./test";
+import { makeContext, useContext } from "./test.js";
 
 describe.sequential("Build Plugin - Application Builder Generation", () => {
     const sampleContext = useContext("sample-context");

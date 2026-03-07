@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { Command } from "./command";
+import { Command } from "./command.js";
 
 class TestCmd extends Command<{ value: string }> {
     constructor(value: string = "test") {

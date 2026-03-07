@@ -1,5 +1,5 @@
-export * as matchers from "./matchers";
-export * from "./matchers";
-export * from "./dummy-message";
-export * from "./utils";
-export * from "./in-memory-event-store";
+export * as matchers from "./matchers.js";
+export * from "./matchers.js";
+export * from "./dummy-message.js";
+export * from "./utils.js";
+export * from "./in-memory-event-store.js";

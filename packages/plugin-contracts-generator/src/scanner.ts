@@ -1,9 +1,9 @@
 import { glob } from "glob";
 
-import { FileReadError } from "./errors";
-import { FileSystem, nodeFileSystem } from "./file-system";
-import type { DecoratorNames, MessageType } from "./domain";
-import { mergeDecoratorNames } from "./domain";
+import { FileReadError } from "./errors.js";
+import { FileSystem, nodeFileSystem } from "./file-system.js";
+import type { DecoratorNames, MessageType } from "./domain/index.js";
+import { mergeDecoratorNames } from "./domain/index.js";
 
 const DEFAULT_EXCLUDE_PATTERNS = [
     "**/node_modules/**",

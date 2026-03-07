@@ -1,12 +1,12 @@
 import { join, relative } from "path";
-import { Scanner } from "./scanner";
-import { Parser } from "./parser";
-import { FileGraphResolver, type FileGraph } from "./file-graph-resolver";
-import { FileCopier } from "./file-copier";
-import { ContextConfig } from "./context-config";
-import type { DomainEvent, Command, Query, TypeDefinition, ResponseNamingConvention, MessageType } from "./domain/types";
-import { type FileSystem, nodeFileSystem } from "./file-system";
-import { type Logger, noopLogger } from "./logger";
+import { Scanner } from "./scanner.js";
+import { Parser } from "./parser.js";
+import { FileGraphResolver, type FileGraph } from "./file-graph-resolver.js";
+import { FileCopier } from "./file-copier.js";
+import { ContextConfig } from "./context-config.js";
+import type { DomainEvent, Command, Query, TypeDefinition, ResponseNamingConvention, MessageType } from "./domain/types.js";
+import { type FileSystem, nodeFileSystem } from "./file-system.js";
+import { type Logger, noopLogger } from "./logger.js";
 
 const DEFAULT_EXCLUDE_DEPENDENCIES = [
     "**/*.test.ts",

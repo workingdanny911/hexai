@@ -4,9 +4,9 @@ import {
     Application,
     EventHandlingResult,
     Result,
-} from "./application";
-import { Command } from "./command";
-import { Query } from "./query";
+} from "./application.js";
+import { Command } from "./command.js";
+import { Query } from "./query.js";
 import {
     CommandInterceptionContext,
     QueryInterceptionContext,
@@ -16,7 +16,7 @@ import {
     QueryInterceptor,
     EventInterceptor,
     Interceptor,
-} from "./interceptor";
+} from "./interceptor.js";
 
 type Executor<T = unknown> = () => Promise<Result<T>>;
 

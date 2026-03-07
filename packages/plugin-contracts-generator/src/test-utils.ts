@@ -10,8 +10,8 @@ import type {
     Field,
     ClassDefinition,
     ClassImport,
-} from "./domain";
-import type { FileSystem, FileStats } from "./file-system";
+} from "./domain/index.js";
+import type { FileSystem, FileStats } from "./file-system.js";
 
 export function createSourceFile(
     path: string = "test.ts",

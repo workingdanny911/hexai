@@ -1,2 +1,2 @@
-export * from "./config";
-export * from "./hooks";
+export * from "./config.js";
+export * from "./hooks.js";

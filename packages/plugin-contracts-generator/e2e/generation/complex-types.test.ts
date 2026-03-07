@@ -5,7 +5,7 @@ import {
     expectGeneratedFiles,
     expectTypeScriptCompiles,
 } from "@e2e/helpers";
-import type { ProcessContextResult } from "@/index";
+import type { ProcessContextResult } from "../../src/index.js";
 
 describe("E2E: Complex Types", () => {
     const ctx = new E2ETestContext("complex-types");

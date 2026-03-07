@@ -1,4 +1,4 @@
-import type { DomainEvent, Command, Query } from "./domain/types";
+import type { DomainEvent, Command, Query } from "./domain/types.js";
 
 type Message = DomainEvent | Command | Query;
 

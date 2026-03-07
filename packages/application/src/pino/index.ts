@@ -3,4 +3,4 @@ export {
     createTestLogger,
     type TestLogger,
     type TestLogEntry,
-} from "../logging/create-logger";
+} from "../logging/create-logger.js";

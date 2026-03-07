@@ -5,10 +5,10 @@ import {
     EventHandlingResult,
     Result,
     SuccessResult,
-} from "./application";
-import { ApplicationErrorFactory } from "./error";
-import { Command } from "./command";
-import { Query } from "./query";
+} from "./application.js";
+import { ApplicationErrorFactory } from "./error.js";
+import { Command } from "./command.js";
+import { Query } from "./query.js";
 
 export class SimpleCompositeApplication implements Application {
     private unitOfWork?: UnitOfWork;

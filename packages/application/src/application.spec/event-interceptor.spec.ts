@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { EventInterceptor, EventInterceptionContext } from "@/interceptor";
+import { EventInterceptor, EventInterceptionContext } from "../interceptor.js";
 import {
     DummyEvent,
     createApplicationBuilder,
     createMockEventHandler,
     createEventExecutionTrackingInterceptor,
-} from "@/test";
+} from "../test/index.js";
 
 describe("Application, event interceptor", () => {
     const eventHandlerMock = createMockEventHandler();

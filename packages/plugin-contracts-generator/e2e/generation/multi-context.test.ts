@@ -1,5 +1,5 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
-import type { ProcessContextResult } from "@/index";
+import type { ProcessContextResult } from "../../src/index.js";
 import {
     E2ETestContext,
     expectTypeScriptCompiles,

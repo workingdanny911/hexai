@@ -4,14 +4,14 @@ import * as pg from "pg";
 
 import { Propagation, TransactionHooks, UnitOfWork } from "@hexaijs/core";
 import type { TransactionHook } from "@hexaijs/core";
-import { PostgresConfig } from "./config";
-import { IsolationLevel } from "./types";
+import { PostgresConfig } from "./config/index.js";
+import { IsolationLevel } from "./types.js";
 import {
     ClientCleanUp,
     ClientFactory,
     PostgresTransactionOptions,
-} from "./types";
-import { ensureConnection } from "./helpers";
+} from "./types.js";
+import { ensureConnection } from "./helpers.js";
 
 export interface PostgresUnitOfWork
     extends UnitOfWork<pg.ClientBase, PostgresTransactionOptions> {

@@ -2,14 +2,14 @@
 
 import { fileURLToPath } from "node:url";
 import { resolve, dirname, join, relative } from "node:path";
-import { ConfigLoader, type ContractsConfig, resolveContextEntries } from "./config-loader";
-import type { InputContextConfig } from "./context-config";
-import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } from "./index";
-import { RegistryGenerator, ContextMessages } from "./registry-generator";
-import { ReexportGenerator } from "./reexport-generator";
-import { nodeFileSystem } from "./file-system";
-import type { MessageType, DecoratorNames, ResponseNamingConvention } from "./domain/types";
-import { mergeDecoratorNames } from "./domain";
+import { ConfigLoader, type ContractsConfig, resolveContextEntries } from "./config-loader.js";
+import type { InputContextConfig } from "./context-config.js";
+import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } from "./index.js";
+import { RegistryGenerator, ContextMessages } from "./registry-generator.js";
+import { ReexportGenerator } from "./reexport-generator.js";
+import { nodeFileSystem } from "./file-system.js";
+import type { MessageType, DecoratorNames, ResponseNamingConvention } from "./domain/types.js";
+import { mergeDecoratorNames } from "./domain/index.js";
 
 const DEFAULT_CONFIG_PATH = "application.config.ts";
 const EXIT_CODE_ERROR = 1;

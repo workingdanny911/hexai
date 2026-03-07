@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { run, runWithConfig } from "@/cli";
+import { run, runWithConfig } from "../../src/cli.js";
 
 /**
  * CLI E2E Tests

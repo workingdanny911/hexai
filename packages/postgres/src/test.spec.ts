@@ -10,13 +10,13 @@ import {
 import * as pg from "pg";
 
 import { Propagation } from "@hexaijs/core";
-import { PostgresUnitOfWorkForTesting } from "./test";
+import { PostgresUnitOfWorkForTesting } from "./test.js";
 import {
     newClient,
     useClient,
     useDatabase,
     useTableManager,
-} from "@/test-fixtures";
+} from "./test-fixtures/index.js";
 
 const DATABASE = "test_hexai__uow_testing";
 const TABLE = "_test";

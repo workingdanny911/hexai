@@ -47,7 +47,7 @@ export type {
     ExtractionError,
     ExtractionWarning,
     Config,
-} from "./domain/types";
+} from "./domain/types.js";
 
 export {
     isPrimitiveType,
@@ -61,7 +61,7 @@ export {
     isFunctionType,
     isDomainEvent,
     isCommand,
-} from "./domain/types";
+} from "./domain/types.js";
 
 export {
     PublicEvent,
@@ -72,11 +72,11 @@ export {
     type PublicQueryOptions,
 } from "@hexaijs/contracts/decorators";
 
-export { Scanner, type ScannerOptions } from "./scanner";
-export { Parser, type ParseResult } from "./parser";
-export { FileGraphResolver } from "./file-graph-resolver";
-export { FileCopier } from "./file-copier";
-export { ConfigLoader, resolveContextEntries, type ContractsConfig } from "./config-loader";
+export { Scanner, type ScannerOptions } from "./scanner.js";
+export { Parser, type ParseResult } from "./parser.js";
+export { FileGraphResolver } from "./file-graph-resolver.js";
+export { FileCopier } from "./file-copier.js";
+export { ConfigLoader, resolveContextEntries, type ContractsConfig } from "./config-loader.js";
 
 export {
     MessageParserError,
@@ -90,13 +90,13 @@ export {
     JsonParseError,
     ResolutionError,
     ModuleResolutionError,
-} from "./errors";
+} from "./errors.js";
 
 export {
     RegistryGenerator,
     type RegistryGeneratorOptions,
     type ContextMessages,
-} from "./registry-generator";
+} from "./registry-generator.js";
 
 export {
     ReexportGenerator,
@@ -105,17 +105,17 @@ export {
     type GenerateOptions,
     type RewrittenImport,
     type ReexportFile,
-} from "./reexport-generator";
+} from "./reexport-generator.js";
 
-import { type FileSystem, nodeFileSystem } from "./file-system";
-import { type Logger, noopLogger } from "./logger";
-import { ContractsPipeline } from "./pipeline";
+import { type FileSystem, nodeFileSystem } from "./file-system.js";
+import { type Logger, noopLogger } from "./logger.js";
+import { ContractsPipeline } from "./pipeline.js";
 
-export type { FileSystem, FileStats } from "./file-system";
-export { nodeFileSystem } from "./file-system";
+export type { FileSystem, FileStats } from "./file-system.js";
+export { nodeFileSystem } from "./file-system.js";
 
-export type { Logger, LogLevel, ConsoleLoggerOptions } from "./logger";
-export { ConsoleLogger, noopLogger } from "./logger";
+export type { Logger, LogLevel, ConsoleLoggerOptions } from "./logger.js";
+export { ConsoleLogger, noopLogger } from "./logger.js";
 
 export {
     ContractsPipeline,
@@ -123,12 +123,12 @@ export {
     type PipelineOptions,
     type PipelineResult,
     type ParsedMessages,
-} from "./pipeline";
+} from "./pipeline.js";
 
-export { ContextConfig, type InputContextConfig } from "./context-config";
+export { ContextConfig, type InputContextConfig } from "./context-config.js";
 
-import { ContextConfig } from "./context-config";
-import type { ResponseNamingConvention, MessageType } from "./domain/types";
+import { ContextConfig } from "./context-config.js";
+import type { ResponseNamingConvention, MessageType } from "./domain/types.js";
 
 export interface ProcessContextOptions {
     contextName: string;
@@ -145,9 +145,9 @@ export interface ProcessContextOptions {
 }
 
 export interface ProcessContextResult {
-    events: readonly import("./domain/types").DomainEvent[];
-    commands: readonly import("./domain/types").Command[];
-    queries: readonly import("./domain/types").Query[];
+    events: readonly import("./domain/types.js").DomainEvent[];
+    commands: readonly import("./domain/types.js").Command[];
+    queries: readonly import("./domain/types.js").Query[];
     copiedFiles: string[];
 }
 
@@ -196,4 +196,4 @@ export async function processContext(
 }
 
 // Hexai CLI plugin integration
-export { cliPlugin } from "./hexai-plugin";
+export { cliPlugin } from "./hexai-plugin.js";

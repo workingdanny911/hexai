@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, test } from "vitest";
 
 import { DummyMessage } from "@hexaijs/core/test";
 
-import { ApplicationContext } from "@/application-context";
-import { ApplicationBuilder } from "@/application";
-import { ExecutionScope } from "@/execution-scope";
-import { DummyCommand, DummyEvent, DummyQuery } from "@/test";
+import { ApplicationContext } from "../application-context.js";
+import { ApplicationBuilder } from "../application.js";
+import { ExecutionScope } from "../execution-scope.js";
+import { DummyCommand, DummyEvent, DummyQuery } from "../test/index.js";
 
 class TestApplicationContext implements ApplicationContext {}
 

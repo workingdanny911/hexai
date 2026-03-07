@@ -1,10 +1,10 @@
 {
-    "extends": "./tsconfig.json",
+    "extends": "@hexaijs/tooling/tsconfig/node.json",
     "compilerOptions": {
-        "declaration": true,
-        "declarationMap": true,
-        "sourceMap": true
+        "rootDir": "./src",
+        "outDir": "./dist"
     },
+    "include": ["src"],
     "exclude": [
         "node_modules",
         "dist",

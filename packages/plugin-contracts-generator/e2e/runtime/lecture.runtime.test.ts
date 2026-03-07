@@ -1,5 +1,5 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
-import { E2ETestContext, importGeneratedModule } from "../helpers";
+import { E2ETestContext, importGeneratedModule } from "../helpers/index.js";
 
 describe("Runtime: Lecture", () => {
     const ctx = new E2ETestContext("lecture");

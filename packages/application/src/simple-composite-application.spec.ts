@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { UnitOfWork } from "@hexaijs/core";
 import { waitForMs, waitForTicks } from "@hexaijs/core/test";
 
-import { Application, ErrorResult, Result, SuccessResult } from "@/application";
-import { InterceptedApplication } from "@/intercepted-application";
-import { ApplicationError } from "@/error";
-import { CommandInterceptor, EventInterceptor } from "@/interceptor";
+import { Application, ErrorResult, Result, SuccessResult } from "./application.js";
+import { InterceptedApplication } from "./intercepted-application.js";
+import { ApplicationError } from "./error.js";
+import { CommandInterceptor, EventInterceptor } from "./interceptor.js";
 import {
     createCommandExecutionTrackingInterceptor,
     createEventExecutionTrackingInterceptor,
@@ -13,8 +13,8 @@ import {
     DummyEvent,
     expectApplicationError,
     expectExecutionTimeLessThan,
-} from "@/test";
-import { SimpleCompositeApplication } from "./simple-composite-application";
+} from "./test/index.js";
+import { SimpleCompositeApplication } from "./simple-composite-application.js";
 
 function createMockUnitOfWork(): UnitOfWork<void, never> & {
     scopeSpy: ReturnType<typeof vi.fn>;

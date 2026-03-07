@@ -7,7 +7,7 @@ import {
     findConfigFile,
     loadConfig,
     loadConfigFromPath,
-} from "./config-loader";
+} from "./config-loader.js";
 
 describe("config-loader", () => {
     const testDir = path.join(__dirname, "__test-fixtures__");

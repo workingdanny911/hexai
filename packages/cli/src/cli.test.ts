@@ -25,7 +25,7 @@ describe("CLI Entry Point", () => {
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
             // Import dynamically to get fresh module state
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             // Test with --config=path format
             const program = await createProgram({
@@ -40,7 +40,7 @@ describe("CLI Entry Point", () => {
             const configPath = path.join(tempDir, "hexai.config.json");
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             const program = await createProgram({
                 argv: ["node", "hexai", `-c=${configPath}`],
@@ -53,7 +53,7 @@ describe("CLI Entry Point", () => {
             const configPath = path.join(tempDir, "hexai.config.json");
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             const program = await createProgram({
                 argv: ["node", "hexai", "--config", configPath],
@@ -66,7 +66,7 @@ describe("CLI Entry Point", () => {
             const configPath = path.join(tempDir, "hexai.config.json");
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             const program = await createProgram({
                 argv: ["node", "hexai", "-c", configPath],
@@ -81,7 +81,7 @@ describe("CLI Entry Point", () => {
             const configPath = path.join(tempDir, "hexai.config.json");
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             const program = await createProgram({ configPath });
 
@@ -95,7 +95,7 @@ describe("CLI Entry Point", () => {
             const configPath = path.join(tempDir, "hexai.config.json");
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             const program = await createProgram({ configPath });
 
@@ -154,7 +154,7 @@ describe("CLI Entry Point", () => {
                 })
             );
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             // configPath option should take precedence over argv
             const program = await createProgram({
@@ -170,7 +170,7 @@ describe("CLI Entry Point", () => {
 
         it("should throw ConfigNotFoundError when config file does not exist", async () => {
             const { createProgram, ConfigNotFoundError } =
-                await import("./index");
+                await import("./index.js");
 
             const nonExistentConfig = path.join(
                 tempDir,
@@ -232,7 +232,7 @@ describe("CLI Entry Point", () => {
 
             // Clear module cache and re-import
             try {
-                const { createProgram } = await import("./index");
+                const { createProgram } = await import("./index.js");
 
                 // This will fail because the plugin can't be resolved from node_modules
                 // In a real scenario, plugins would be installed via npm/pnpm
@@ -248,7 +248,7 @@ describe("CLI Entry Point", () => {
             const configPath = path.join(tempDir, "custom.config.json");
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             const program = await createProgram({ configPath });
             expect(program).toBeDefined();
@@ -258,7 +258,7 @@ describe("CLI Entry Point", () => {
             const configPath = path.join(tempDir, "hexai.config.json");
             fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
 
-            const { createProgram } = await import("./index");
+            const { createProgram } = await import("./index.js");
 
             const program = await createProgram({
                 argv: ["node", "hexai", "-c", configPath],
@@ -281,7 +281,7 @@ describe("CLI Entry Point", () => {
 
         it("should handle ConfigNotFoundError with helpful message", async () => {
             const { handleError, ConfigNotFoundError } =
-                await import("./index");
+                await import("./index.js");
 
             const error = new ConfigNotFoundError([
                 "/path/hexai.config.ts",
@@ -299,7 +299,7 @@ describe("CLI Entry Point", () => {
         });
 
         it("should handle ConfigLoadError", async () => {
-            const { handleError, ConfigLoadError } = await import("./index");
+            const { handleError, ConfigLoadError } = await import("./index.js");
 
             const error = new ConfigLoadError(
                 "/path/config.json",
@@ -315,7 +315,7 @@ describe("CLI Entry Point", () => {
 
         it("should handle PluginNotFoundError with install hint", async () => {
             const { handleError, PluginNotFoundError } =
-                await import("./index");
+                await import("./index.js");
 
             const error = new PluginNotFoundError("@hexaijs/missing-plugin");
             handleError(error);
@@ -330,7 +330,7 @@ describe("CLI Entry Point", () => {
         });
 
         it("should handle PluginExportError", async () => {
-            const { handleError, PluginExportError } = await import("./index");
+            const { handleError, PluginExportError } = await import("./index.js");
 
             const error = new PluginExportError("@hexaijs/bad-plugin");
             handleError(error);
@@ -343,7 +343,7 @@ describe("CLI Entry Point", () => {
 
         it("should handle PluginValidationError", async () => {
             const { handleError, PluginValidationError } =
-                await import("./index");
+                await import("./index.js");
 
             const error = new PluginValidationError(
                 "@hexaijs/invalid-plugin",
@@ -358,7 +358,7 @@ describe("CLI Entry Point", () => {
         });
 
         it("should handle generic Error", async () => {
-            const { handleError } = await import("./index");
+            const { handleError } = await import("./index.js");
 
             const error = new Error("Something went wrong");
             handleError(error);
@@ -370,7 +370,7 @@ describe("CLI Entry Point", () => {
         });
 
         it("should handle unknown error type", async () => {
-            const { handleError } = await import("./index");
+            const { handleError } = await import("./index.js");
 
             handleError("string error");
 

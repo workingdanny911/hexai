@@ -1,7 +1,7 @@
 import _ from "lodash";
 
-import { Message, MessageClass } from "@/message";
-import { partialMatch } from "./utils";
+import { Message, MessageClass } from "../message.js";
+import { partialMatch } from "./utils.js";
 import { expect } from "vitest";
 
 export function expectMessagesToBeFullyEqual(

@@ -1,4 +1,4 @@
-import { Identifiable, IdOf } from "./identifiable";
+import { Identifiable, IdOf } from "./identifiable.js";
 
 export interface Repository<T extends Identifiable<any>> {
     get(id: IdOf<T>): Promise<T>;

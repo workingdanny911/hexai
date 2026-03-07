@@ -2,7 +2,7 @@ import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { expect } from "vitest";
-import type { ProcessContextResult } from "@/index";
+import type { ProcessContextResult } from "../../src/index.js";
 
 export function expectFileExists(filePath: string, message?: string): void {
     expect(

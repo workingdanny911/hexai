@@ -1,4 +1,4 @@
-import { Command } from "@/command";
+import { Command } from "./command.js";
 
 export interface CommandHandler<I extends Command = Command, Ctx = any> {
     execute(command: I, ctx?: Ctx): Promise<I['ResultType']>;

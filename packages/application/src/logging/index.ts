@@ -1,4 +1,4 @@
-export type { Logger, LoggerConfig, LogContext, LogLevel } from "./logger";
+export type { Logger, LoggerConfig, LogContext, LogLevel } from "./logger.js";
 
 export {
     type LoggingInterceptorConfig,
@@ -8,7 +8,7 @@ export {
     extractMetadataFields,
     getLogMessage,
     logCompletion,
-} from "./logging-utils";
+} from "./logging-utils.js";
 
 export {
     createTraceInterceptor,
@@ -20,9 +20,9 @@ export {
     getCorrelationTrace,
     CURRENT_MESSAGE_TRACE_KEY,
     CORRELATION_TRACE_KEY,
-} from "./trace-interceptor";
+} from "./trace-interceptor.js";
 
 export {
     createLoggingInterceptor,
     LoggingInterceptor,
-} from "./logging-interceptor";
+} from "./logging-interceptor.js";

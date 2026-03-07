@@ -5,8 +5,8 @@ import {
     envNumber,
     envBoolean,
 } from "ezcfg";
-import { postgresConfig } from "./postgres-config-spec";
-import { PostgresConfig } from "./postgres-config";
+import { postgresConfig } from "./postgres-config-spec.js";
+import { PostgresConfig } from "./postgres-config.js";
 
 describe("PostgresSpec", () => {
     const originalEnv = process.env;

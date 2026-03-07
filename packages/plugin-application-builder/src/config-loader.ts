@@ -1,6 +1,9 @@
 import * as fs from "fs";
+import { createRequire } from "node:module";
 import * as ts from "typescript";
-import { BuildPluginConfig, RawBuildPluginConfig } from "./config";
+import { BuildPluginConfig, RawBuildPluginConfig } from "./config.js";
+
+const require = createRequire(import.meta.url);
 
 export async function loadConfig(configPath: string): Promise<BuildPluginConfig> {
     const configSource = fs.readFileSync(configPath, "utf-8");

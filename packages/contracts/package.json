@@ -1,55 +1,56 @@
 {
-    "name": "@hexaijs/contracts",
-    "publishConfig": {
-        "access": "public"
+  "name": "@hexaijs/contracts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.1.2",
+  "type": "module",
+  "description": "Zero-dependency marker decorators for hexai contract definitions",
+  "license": "MIT",
+  "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/workingdanny911/hexai.git",
+    "directory": "packages/contracts"
+  },
+  "homepage": "https://github.com/workingdanny911/hexai#readme",
+  "bugs": {
+    "url": "https://github.com/workingdanny911/hexai/issues"
+  },
+  "keywords": [
+    "hexai",
+    "hexagonal",
+    "clean-architecture",
+    "ddd",
+    "contracts",
+    "decorators",
+    "typescript"
+  ],
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
-    "version": "0.1.1",
-    "type": "module",
-    "description": "Zero-dependency marker decorators for hexai contract definitions",
-    "license": "MIT",
-    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/workingdanny911/hexai.git",
-        "directory": "packages/contracts"
+    "./decorators": {
+      "types": "./dist/decorators/index.d.ts",
+      "import": "./dist/decorators/index.js"
     },
-    "homepage": "https://github.com/workingdanny911/hexai#readme",
-    "bugs": {
-        "url": "https://github.com/workingdanny911/hexai/issues"
-    },
-    "keywords": [
-        "hexai",
-        "hexagonal",
-        "clean-architecture",
-        "ddd",
-        "contracts",
-        "decorators",
-        "typescript"
-    ],
-    "files": [
-        "dist",
-        "LICENSE"
-    ],
-    "exports": {
-        ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
-        },
-        "./decorators": {
-            "types": "./dist/decorators/index.d.ts",
-            "import": "./dist/decorators/index.js"
-        },
-        "./package.json": "./package.json"
-    },
-    "scripts": {
-        "test": "vitest run",
-        "build": "tsup"
-    },
-    "peerDependencies": {
-        "@hexaijs/core": "^0.9.0"
-    },
-    "devDependencies": {
-        "@hexaijs/core": "workspace:^",
-        "@hexaijs/tooling": "workspace:*"
-    }
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsgo -p tsconfig.build.json"
+  },
+  "peerDependencies": {
+    "@hexaijs/core": "^0.9.0"
+  },
+  "devDependencies": {
+    "@hexaijs/core": "workspace:^",
+    "@hexaijs/tooling": "workspace:*",
+    "@typescript/native-preview": "^7.0.0-dev"
+  }
 }

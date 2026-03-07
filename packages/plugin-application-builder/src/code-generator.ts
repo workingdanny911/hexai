@@ -1,15 +1,15 @@
-import { BuildPluginConfig } from "./config";
+import { BuildPluginConfig } from "./config.js";
 import {
     DuplicateCommandHandlerError,
     DuplicateEventHandlerError,
     DuplicateQueryHandlerError,
-} from "./errors";
+} from "./errors.js";
 import {
     HandlerMetadata,
     CommandHandlerMetadata,
     EventHandlerMetadata,
     QueryHandlerMetadata,
-} from "./types";
+} from "./types.js";
 
 /**
  * Generates TypeScript code for ApplicationBuilder

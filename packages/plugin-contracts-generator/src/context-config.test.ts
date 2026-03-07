@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import path from "path";
 
-import { ContextConfig } from "./context-config";
-import type { FileSystem } from "./file-system";
+import { ContextConfig } from "./context-config.js";
+import type { FileSystem } from "./file-system.js";
 
 describe("ContextConfig", () => {
     describe("createSync", () => {

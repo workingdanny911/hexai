@@ -1,12 +1,12 @@
 import * as path from "path";
 import * as ts from "typescript";
 
-import type { FileGraph, FileNode } from "./file-graph-resolver";
-import { FileReadError, FileWriteError } from "./errors";
-import { FileSystem, nodeFileSystem } from "./file-system";
-import type { MessageType, DecoratorNames } from "./domain";
-import { DEFAULT_DECORATOR_NAMES } from "./domain";
-import { hasDecorator } from "./class-analyzer";
+import type { FileGraph, FileNode } from "./file-graph-resolver.js";
+import { FileReadError, FileWriteError } from "./errors.js";
+import { FileSystem, nodeFileSystem } from "./file-system.js";
+import type { MessageType, DecoratorNames } from "./domain/index.js";
+import { DEFAULT_DECORATOR_NAMES } from "./domain/index.js";
+import { hasDecorator } from "./class-analyzer.js";
 
 const CONTRACTS_GENERATOR_MODULE = "@hexaijs/plugin-contracts-generator";
 const CONTRACT_DECORATORS = new Set([

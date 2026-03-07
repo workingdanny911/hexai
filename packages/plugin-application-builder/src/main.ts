@@ -1,14 +1,14 @@
 import * as path from "path";
-import { ApplicationBuilderGenerator } from "./application-builder-generator";
-import { loadConfig } from "./config-loader";
+import { ApplicationBuilderGenerator } from "./application-builder-generator.js";
+import { loadConfig } from "./config-loader.js";
 
 // Re-export types for external use
 export type {
     HandlerMetadata,
     CommandHandlerMetadata,
     EventHandlerMetadata,
-} from "./types";
-export { HandlerMetadataExtractor } from "./metadata-extractor";
+} from "./types.js";
+export { HandlerMetadataExtractor } from "./metadata-extractor.js";
 
 export async function generateApplicationBuilder(
     contextPath: string,

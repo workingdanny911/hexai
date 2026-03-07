@@ -2,17 +2,17 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { Message } from "@hexaijs/core";
 import { waitForMs } from "@hexaijs/core/test";
 
-import { ApplicationContext } from "@/application-context";
-import { ApplicationError, ApplicationErrorTransformingContext } from "@/error";
-import { ApplicationBuilder, SuccessResult } from "@/application";
-import { MessageHandler } from "@/message-handler";
+import { ApplicationContext } from "../application-context.js";
+import { ApplicationError, ApplicationErrorTransformingContext } from "../error.js";
+import { ApplicationBuilder, SuccessResult } from "../application.js";
+import { MessageHandler } from "../message-handler.js";
 import {
     DummyCommand,
     DummyEvent,
     expectApplicationError,
     expectExecutionTimeLessThan,
     expectSuccessResult,
-} from "@/test";
+} from "../test/index.js";
 
 describe("Application, handling message", () => {
     beforeEach(() => {

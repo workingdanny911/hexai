@@ -2,10 +2,10 @@ import ts from "typescript";
 import path from "path";
 import { minimatch } from "minimatch";
 
-import { extractImportedNames } from "./import-analyzer";
-import { ContextConfig } from "./context-config";
-import { FileReadError } from "./errors";
-import { FileSystem, nodeFileSystem } from "./file-system";
+import { extractImportedNames } from "./import-analyzer.js";
+import { ContextConfig } from "./context-config.js";
+import { FileReadError } from "./errors.js";
+import { FileSystem, nodeFileSystem } from "./file-system.js";
 
 const TYPESCRIPT_EXTENSIONS = [".ts", ".tsx"];
 const INDEX_FILE = "index.ts";

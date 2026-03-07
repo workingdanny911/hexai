@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { ReexportGenerator, ReexportFile } from "./reexport-generator";
-import { createInMemoryFileSystem } from "./test-utils";
+import { ReexportGenerator, ReexportFile } from "./reexport-generator.js";
+import { createInMemoryFileSystem } from "./test-utils.js";
 
 describe("ReexportGenerator", () => {
     let generator: ReexportGenerator;

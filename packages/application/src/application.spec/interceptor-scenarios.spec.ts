@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ErrorResult, SuccessResult } from "@/application";
-import { ApplicationError } from "@/error";
-import { CommandInterceptionContext, CommandInterceptor } from "@/interceptor";
+import { ErrorResult, SuccessResult } from "../application.js";
+import { ApplicationError } from "../error.js";
+import { CommandInterceptionContext, CommandInterceptor } from "../interceptor.js";
 import {
     createApplicationBuilder,
     createMockCommandHandler,
     DummyCommand,
-} from "@/test";
+} from "../test/index.js";
 
 describe("Real-world Interceptor Scenarios", () => {
     const command = new DummyCommand();

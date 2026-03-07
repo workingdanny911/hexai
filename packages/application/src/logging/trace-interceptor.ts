@@ -1,6 +1,6 @@
 import type { MessageTrace } from "@hexaijs/core";
 
-import type { Result } from "../application";
+import type { Result } from "../application.js";
 import type {
     CommandInterceptionContext,
     CommandInterceptor,
@@ -8,7 +8,7 @@ import type {
     EventInterceptor,
     InterceptionContext,
     Interceptor,
-} from "../interceptor";
+} from "../interceptor.js";
 
 export const CURRENT_MESSAGE_TRACE_KEY = Symbol("currentMessageTrace");
 export const CORRELATION_TRACE_KEY = Symbol("correlationTrace");

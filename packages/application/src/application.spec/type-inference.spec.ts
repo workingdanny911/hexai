@@ -1,10 +1,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { ApplicationContext } from "@/application-context";
-import { ApplicationBuilder, SuccessResult } from "@/application";
-import { Command } from "@/command";
-import { Query } from "@/query";
-import { expectSuccessResult } from "@/test";
+import { ApplicationContext } from "../application-context.js";
+import { ApplicationBuilder, SuccessResult } from "../application.js";
+import { Command } from "../command.js";
+import { Query } from "../query.js";
+import { expectSuccessResult } from "../test/index.js";
 
 class TestApplicationContext implements ApplicationContext {}
 

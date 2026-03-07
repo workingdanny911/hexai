@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { PostgresConfig } from "./postgres-config";
+import { PostgresConfig } from "./postgres-config.js";
 
 describe("PostgresConfig", () => {
     describe("constructor", () => {

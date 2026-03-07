@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { Interceptor } from "@/interceptor";
+import { Interceptor } from "../interceptor.js";
 import {
     DummyCommand,
     DummyEvent,
     createApplicationBuilder,
     createMockCommandHandler,
     createMockEventHandler,
-} from "@/test";
+} from "../test/index.js";
 
 describe("Application, common interceptor (withInterceptor)", () => {
     const command = new DummyCommand();

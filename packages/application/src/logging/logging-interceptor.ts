@@ -1,12 +1,12 @@
-import type { Result } from "@/application";
-import type { InterceptionContext, Interceptor } from "@/interceptor";
-import type { LoggingInterceptorConfig, MessageKind } from "./logging-utils";
+import type { Result } from "../application.js";
+import type { InterceptionContext, Interceptor } from "../interceptor.js";
+import type { LoggingInterceptorConfig, MessageKind } from "./logging-utils.js";
 import {
     buildLogContext,
     getLogMessage,
     logCompletion,
     serializeError,
-} from "./logging-utils";
+} from "./logging-utils.js";
 
 function getMessageKind(ctx: InterceptionContext): MessageKind {
     return ctx.intent === "query" ? "command" : ctx.intent;

@@ -1,9 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import { glob } from "glob";
-import { BuildPluginConfig } from "./config";
-import { HandlerMetadataExtractor } from "./metadata-extractor";
-import { ApplicationCodeGenerator } from "./code-generator";
+import { BuildPluginConfig } from "./config.js";
+import { HandlerMetadataExtractor } from "./metadata-extractor.js";
+import { ApplicationCodeGenerator } from "./code-generator.js";
 
 /**
  * Orchestrates the application builder generation process

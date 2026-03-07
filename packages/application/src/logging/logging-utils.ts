@@ -1,7 +1,7 @@
 import { Message } from "@hexaijs/core";
 
-import type { Result } from "@/application";
-import type { Logger, LogContext } from "./logger";
+import type { Result } from "../application.js";
+import type { Logger, LogContext } from "./logger.js";
 
 export interface LoggingInterceptorConfig {
     logger: Logger;

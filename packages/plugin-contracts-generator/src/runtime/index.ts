@@ -2,4 +2,4 @@ export {
     MessageRegistry,
     type MessageClass,
     type MessageHeaders,
-} from "./message-registry";
+} from "./message-registry.js";

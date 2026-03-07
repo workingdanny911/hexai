@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { Message } from "@/message";
+import { Message } from "../message.js";
 import {
     expectMessageToMatch,
     expectMessagesToBeFullyEqual,
     expectMessagesToContain,
-} from "./matchers";
+} from "./matchers.js";
 
 class OrderPlaced extends Message<{ orderId: string; amount: number }> {
     static getType() {

@@ -1,7 +1,7 @@
 import * as ts from "typescript";
 import * as path from "path";
 
-import { FileSystem, nodeFileSystem } from "./file-system";
+import { FileSystem, nodeFileSystem } from "./file-system.js";
 
 /**
  * Represents an import that was rewritten via pathAliasRewrites

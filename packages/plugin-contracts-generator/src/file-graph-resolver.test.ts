@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import path from "path";
 
-import { FileGraphResolver } from "./file-graph-resolver";
-import { ContextConfig } from "./context-config";
-import type { FileGraph, FileNode, ImportInfo } from "./file-graph-resolver";
+import { FileGraphResolver } from "./file-graph-resolver.js";
+import { ContextConfig } from "./context-config.js";
+import type { FileGraph, FileNode, ImportInfo } from "./file-graph-resolver.js";
 
 function createTestContextConfig(sourceDir: string): ContextConfig {
     return ContextConfig.createSync("test-context", sourceDir);

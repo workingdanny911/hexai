@@ -1,8 +1,8 @@
 import { Message } from "@hexaijs/core";
 
-import { EventHandler } from "./event-handler";
-import { CommandHandler } from "./command-handler";
-import { QueryHandler } from "./query-handler";
+import { EventHandler } from "./event-handler.js";
+import { CommandHandler } from "./command-handler.js";
+import { QueryHandler } from "./query-handler.js";
 
 interface ApplicationErrorParams {
     code?: string;

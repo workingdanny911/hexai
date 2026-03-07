@@ -1,1 +1,1 @@
-export * from "./sqlite-unit-of-work";
+export * from "./sqlite-unit-of-work.js";

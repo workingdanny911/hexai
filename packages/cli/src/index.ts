@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-export * from "./types";
-export * from "./config-loader";
-export * from "./plugin-loader";
+export * from "./types.js";
+export * from "./config-loader.js";
+export * from "./plugin-loader.js";
 
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
@@ -13,14 +13,14 @@ import {
     loadConfigFromPath,
     ConfigNotFoundError,
     ConfigLoadError,
-} from "./config-loader";
+} from "./config-loader.js";
 import {
     loadPlugins,
     PluginNotFoundError,
     PluginExportError,
     PluginValidationError,
-} from "./plugin-loader";
-import type { HexaiCliPlugin, CliOption, HexaiConfig } from "./types";
+} from "./plugin-loader.js";
+import type { HexaiCliPlugin, CliOption, HexaiConfig } from "./types.js";
 
 const EXIT_CODE_ERROR = 1;
 

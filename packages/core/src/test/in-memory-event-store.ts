@@ -1,5 +1,5 @@
-import { EventStore, EventStoreFetchResult, StoredEvent } from "@/event-store";
-import { Message } from "@/message";
+import { EventStore, EventStoreFetchResult, StoredEvent } from "../event-store.js";
+import { Message } from "../message.js";
 
 export class InMemoryEventStore implements EventStore {
     private events: StoredEvent[] = [];

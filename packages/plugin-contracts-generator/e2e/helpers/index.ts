@@ -1,4 +1,4 @@
-export { E2ETestContext, type RunParserOptions } from "./test-context";
+export { E2ETestContext, type RunParserOptions } from "./test-context.js";
 export {
     expectFileExists,
     expectFileNotExists,
@@ -10,15 +10,15 @@ export {
     expectCommand,
     expectEvents,
     expectCommands,
-} from "./assertions";
+} from "./assertions.js";
 export {
     compileTypeScript,
     expectTypeScriptCompiles,
     type CompilationResult,
-} from "./typescript-validator";
+} from "./typescript-validator.js";
 export {
     importGeneratedModule,
     loadClass,
     type MessageLike,
     type MessageClass,
-} from "./runtime-helpers";
+} from "./runtime-helpers.js";

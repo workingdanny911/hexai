@@ -1,6 +1,6 @@
 import _ from "lodash";
 
-import { Message, MessageHeaders } from "@/message";
+import { Message, MessageHeaders } from "../message.js";
 
 export class DummyMessage extends Message<Record<never, never>> {
     static type = "test.dummy-message";

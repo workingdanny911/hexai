@@ -1,10 +1,10 @@
-import { DatabaseManager, TableManager } from "@/helpers";
-import { getTestConfig } from "@/test-fixtures/config";
-import { createPostgresUnitOfWork } from "@/postgres-unit-of-work";
+import { DatabaseManager, TableManager } from "../helpers.js";
+import { getTestConfig } from "./config.js";
+import { createPostgresUnitOfWork } from "../postgres-unit-of-work.js";
 import { afterAll, beforeAll, beforeEach } from "vitest";
 import { Client } from "pg";
 
-import type { PostgresUnitOfWork } from "@/postgres-unit-of-work";
+import type { PostgresUnitOfWork } from "../postgres-unit-of-work.js";
 
 export function getDatabaseManager() {
     return new DatabaseManager(getPostgresUrl());

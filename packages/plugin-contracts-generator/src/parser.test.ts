@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Parser } from "./parser";
+import { Parser } from "./parser.js";
 import type {
     ArrayType,
     Command,
@@ -14,7 +14,7 @@ import type {
     ReferenceType,
     SourceFile,
     TypeDefinition,
-} from "./domain";
+} from "./domain/index.js";
 
 const testSourceFile: SourceFile = {
     absolutePath: "/test/input.ts",

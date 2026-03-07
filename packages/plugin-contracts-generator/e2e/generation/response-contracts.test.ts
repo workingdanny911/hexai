@@ -9,8 +9,8 @@ import {
     expectExtractionResult,
     expectCommands,
 } from "@e2e/helpers";
-import type { ProcessContextResult } from "@/index";
-import { ResponseNamingConvention } from "../../src/domain/types";
+import type { ProcessContextResult } from "../../src/index.js";
+import { ResponseNamingConvention } from "../../src/domain/types.js";
 
 /**
  * E2E Tests for Response Contracts Feature

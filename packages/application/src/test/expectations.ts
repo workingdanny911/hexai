@@ -1,7 +1,7 @@
 import { expect } from "vitest";
 
-import { ErrorResult, SuccessResult } from "@/application";
-import { ApplicationError } from "@/error";
+import { ErrorResult, SuccessResult } from "../application.js";
+import { ApplicationError } from "../error.js";
 
 export function expectSuccessResult<T = any>(
     result: unknown

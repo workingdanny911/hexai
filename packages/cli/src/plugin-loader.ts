@@ -1,4 +1,4 @@
-import { HexaiCliPlugin, PluginEntry } from "./types";
+import { HexaiCliPlugin, PluginEntry } from "./types.js";
 
 /**
  * Error thrown when a plugin cannot be resolved (not installed).

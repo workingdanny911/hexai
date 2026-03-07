@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "path";
 
-import { ConfigLoader, ConfigLoadError } from "./config-loader";
-import type { DecoratorNames } from "./domain";
+import { ConfigLoader, ConfigLoadError } from "./config-loader.js";
+import type { DecoratorNames } from "./domain/index.js";
 
 describe("ConfigLoader", () => {
     describe("object context format", () => {

@@ -1,19 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { Message } from "@hexaijs/core";
 
-import { ApplicationBuilder } from "@/application";
-import { ApplicationContext } from "@/application-context";
-import { Command } from "@/command";
-import { ApplicationError } from "@/error";
-import { CommandInterceptor, EventInterceptor } from "@/interceptor";
-import { createTestLogger } from "@/pino";
+import { ApplicationBuilder } from "../application.js";
+import { ApplicationContext } from "../application-context.js";
+import { Command } from "../command.js";
+import { ApplicationError } from "../error.js";
+import { CommandInterceptor, EventInterceptor } from "../interceptor.js";
+import { createTestLogger } from "../pino/index.js";
 
 import {
     createLoggingInterceptor,
     traceCommandInterceptor,
     CURRENT_MESSAGE_TRACE_KEY,
     CORRELATION_TRACE_KEY,
-} from "./index";
+} from "./index.js";
 
 class TestCommand extends Command<{ value: string }> {
     constructor(value: string = "test") {

@@ -1,6 +1,6 @@
 import * as ts from "typescript";
 
-import { isPrimitiveTypeName } from "./ast-utils";
+import { isPrimitiveTypeName } from "./ast-utils.js";
 
 export function hasDecorator(
     node: ts.ClassDeclaration,

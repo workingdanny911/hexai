@@ -3,8 +3,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { processContext, ProcessContextResult, RegistryGenerator, ContextMessages } from "@/index";
-import type { ResponseNamingConvention, MessageType } from "@/domain/types";
+import { processContext, ProcessContextResult, RegistryGenerator, ContextMessages } from "../../src/index.js";
+import type { ResponseNamingConvention, MessageType } from "../../src/domain/types.js";
 
 export interface RunParserOptions {
     contextName?: string;

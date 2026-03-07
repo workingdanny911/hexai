@@ -3,9 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 
-import { FileCopier } from "./file-copier";
-import { FileGraphResolver } from "./file-graph-resolver";
-import { ContextConfig } from "./context-config";
+import { FileCopier } from "./file-copier.js";
+import { FileGraphResolver } from "./file-graph-resolver.js";
+import { ContextConfig } from "./context-config.js";
 
 function createTestContextConfig(sourceDir: string): ContextConfig {
     return ContextConfig.createSync("test-context", sourceDir);

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 
 import { beforeEach, expect } from "vitest";
 
-import { generateApplicationBuilder } from "./main";
+import { generateApplicationBuilder } from "./main.js";
 
 const FIXTURES_DIR = path.join(__dirname, "fixtures");
 const GENERATED_DIR = "src/.generated";

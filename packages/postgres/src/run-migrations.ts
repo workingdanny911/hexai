@@ -1,8 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as pg from "pg";
-import runner from "node-pg-migrate";
-import { PostgresConfig } from "@/config";
+import { runner } from "node-pg-migrate";
+import { PostgresConfig } from "./config/index.js";
 
 /**
  * Extracts numeric prefix from migration filename for proper sorting.

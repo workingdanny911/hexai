@@ -1,7 +1,7 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import type { ProcessContextResult } from "@/index";
+import type { ProcessContextResult } from "../../src/index.js";
 import {
     E2ETestContext,
     expectGeneratedFiles,

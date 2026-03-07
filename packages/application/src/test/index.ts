@@ -1,2 +1,2 @@
-export * from "./fixtures";
-export * from "./expectations";
+export * from "./fixtures/index.js";
+export * from "./expectations.js";

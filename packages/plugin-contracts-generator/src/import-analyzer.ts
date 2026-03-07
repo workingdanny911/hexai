@@ -1,6 +1,6 @@
 import * as ts from "typescript";
 
-import type { ClassImport } from "./domain";
+import type { ClassImport } from "./domain/index.js";
 
 export function isExternalModule(moduleSpecifier: string): boolean {
     return !moduleSpecifier.startsWith(".");

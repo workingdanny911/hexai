@@ -2,8 +2,8 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, test } from "vitest";
 
-import { useClient, useDatabase, useTableManager } from "@/test-fixtures";
-import { runMigrations } from "./run-migrations";
+import { useClient, useDatabase, useTableManager } from "./test-fixtures/index.js";
+import { runMigrations } from "./run-migrations.js";
 
 const MIGRATIONS_DIR = "test_migrations";
 const DATABASE = "test_hexai__running_migration";

@@ -3,8 +3,8 @@ import {
     runWithConfig,
     ContractsPluginConfig,
     RunWithConfigOptions,
-} from "./cli";
-import type { MessageType } from "./domain/types";
+} from "./cli.js";
+import type { MessageType } from "./domain/types.js";
 
 const VALID_MESSAGE_TYPES: MessageType[] = ["event", "command", "query"];
 

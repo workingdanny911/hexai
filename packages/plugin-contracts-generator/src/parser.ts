@@ -16,17 +16,17 @@ import type {
     TypeDefinition,
     TypeDefinitionKind,
     TypeRef,
-} from "./domain";
-import { mergeDecoratorNames } from "./domain";
-import { extractFieldsFromMembers, parseTypeNode } from "./ast-utils";
+} from "./domain/index.js";
+import { mergeDecoratorNames } from "./domain/index.js";
+import { extractFieldsFromMembers, parseTypeNode } from "./ast-utils.js";
 import {
     extractClassSourceText,
     getBaseClassName,
     getDecoratorOptions,
     hasDecorator,
     hasExportModifier,
-} from "./class-analyzer";
-import { extractImports } from "./import-analyzer";
+} from "./class-analyzer.js";
+import { extractImports } from "./import-analyzer.js";
 
 export type { MessageType };
 

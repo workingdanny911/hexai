@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as path from "path";
-import { generateApplicationBuilder } from "./index";
+import { generateApplicationBuilder } from "./index.js";
 
 async function main() {
     const args = process.argv.slice(2);

@@ -6,8 +6,8 @@ import {
     CommandHandlerMetadata,
     EventHandlerMetadata,
     QueryHandlerMetadata,
-} from "./types";
-import { MessageClassNotFoundError } from "./errors";
+} from "./types.js";
+import { MessageClassNotFoundError } from "./errors.js";
 
 /**
  * Extracts handler metadata from TypeScript files using AST parsing

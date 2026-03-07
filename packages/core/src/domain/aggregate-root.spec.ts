@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 
-import { AggregateRoot } from "./aggregate-root";
-import { DomainEvent } from "./domain-event";
-import { Id } from "./identifiable";
+import { AggregateRoot } from "./aggregate-root.js";
+import { DomainEvent } from "./domain-event.js";
+import { Id } from "./identifiable.js";
 
 class TestId extends Id<string> {}
 

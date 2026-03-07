@@ -6,7 +6,7 @@ import {
     expectFileContains,
     expectGeneratedFiles,
 } from "@e2e/helpers";
-import type { ProcessContextResult } from "@/index";
+import type { ProcessContextResult } from "../../src/index.js";
 
 /**
  * E2E: Module Structure

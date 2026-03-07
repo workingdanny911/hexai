@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import Database from "better-sqlite3";
 
-import { SqliteUnitOfWork } from "./sqlite-unit-of-work";
+import { SqliteUnitOfWork } from "./sqlite-unit-of-work.js";
 
 describe("unit of work", () => {
     let db: InstanceType<typeof Database>;

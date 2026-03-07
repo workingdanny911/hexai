@@ -1,7 +1,7 @@
 import { AnyMessage, Message } from "@hexaijs/core";
 
-import { EventPublisher } from "./event-publisher";
-import { ExecutionScope } from "./execution-scope";
+import { EventPublisher } from "./event-publisher.js";
+import { ExecutionScope } from "./execution-scope.js";
 
 interface PublishCallback {
     (event: AnyMessage): void | Promise<void>;

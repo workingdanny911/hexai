@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { ErrorResult, SuccessResult } from "@/application";
+import { ErrorResult, SuccessResult } from "./application.js";
 
 describe("SuccessResult", () => {
     test("getOrThrow returns the data", () => {

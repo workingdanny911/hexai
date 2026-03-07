@@ -3,11 +3,11 @@ import { Client, ClientBase } from "pg";
 
 import { Propagation, TransactionHooks } from "@hexaijs/core";
 import type { TransactionHook } from "@hexaijs/core";
-import { DatabaseManager, isDatabaseError, TableManager } from "@/helpers";
-import { PostgresConfig } from "@/config";
-import { runHexaiMigrations } from "@/run-hexai-migrations";
-import { PostgresTransactionOptions } from "@/types";
-import { PostgresUnitOfWork } from "./postgres-unit-of-work";
+import { DatabaseManager, isDatabaseError, TableManager } from "./helpers.js";
+import { PostgresConfig } from "./config/index.js";
+import { runHexaiMigrations } from "./run-hexai-migrations.js";
+import { PostgresTransactionOptions } from "./types.js";
+import { PostgresUnitOfWork } from "./postgres-unit-of-work.js";
 
 export function createTestContext(dbUrl: string | PostgresConfig) {
     const config =

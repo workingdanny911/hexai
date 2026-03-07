@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, test } from "vitest";
 import Database from "better-sqlite3";
 
 import { AggregateRoot, DuplicateObjectError, Id } from "@hexaijs/core";
-import { SqliteRepositoryForTest } from "./sqlite-repository-for-test";
+import { SqliteRepositoryForTest } from "./sqlite-repository-for-test.js";
 
 class CounterId extends Id<string> {}
 

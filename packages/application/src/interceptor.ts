@@ -1,7 +1,7 @@
 import type { Message } from "@hexaijs/core";
-import type { Command } from "./command";
-import type { Query } from "./query";
-import type { Result } from "./application";
+import type { Command } from "./command.js";
+import type { Query } from "./query.js";
+import type { Result } from "./application.js";
 
 // =============================================================================
 // Interception Context (Discriminated Union)

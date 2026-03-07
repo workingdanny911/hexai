@@ -9,7 +9,7 @@ import type {
     UnionType,
     IntersectionType,
     Field,
-} from "./domain";
+} from "./domain/index.js";
 
 const PRIMITIVE_TYPE_NAMES = new Set([
     "string",

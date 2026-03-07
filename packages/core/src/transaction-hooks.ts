@@ -1,4 +1,4 @@
-import type { TransactionHook } from "./unit-of-work";
+import type { TransactionHook } from "./unit-of-work.js";
 
 export class TransactionHooks {
     private beforeCommitHooks: TransactionHook[] = [];

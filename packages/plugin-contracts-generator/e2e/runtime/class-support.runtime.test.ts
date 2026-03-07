@@ -1,6 +1,6 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
-import { E2ETestContext, importGeneratedModule } from "../helpers";
-import type { ProcessContextResult } from "@/index";
+import { E2ETestContext, importGeneratedModule } from "../helpers/index.js";
+import type { ProcessContextResult } from "../../src/index.js";
 
 describe("Runtime: Class Support", () => {
     const ctx = new E2ETestContext("class-support");

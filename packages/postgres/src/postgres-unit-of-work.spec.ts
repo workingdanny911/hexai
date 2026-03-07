@@ -3,14 +3,14 @@ import * as pg from "pg";
 import _ from "lodash";
 
 import { Propagation } from "@hexaijs/core";
-import { IsolationLevel } from "./types";
-import { DefaultPostgresUnitOfWork } from "./postgres-unit-of-work";
+import { IsolationLevel } from "./types.js";
+import { DefaultPostgresUnitOfWork } from "./postgres-unit-of-work.js";
 import {
     newClient,
     useClient,
     useDatabase,
     useTableManager,
-} from "@/test-fixtures";
+} from "./test-fixtures/index.js";
 
 const DATABASE = "test_hexai__uow";
 const TABLE = "_test";

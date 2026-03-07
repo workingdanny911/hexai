@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 
-import { RegistryGenerator, ContextMessages } from "./registry-generator";
-import type { DomainEvent, Command } from "./domain/types";
+import { RegistryGenerator, ContextMessages } from "./registry-generator.js";
+import type { DomainEvent, Command } from "./domain/types.js";
 
 describe("RegistryGenerator", () => {
     const generator = new RegistryGenerator({

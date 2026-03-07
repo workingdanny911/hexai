@@ -1,4 +1,4 @@
-export { partialMatch } from "./partial-match";
+export { partialMatch } from "./partial-match.js";
 
 export async function waitForTicks(number = 10): Promise<void> {
     for (let i = 0; i < number; i++) {

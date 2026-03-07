@@ -1,6 +1,6 @@
 import pino from "pino";
 
-import type { Logger, LoggerConfig } from "./logger";
+import type { Logger, LoggerConfig } from "./logger.js";
 
 export function createLogger(config: LoggerConfig): Logger {
     const pinoOptions: pino.LoggerOptions = {

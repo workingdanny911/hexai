@@ -1,6 +1,6 @@
 import type { HexaiCliPlugin, CliOption } from "@hexaijs/cli";
 import * as path from "path";
-import { generateApplicationBuilder } from "./index";
+import { generateApplicationBuilder } from "./index.js";
 
 /**
  * Configuration for the application-builder plugin.

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { Query } from "./query";
+import { Query } from "./query.js";
 
 class TestQuery extends Query<{ value: string }> {
     constructor(value: string = "test") {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { MessageTrace } from "@hexaijs/core";
-import { ExecutionScope } from "./execution-scope";
+import { ExecutionScope } from "./execution-scope.js";
 
 describe("ExecutionScope", () => {
     describeFieldBehavior({

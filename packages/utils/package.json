@@ -1,51 +1,52 @@
 {
-    "name": "@hexaijs/utils",
-    "publishConfig": {
-        "access": "public"
+  "name": "@hexaijs/utils",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.2.2",
+  "type": "module",
+  "description": "A collection of utility functions and value objects for hexai projects",
+  "license": "MIT",
+  "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
+  "contributors": [
+    "Seungcheol Baek <victoryiron.baek@gmail.com>",
+    "Donghyun Lee <edonghyun@naver.com>"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/workingdanny911/hexai.git",
+    "directory": "packages/utils"
+  },
+  "homepage": "https://github.com/workingdanny911/hexai#readme",
+  "bugs": {
+    "url": "https://github.com/workingdanny911/hexai/issues"
+  },
+  "keywords": [
+    "hexai",
+    "hexagonal",
+    "clean-architecture",
+    "utilities",
+    "typescript"
+  ],
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "exports": {
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js"
     },
-    "version": "0.2.0",
-    "type": "module",
-    "description": "A collection of utility functions and value objects for hexai projects",
-    "license": "MIT",
-    "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
-    "contributors": [
-        "Seungcheol Baek <victoryiron.baek@gmail.com>",
-        "Donghyun Lee <edonghyun@naver.com>"
-    ],
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/workingdanny911/hexai.git",
-        "directory": "packages/utils"
-    },
-    "homepage": "https://github.com/workingdanny911/hexai#readme",
-    "bugs": {
-        "url": "https://github.com/workingdanny911/hexai/issues"
-    },
-    "keywords": [
-        "hexai",
-        "hexagonal",
-        "clean-architecture",
-        "utilities",
-        "typescript"
-    ],
-    "files": [
-        "dist",
-        "LICENSE"
-    ],
-    "exports": {
-        "./config": {
-            "types": "./dist/config/index.d.ts",
-            "import": "./dist/config/index.js"
-        },
-        "./package.json": "./package.json"
-    },
-    "scripts": {
-        "build": "tsup"
-    },
-    "dependencies": {
-        "ezcfg": "^0.1.0"
-    },
-    "devDependencies": {
-        "@hexaijs/tooling": "workspace:*"
-    }
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsgo -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "ezcfg": "^0.3.0"
+  },
+  "devDependencies": {
+    "@hexaijs/tooling": "workspace:*",
+    "@typescript/native-preview": "^7.0.0-dev"
+  }
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import * as pg from "pg";
 
-import { PostgresConfig } from "@/config";
+import { PostgresConfig } from "./config/index.js";
 
 export class ClientWrapper {
     protected client: pg.Client;

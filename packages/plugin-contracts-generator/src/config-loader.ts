@@ -1,11 +1,11 @@
 import { resolve, dirname, basename, relative } from "path";
 import ts from "typescript";
 
-import { ConfigLoadError } from "./errors";
-import { FileSystem, nodeFileSystem } from "./file-system";
-import type { DecoratorNames, ResponseNamingConvention } from "./domain";
-import { mergeDecoratorNames } from "./domain";
-import { ContextConfig, type InputContextConfig } from "./context-config";
+import { ConfigLoadError } from "./errors.js";
+import { FileSystem, nodeFileSystem } from "./file-system.js";
+import type { DecoratorNames, ResponseNamingConvention } from "./domain/index.js";
+import { mergeDecoratorNames } from "./domain/index.js";
+import { ContextConfig, type InputContextConfig } from "./context-config.js";
 
 const SUPPORTED_GLOB_PARTS_COUNT = 2;
 
@@ -223,4 +223,4 @@ export class ConfigLoader {
     }
 }
 
-export { ConfigLoadError } from "./errors";
+export { ConfigLoadError } from "./errors.js";

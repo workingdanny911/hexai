@@ -1,6 +1,6 @@
 import { Message } from "@hexaijs/core";
 
-import { EventHandler } from "./event-handler";
+import { EventHandler } from "./event-handler.js";
 
 interface Selector {
     method: string;

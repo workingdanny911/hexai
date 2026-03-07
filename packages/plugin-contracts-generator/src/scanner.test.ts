@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { Scanner } from "./scanner";
-import type { DecoratorNames, MessageType } from "./domain";
+import { Scanner } from "./scanner.js";
+import type { DecoratorNames, MessageType } from "./domain/index.js";
 
 describe("Scanner", () => {
     it("should find files containing @PublicEvent or @PublicCommand decorator", async () => {

@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { execSync } from "node:child_process";
 import * as path from "node:path";
-import { makeContext, useContext } from "./test";
+import { makeContext, useContext } from "./test.js";
 
 const CLI_PATH = path.join(__dirname, "../dist/cli.js");
 const EXIT_CODE_ERROR = 1;

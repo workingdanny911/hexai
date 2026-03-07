@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { ApplicationBuilder } from "@/application";
-import { CommandHandler } from "@/command-handler";
-import { EventHandler } from "@/event-handler";
-import { DummyCommand, DummyApplicationContext } from "@/test";
+import { ApplicationBuilder } from "../application.js";
+import { CommandHandler } from "../command-handler.js";
+import { EventHandler } from "../event-handler.js";
+import { DummyCommand, DummyApplicationContext } from "../test/index.js";
 
 describe("ApplicationBuilder", () => {
     let sut: ApplicationBuilder;
