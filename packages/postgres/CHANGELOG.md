@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.8.4] - 2026-03-20
+
+### Added
+
+- `PostgresEventStore.stream(afterPosition, batchSize)` — cursor-like batch streaming via repeated queries
+- `PostgresEventStore.getEventCount(afterPosition)` — COUNT query for events after a given position
+
+## [0.8.3] - 2026-03-07
+
+### Changed
+
+- Build tool migrated from tsup to tsgo (`@typescript/native-preview`)
+- Module resolution switched to `nodenext` with explicit `.js` import extensions
+- Removed path aliases (`@/*`) in favor of relative imports
+- ESM-only output (CJS removed)
+
+## [0.8.2] - 2026-02-25
+
+### Changed
+
+- Peer dependency: `ezcfg` `^0.1.0` → `^0.3.0`
+
+## [0.8.1] - 2026-02-22
+
+### Added
+
+- Re-export `PostgresConfig` from `ezcfg/postgres` for convenient access
+- `envSource` support in PostgresConfig creation
+
+### Changed
+
+- Peer dependency: `@hexaijs/core` `^0.8.0` → `^0.9.0`
+
 ## [0.8.0] - 2026-02-15
 
 ### Added

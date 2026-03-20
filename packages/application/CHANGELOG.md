@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3] - 2026-03-07
+
+### Changed
+
+- Build tool migrated from tsup to tsgo (`@typescript/native-preview`)
+- Module resolution switched to `nodenext` with explicit `.js` import extensions
+- Removed path aliases (`@/*`) in favor of relative imports
+- ESM-only output (CJS removed)
+- Peer dependency: `@hexaijs/core` `^0.8.0` → `^0.9.0`
+
 ## [0.5.2] - 2026-02-15
 
 ### Changed

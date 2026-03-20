@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.9.2] - 2026-03-20
+
+### Added
+
+- `EventStore.stream?(afterPosition, batchSize): AsyncGenerator<StoredEvent>` — optional batch-based async streaming
+- `EventStore.getEventCount?(afterPosition): Promise<number>` — optional event count query
+
+Both methods are optional, so existing `EventStore` implementations are unaffected.
+
+## [0.9.1] - 2026-03-07
+
+### Changed
+
+- Build tool migrated from tsup to tsgo (`@typescript/native-preview`)
+- Module resolution switched to `nodenext` with explicit `.js` import extensions
+- Removed path aliases (`@/*`) in favor of relative imports
+- ESM-only output (CJS removed)
+
 ## [0.9.0] - 2026-02-19
 
 ### Breaking Changes
