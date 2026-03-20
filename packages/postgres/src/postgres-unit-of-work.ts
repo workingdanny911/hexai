@@ -148,7 +148,7 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
 }
 
 class PostgresTransaction {
-    private initialized = false;
+    private startPromise: Promise<void> | null = null;
     private closed = false;
     private abortError?: Error;
 
@@ -210,7 +210,7 @@ class PostgresTransaction {
     }
 
     public getClient(): pg.ClientBase {
-        if (!this.initialized) {
+        if (!this.client) {
             throw new Error(
                 "Transaction not initialized. Use withClient() inside scope() to trigger lazy initialization."
             );
@@ -218,12 +218,14 @@ class PostgresTransaction {
         return this.client;
     }
 
-    private async ensureStarted(): Promise<void> {
-        if (this.initialized) {
-            return;
+    private ensureStarted(): Promise<void> {
+        if (!this.startPromise) {
+            this.startPromise = this.doStart();
         }
+        return this.startPromise;
+    }
 
-        this.initialized = true;
+    private async doStart(): Promise<void> {
         await this.initializeClient();
         await this.beginTransaction();
     }
@@ -296,7 +298,7 @@ class PostgresTransaction {
 
     private async finalizeIfRoot(): Promise<void> {
         if (this.nestingDepth === 0) {
-            if (!this.initialized) return;
+            if (!this.startPromise || !this.client) return;
 
             if (this.isAborted()) {
                 await this.hooks.executeRollback(
