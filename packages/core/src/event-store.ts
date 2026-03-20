@@ -15,4 +15,9 @@ export interface EventStore {
         afterPosition: number,
         limit?: number
     ): Promise<EventStoreFetchResult>;
+    stream?(
+        afterPosition: number,
+        batchSize: number
+    ): AsyncGenerator<StoredEvent>;
+    getEventCount?(afterPosition: number): Promise<number>;
 }

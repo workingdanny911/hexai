@@ -124,6 +124,44 @@ export class PostgresEventStore implements EventStore {
         });
     }
 
+    async *stream(
+        afterPosition: number,
+        batchSize: number
+    ): AsyncGenerator<StoredEvent> {
+        let currentPosition = afterPosition;
+
+        while (true) {
+            const events = await this.uow.withClient(async (client) => {
+                const result = await client.query<EventRow>(
+                    `SELECT position, message_type, headers, payload
+                     FROM ${this.tableName}
+                     WHERE position > $1
+                     ORDER BY position ASC
+                     LIMIT $2`,
+                    [currentPosition, batchSize]
+                );
+                return result.rows.map((row) => this.deserializeRow(row));
+            });
+
+            if (events.length === 0) break;
+
+            for (const storedEvent of events) {
+                currentPosition = storedEvent.position;
+                yield storedEvent;
+            }
+        }
+    }
+
+    async getEventCount(afterPosition: number): Promise<number> {
+        return this.uow.withClient(async (client) => {
+            const result = await client.query<{ count: string }>(
+                `SELECT COUNT(*) as count FROM ${this.tableName} WHERE position > $1`,
+                [afterPosition]
+            );
+            return Number(result.rows[0].count);
+        });
+    }
+
     async getLastPosition(): Promise<number> {
         return this.uow.withClient(async (client) => {
             return this.queryLastPosition(client);
