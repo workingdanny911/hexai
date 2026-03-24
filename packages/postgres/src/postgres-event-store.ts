@@ -129,27 +129,40 @@ export class PostgresEventStore implements EventStore {
         batchSize: number
     ): AsyncGenerator<StoredEvent> {
         let currentPosition = afterPosition;
+        let nextBatch = this.fetchBatch(currentPosition, batchSize);
 
-        while (true) {
-            const events = await this.uow.withClient(async (client) => {
-                const result = await client.query<EventRow>(
-                    `SELECT position, message_type, headers, payload
-                     FROM ${this.tableName}
-                     WHERE position > $1
-                     ORDER BY position ASC
-                     LIMIT $2`,
-                    [currentPosition, batchSize]
-                );
-                return result.rows.map((row) => this.deserializeRow(row));
-            });
+        try {
+            while (true) {
+                const events = await nextBatch;
+                if (events.length === 0) break;
 
-            if (events.length === 0) break;
+                currentPosition = events[events.length - 1].position;
+                nextBatch = this.fetchBatch(currentPosition, batchSize);
 
-            for (const storedEvent of events) {
-                currentPosition = storedEvent.position;
-                yield storedEvent;
+                for (const event of events) {
+                    yield event;
+                }
             }
+        } finally {
+            nextBatch.catch(() => {});
         }
+    }
+
+    private fetchBatch(
+        afterPosition: number,
+        limit: number
+    ): Promise<StoredEvent[]> {
+        return this.uow.withClient(async (client) => {
+            const result = await client.query<EventRow>(
+                `SELECT position, message_type, headers, payload
+                 FROM ${this.tableName}
+                 WHERE position > $1
+                 ORDER BY position ASC
+                 LIMIT $2`,
+                [afterPosition, limit]
+            );
+            return result.rows.map((row) => this.deserializeRow(row));
+        });
     }
 
     async getEventCount(afterPosition: number): Promise<number> {

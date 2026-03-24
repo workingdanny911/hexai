@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { Message } from "@hexaijs/core";
 
 import { PostgresEventStore } from "./postgres-event-store.js";
@@ -205,6 +205,141 @@ describe("PostgresEventStore", () => {
             const lastPosition = await eventStore.getLastPosition();
 
             expect(lastPosition).toBe(3);
+        });
+    });
+
+    describe("stream", () => {
+        test("yields all events after specified position", async () => {
+            await eventStore.storeAll(
+                createTestEvents(
+                    TEST_VALUES.FIRST,
+                    TEST_VALUES.SECOND,
+                    TEST_VALUES.THIRD
+                )
+            );
+
+            const events = [];
+            for await (const event of eventStore.stream(1, 10)) {
+                events.push(event);
+            }
+
+            expect(events).toHaveLength(2);
+            expect(events[0].position).toBe(2);
+            expect(events[1].position).toBe(3);
+        });
+
+        test("yields all events when afterPosition is 0", async () => {
+            await eventStore.storeAll(
+                createTestEvents(TEST_VALUES.FIRST, TEST_VALUES.SECOND)
+            );
+
+            const events = [];
+            for await (const event of eventStore.stream(0, 10)) {
+                events.push(event);
+            }
+
+            expect(events).toHaveLength(2);
+            expect(events[0].position).toBe(1);
+            expect(events[1].position).toBe(2);
+        });
+
+        test("yields events in multiple batches", async () => {
+            await eventStore.storeAll(
+                createTestEvents(
+                    TEST_VALUES.FIRST,
+                    TEST_VALUES.SECOND,
+                    TEST_VALUES.THIRD,
+                    TEST_VALUES.FOURTH
+                )
+            );
+
+            const events = [];
+            for await (const event of eventStore.stream(0, 2)) {
+                events.push(event);
+            }
+
+            expect(events).toHaveLength(4);
+            expect(events[0].position).toBe(1);
+            expect(events[3].position).toBe(4);
+        });
+
+        test("handles early termination without unhandled rejection", async () => {
+            await eventStore.storeAll(
+                createTestEvents(
+                    TEST_VALUES.FIRST,
+                    TEST_VALUES.SECOND,
+                    TEST_VALUES.THIRD,
+                    TEST_VALUES.FOURTH
+                )
+            );
+
+            const events = [];
+            for await (const event of eventStore.stream(0, 2)) {
+                events.push(event);
+                if (events.length === 1) break;
+            }
+
+            expect(events).toHaveLength(1);
+            expect(events[0].position).toBe(1);
+        });
+
+        test("prefetches next batch before yielding current batch", async () => {
+            await eventStore.storeAll(
+                createTestEvents(
+                    TEST_VALUES.FIRST,
+                    TEST_VALUES.SECOND,
+                    TEST_VALUES.THIRD,
+                    TEST_VALUES.FOURTH
+                )
+            );
+
+            const timeline: string[] = [];
+            const original = uow.withClient.bind(uow);
+            const spy = vi.spyOn(uow, "withClient").mockImplementation(
+                async <T>(fn: (client: any) => Promise<T>): Promise<T> => {
+                    timeline.push("fetch-start");
+                    const result = await original(fn);
+                    timeline.push("fetch-end");
+                    return result;
+                }
+            );
+
+            for await (const event of eventStore.stream(0, 2)) {
+                timeline.push(`event-${event.position}`);
+            }
+
+            spy.mockRestore();
+
+            const secondFetchStart = timeline.indexOf(
+                "fetch-start",
+                timeline.indexOf("fetch-start") + 1
+            );
+            const firstEventYield = timeline.indexOf("event-1");
+
+            expect(secondFetchStart).toBeGreaterThan(-1);
+            expect(secondFetchStart).toBeLessThan(firstEventYield);
+        });
+
+        test("yields nothing when no events exist after position", async () => {
+            await eventStore.storeAll(
+                createTestEvents(TEST_VALUES.FIRST, TEST_VALUES.SECOND)
+            );
+
+            const events = [];
+            for await (const event of eventStore.stream(2, 10)) {
+                events.push(event);
+            }
+
+            expect(events).toHaveLength(0);
+        });
+
+        test("yields nothing when store is empty", async () => {
+            const events = [];
+            for await (const event of eventStore.stream(0, 10)) {
+                events.push(event);
+            }
+
+            expect(events).toHaveLength(0);
         });
     });
 
