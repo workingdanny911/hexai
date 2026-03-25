@@ -281,7 +281,7 @@ export class FileCopier {
             const relativePath = path.relative(outputDir, filePath);
             lines.push(this.createExportStatement(relativePath));
         }
-        return lines.join("\n");
+        return lines.sort().join("\n");
     }
 
     private async readFileContent(absolutePath: string): Promise<string> {

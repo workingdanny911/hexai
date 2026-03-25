@@ -152,15 +152,15 @@ describe("E2E: Module Structure", () => {
             expect(indexContent).toContain("is-empty");
         });
 
-        it("should export entry points before dependencies", async () => {
+        it("should produce sorted exports for deterministic output", async () => {
             const indexContent = await readFile(
                 ctx.getOutputFile("module-structure", "index.ts"),
                 "utf-8"
             );
-            const lines = indexContent.split("\n");
+            const lines = indexContent.split("\n").filter(Boolean);
 
-            // Entry point should come first
-            expect(lines[0]).toContain("commands-but-different-filename");
+            const sorted = [...lines].sort();
+            expect(lines).toEqual(sorted);
         });
     });
 });
