@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.6] - 2026-03-25
+
+### Changed
+
+- `PostgresEventStore.stream()` now prefetches the next batch while yielding current events, hiding DB latency behind processing time
+- Guard against unhandled rejection on early stream termination with try/finally
+
 ## [0.8.4] - 2026-03-20
 
 ### Added

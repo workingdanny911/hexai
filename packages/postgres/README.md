@@ -286,7 +286,19 @@ await unitOfWork.scope(async () => {
 });
 ```
 
-Custom table name:
+#### Streaming Events
+
+Use `stream()` for processing large volumes of events (e.g., projection rebuilds). It returns an `AsyncGenerator` that fetches events in batches:
+
+```typescript
+for await (const event of eventStore.stream(0, 500)) {
+    await projector.apply(event);
+}
+```
+
+The stream prefetches the next batch while yielding current events, hiding DB latency behind event processing time. Early termination (e.g., `break`) is safe — pending prefetch promises are handled gracefully.
+
+#### Custom Table Name
 
 ```typescript
 const eventStore = new PostgresEventStore(unitOfWork, {
