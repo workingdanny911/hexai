@@ -118,5 +118,45 @@ describe("Registry Generation E2E", () => {
             expect(content).toContain(".register(StockReceived)");
             expect(content).toContain(".register(ReceiveStock)");
         });
+
+        it("should produce identical registry regardless of context input order", async () => {
+            const ordersFirst = await multiCtx.runParserForContexts([
+                { contextName: "orders", sourceSubPath: "orders" },
+                { contextName: "inventory", sourceSubPath: "inventory" },
+            ]);
+            const registryPath1 = await multiCtx.generateRegistry(ordersFirst);
+            const content1 = await readFile(registryPath1, "utf-8");
+
+            const inventoryFirst = await multiCtx.runParserForContexts([
+                { contextName: "inventory", sourceSubPath: "inventory" },
+                { contextName: "orders", sourceSubPath: "orders" },
+            ]);
+            const registryPath2 = await multiCtx.generateRegistry(inventoryFirst);
+            const content2 = await readFile(registryPath2, "utf-8");
+
+            expect(content1).toBe(content2);
+        });
+
+        it("should place inventory imports and registers before orders (alphabetical)", async () => {
+            const results = await multiCtx.runParserForContexts([
+                { contextName: "orders", sourceSubPath: "orders" },
+                { contextName: "inventory", sourceSubPath: "inventory" },
+            ]);
+
+            const registryPath = await multiCtx.generateRegistry(results);
+            const content = await readFile(registryPath, "utf-8");
+
+            const inventoryImportIdx = content.indexOf('from "./inventory"');
+            const ordersImportIdx = content.indexOf('from "./orders"');
+            expect(inventoryImportIdx).toBeLessThan(ordersImportIdx);
+
+            const lines = content.split("\n");
+            const registerLines = lines.filter((l) => l.includes(".register("));
+            const firstRegisterIsInventory = registerLines[0].includes("Stock") ||
+                registerLines[0].includes("Adjust") ||
+                registerLines[0].includes("Receive") ||
+                registerLines[0].includes("Reserve");
+            expect(firstRegisterIsInventory).toBe(true);
+        });
     });
 });

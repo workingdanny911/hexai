@@ -169,6 +169,77 @@ describe("RegistryGenerator", () => {
         );
     });
 
+    describe("deterministic output", () => {
+        test("sorts contexts by contextName", () => {
+            const contexts: ContextMessages[] = [
+                {
+                    contextName: "video-lesson",
+                    events: [createEvent("VideoStarted")],
+                    commands: [],
+                },
+                {
+                    contextName: "lecture",
+                    events: [createEvent("LectureCreated")],
+                    commands: [],
+                },
+            ];
+
+            const result = generator.generate(contexts);
+
+            const lectureIdx = result.indexOf("LectureCreated");
+            const videoIdx = result.indexOf("VideoStarted");
+            expect(lectureIdx).toBeLessThan(videoIdx);
+        });
+
+        test("sorts messages within a context by name", () => {
+            const contexts: ContextMessages[] = [
+                {
+                    contextName: "lecture",
+                    events: [
+                        createEvent("LectureExpanded"),
+                        createEvent("LectureCreated"),
+                    ],
+                    commands: [
+                        createCommand("DeleteLecture"),
+                        createCommand("CreateLecture"),
+                    ],
+                },
+            ];
+
+            const result = generator.generate(contexts);
+
+            const lines = result.split("\n");
+            const registerLines = lines.filter((l) =>
+                l.includes(".register(")
+            );
+
+            expect(registerLines).toEqual([
+                "    .register(LectureCreated)",
+                "    .register(LectureExpanded)",
+                "    .register(CreateLecture)",
+                "    .register(DeleteLecture);",
+            ]);
+        });
+
+        test("produces identical output regardless of input order", () => {
+            const contextA: ContextMessages = {
+                contextName: "lecture",
+                events: [createEvent("B"), createEvent("A")],
+                commands: [createCommand("D"), createCommand("C")],
+            };
+            const contextB: ContextMessages = {
+                contextName: "video-lesson",
+                events: [createEvent("Z")],
+                commands: [],
+            };
+
+            const result1 = generator.generate([contextA, contextB]);
+            const result2 = generator.generate([contextB, contextA]);
+
+            expect(result1).toBe(result2);
+        });
+    });
+
     describe("namespace mode", () => {
         const nsGenerator = new RegistryGenerator({
             messageRegistryImport: "@hexaijs/core",

@@ -31,6 +31,27 @@ function getAllMessages(ctx: ContextMessages): readonly Message[] {
     return [...ctx.events, ...ctx.commands, ...(ctx.queries ?? [])];
 }
 
+function compareStrings(a: string, b: string): number {
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function sortByName<T extends { name: string }>(items: readonly T[]): T[] {
+    return [...items].sort((a, b) => compareStrings(a.name, b.name));
+}
+
+function sortContexts(
+    contexts: readonly ContextMessages[]
+): ContextMessages[] {
+    return [...contexts]
+        .sort((a, b) => compareStrings(a.contextName, b.contextName))
+        .map((ctx) => ({
+            ...ctx,
+            events: sortByName(ctx.events),
+            commands: sortByName(ctx.commands),
+            queries: ctx.queries ? sortByName(ctx.queries) : undefined,
+        }));
+}
+
 export class RegistryGenerator {
     private readonly options: RegistryGeneratorOptions;
 
@@ -39,7 +60,9 @@ export class RegistryGenerator {
     }
 
     generate(contexts: readonly ContextMessages[]): string {
-        const allMessages = contexts.flatMap((ctx) =>
+        const sorted = sortContexts(contexts);
+
+        const allMessages = sorted.flatMap((ctx) =>
             getAllMessages(ctx).map((message) => ({
                 message,
                 contextName: ctx.contextName,
@@ -51,10 +74,10 @@ export class RegistryGenerator {
         }
 
         if (this.options.useNamespace) {
-            return this.generateWithNamespace(contexts, allMessages);
+            return this.generateWithNamespace(sorted, allMessages);
         }
 
-        const imports = this.generateImports(contexts);
+        const imports = this.generateImports(sorted);
         const registrations = this.generateRegistrations(allMessages);
 
         return [
