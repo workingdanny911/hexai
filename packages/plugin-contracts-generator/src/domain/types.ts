@@ -170,6 +170,20 @@ export type Message = DomainEvent | Command | Query;
 /** Used to filter which decorators the scanner should look for. */
 export type MessageType = Message['messageType'];
 
+export type EntryStrategy = 'graph' | 'symbols';
+
+export const VALID_ENTRY_STRATEGIES: readonly EntryStrategy[] = [
+  'graph',
+  'symbols',
+];
+
+export function isEntryStrategy(value: unknown): value is EntryStrategy {
+  return (
+    typeof value === 'string' &&
+    VALID_ENTRY_STRATEGIES.includes(value as EntryStrategy)
+  );
+}
+
 export type ImportSource =
   | { readonly type: 'local'; readonly path: string }
   | { readonly type: 'external'; readonly package: string };
@@ -256,6 +270,7 @@ export interface Config {
   readonly exclude?: readonly string[];
   readonly externalPackages?: Readonly<Record<string, string>>;
   readonly decoratorNames?: DecoratorNames;
+  readonly entryStrategy?: EntryStrategy;
   readonly responseNamingConventions?: readonly ResponseNamingConvention[];
 }
 

@@ -6,7 +6,7 @@ Defines the core domain model for the Contracts Generator.
 
 ### 1. Message (Message Contract Target)
 
-Message is a data structure used for inter-system communication. Messages are marked by class decorators (`@PublicEvent()`, `@PublicCommand()`, `@PublicQuery()`), extracted as classes, and registered in `MessageRegistry` when registry generation is enabled.
+Message is a data structure used for inter-system communication. Messages are marked by class decorators (`@PublicEvent()`, `@PublicCommand()`, `@PublicQuery()`), extracted as classes, and registered in `MessageRegistry` when they are selected and registry generation is enabled.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -42,7 +42,7 @@ isQuery(msg: Message): msg is Query              // messageType === 'query'
 
 ### 2. PublicContract (General Contract Target)
 
-PublicContract is a general TypeScript declaration explicitly exposed to the generated contracts package. It is marked by a leading TypeScript comment, not by decorator syntax.
+PublicContract is a general TypeScript declaration explicitly exposed to the generated contracts package. Classes can use the no-op `@PublicContract()` decorator. Interfaces, type aliases, and enums must use a leading TypeScript comment marker because TypeScript decorators cannot be applied to those declarations.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -60,18 +60,27 @@ PublicContract is a general TypeScript declaration explicitly exposed to the gen
 Supported markers:
 
 ```typescript
+@PublicContract()
+export class OrderSnapshotContract {
+  constructor(public readonly orderId: string) {}
+}
+
 // @PublicContract()
 interface OrderSnapshot {
   orderId: string;
+}
+
+/* @PublicContract() */
+enum OrderChannel {
+  Online = "online",
+  Store = "store",
 }
 
 /** @PublicContract() */
 type OrderStatus = "draft" | "placed";
 ```
 
-`PublicContract` is separate from the `Message` union. It has no `messageType`, payload, response type, or registry behavior. Comment-marked contracts are included in generated contracts output, but they are never registered in `MessageRegistry`. If a marked declaration is not exported in source, the copier adds `export` in the generated output.
-
-`@PublicContract()` decorator syntax is not supported. TypeScript decorators cannot be applied to `interface` or `type` declarations, so the generator treats `PublicContract` only as a leading comment marker for `class`, `interface`, `type`, and `enum`.
+`PublicContract` is separate from the `Message` union. It has no `messageType`, payload, response type, or registry behavior. Marked contracts are included in generated contracts output, but they are never registered in `MessageRegistry`; `MessageRegistry` registers selected messages only. If a marked declaration is not exported in source, the copier adds `export` in generated output.
 
 ### 3. Field
 
@@ -285,6 +294,17 @@ Import information used by a class.
 
 **Note:** Importing a Class with `import type` will break `instanceof` at runtime
 
+In `entryStrategy: "symbols"`, import filtering operates on the original entry-file AST rather than this simplified `ClassImport` shape alone. That keeps practical TypeScript import forms intact when selected declarations need them:
+
+- default imports
+- namespace imports
+- named aliases
+- mixed default + named imports, with unused named specifiers removed when safe
+- type-only default imports
+- qualified type references such as `Types.User` and `Types.Inner.User`
+
+The strategy still models dependency traversal at file granularity after an import is retained. Referenced local dependency files are copied whole; they are not represented as symbol-sliced `TypeDefinition` subsets.
+
 ### 6. SourceFile
 
 ```
@@ -338,7 +358,7 @@ const DEFAULT_DECORATOR_NAMES: Required<DecoratorNames> = {
 
 ### 9. ContractMarkerNames
 
-Customizes comment marker names used to identify general public contracts.
+Customizes comment marker names used to identify general public contracts. The same name is also used for `@PublicContract()` class decorator detection.
 
 ```typescript
 interface ContractMarkerNames {
@@ -350,9 +370,22 @@ const DEFAULT_CONTRACT_MARKER_NAMES: Required<ContractMarkerNames> = {
 };
 ```
 
-The marker is searched in leading comments before `class`, `interface`, `type`, and `enum` declarations.
+The marker is searched as a class decorator and in leading line, block, or JSDoc comments before `class`, `interface`, `type`, and `enum` declarations. Interface, type alias, and enum declarations are comment marker only.
 
-### 10. ResponseNamingConvention
+### 10. EntryStrategy
+
+Controls how selected entry files become generated output.
+
+```typescript
+type EntryStrategy = "graph" | "symbols";
+```
+
+- `symbols` is the default. It emits selected message declarations and marked `PublicContract` declarations with minimal entry-file dependencies, while preserving retained default, namespace, aliased, mixed, type-only default, and qualified-reference import shapes.
+- `graph` is the conservative copy strategy. It copies selected entry files and their dependency graphs, preserving runtime dependencies when explicitly requested.
+- Under `graph`, message filters select graph roots and registry entries only. A selected entry file can still be copied whole with other declarations from the same file, and the pipeline logs a warning when filters are used. Use `symbols` when strict filtering is required.
+- `symbols` is AST-based and does not use the TypeScript TypeChecker as a semantic slicer. Local dependency files reached through retained imports are copied whole.
+
+### 11. ResponseNamingConvention
 
 Defines naming patterns for matching response types to messages.
 
@@ -365,7 +398,7 @@ interface ResponseNamingConvention {
 // Example: CreateUserRequest -> CreateUserResponse
 ```
 
-### 11. ExtractionResult
+### 12. ExtractionResult
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -382,7 +415,7 @@ interface ResponseNamingConvention {
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 12. ProcessContextResult
+### 13. ProcessContextResult
 
 Actual result type returned by `processContext()`.
 

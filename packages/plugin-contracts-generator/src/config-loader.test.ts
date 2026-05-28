@@ -147,6 +147,19 @@ describe("ConfigLoader", () => {
             );
         });
 
+        it("should throw ConfigLoadError for invalid entryStrategy", async () => {
+            const configLoader = new ConfigLoader();
+            const configPath =
+                "test/fixtures/config/invalid-entry-strategy/application.config.ts";
+
+            await expect(configLoader.load(configPath)).rejects.toThrow(
+                ConfigLoadError
+            );
+            await expect(configLoader.load(configPath)).rejects.toThrow(
+                'Invalid contracts.entryStrategy: "file"'
+            );
+        });
+
     });
 
     describe("DecoratorNames configuration", () => {

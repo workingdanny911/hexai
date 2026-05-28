@@ -5,8 +5,8 @@ import {
     E2ETestContext,
     expectFileContains,
     expectFileNotContains,
-    expectFileNotExists,
     expectGeneratedFiles,
+    expectTypeScriptCompiles,
 } from "@e2e/helpers";
 import type { ProcessContextResult } from "../../src/index.js";
 
@@ -46,9 +46,9 @@ describe("E2E: PublicContract comment markers", () => {
                     ["PublicStatus", "enum"],
                 ])
             );
-            expect(result.publicContracts.every((contract) => !contract.exported)).toBe(
-                true
-            );
+            expect(
+                result.publicContracts.every((contract) => contract.exported)
+            ).toBe(true);
         });
 
         it("should generate the PublicContract-only source file and barrel export", () => {
@@ -70,12 +70,20 @@ describe("E2E: PublicContract comment markers", () => {
             );
         });
 
-        it("should exclude unmarked declarations from PublicContract-only files", async () => {
+        it("should extract only marked declarations by default", async () => {
+            await expectFileContains(
+                ctx.getOutputFile("public-contract/contracts.ts"),
+                [
+                    "deriveDisplayName",
+                    "DEFAULT_STATUS",
+                    "Factory",
+                    "Status",
+                ]
+            );
             await expectFileNotContains(
                 ctx.getOutputFile("public-contract/contracts.ts"),
                 [
                     "InternalProfileRecord",
-                    "secretToken",
                     "InternalProjection",
                 ]
             );
@@ -119,15 +127,151 @@ describe("E2E: PublicContract comment markers", () => {
             await ctx.teardown();
         });
 
-        it("should not include PublicContract-only files when filtering to events", () => {
+        it("should keep PublicContract symbols when filtering messages to events", () => {
             expect(result.events).toHaveLength(0);
             expect(result.commands).toHaveLength(0);
             expect(result.queries).toHaveLength(0);
-            expect(result.publicContracts).toHaveLength(0);
-            expect(result.copiedFiles).toHaveLength(0);
-            expectFileNotExists(
-                ctx.getOutputFile("public-contract/contracts.ts")
+            expect(result.publicContracts).toHaveLength(4);
+            expect(result.copiedFiles).toHaveLength(1);
+            expectGeneratedFiles(ctx.getOutputDir(), "public-contract", [
+                "index.ts",
+                "contracts.ts",
+            ]);
+        });
+    });
+
+    describe("graph entry strategy", () => {
+        const ctx = new E2ETestContext("public-contract");
+
+        beforeAll(async () => {
+            await ctx.setup();
+            await ctx.runParser({
+                entryStrategy: "graph",
+            });
+        });
+
+        afterAll(async () => {
+            await ctx.teardown();
+        });
+
+        it("should copy the full PublicContract entry file when explicitly requested", async () => {
+            await expectFileContains(
+                ctx.getOutputFile("public-contract/contracts.ts"),
+                [
+                    "InternalProfileRecord",
+                    "deriveDisplayName",
+                    "DEFAULT_STATUS",
+                    "Factory",
+                    "Status",
+                    "InternalProjection",
+                ]
             );
+        });
+    });
+
+    describe("symbols entry strategy", () => {
+        const ctx = new E2ETestContext("public-contract");
+        let result: ProcessContextResult;
+
+        beforeAll(async () => {
+            await ctx.setup();
+            result = await ctx.runParser({
+                entryStrategy: "symbols",
+            });
+        });
+
+        afterAll(async () => {
+            await ctx.teardown();
+        });
+
+        it("should extract only marked PublicContract declarations", () => {
+            expect(result.events).toHaveLength(0);
+            expect(result.commands).toHaveLength(0);
+            expect(result.queries).toHaveLength(0);
+            expect(result.publicContracts).toHaveLength(4);
+        });
+
+        it("should extract target declarations and required runtime dependencies only", async () => {
+            await expectFileContains(
+                ctx.getOutputFile("public-contract/contracts.ts"),
+                [
+                    "deriveDisplayName",
+                    "DEFAULT_STATUS",
+                    "Factory",
+                    "Status",
+                    "Factory.create()",
+                    "Status.Active",
+                ]
+            );
+            await expectFileNotContains(
+                ctx.getOutputFile("public-contract/contracts.ts"),
+                [
+                    "InternalProfileRecord",
+                    "InternalProjection",
+                ]
+            );
+        });
+    });
+
+    describe("removeDecorators output", () => {
+        it("should remove PublicContract decorators and decorator imports in graph mode", async () => {
+            const ctx = new E2ETestContext("public-contract");
+            await ctx.setup();
+
+            try {
+                await ctx.runParser({
+                    entryStrategy: "graph",
+                    removeDecorators: true,
+                });
+
+                await expectFileNotContains(
+                    ctx.getOutputFile("public-contract/contracts.ts"),
+                    [
+                        "@PublicContract",
+                        "@hexaijs/contracts/decorators",
+                    ]
+                );
+            } finally {
+                await ctx.teardown();
+            }
+        });
+
+        it("should remove PublicContract decorators and decorator imports in symbols mode", async () => {
+            const ctx = new E2ETestContext("public-contract");
+            await ctx.setup();
+
+            try {
+                await ctx.runParser({
+                    entryStrategy: "symbols",
+                    removeDecorators: true,
+                });
+
+                await expectFileNotContains(
+                    ctx.getOutputFile("public-contract/contracts.ts"),
+                    [
+                        "@PublicContract",
+                        "@hexaijs/contracts/decorators",
+                    ]
+                );
+            } finally {
+                await ctx.teardown();
+            }
+        });
+
+        it("should compile symbols output after preserving class implementation", async () => {
+            const ctx = new E2ETestContext("public-contract");
+            await ctx.setup();
+
+            try {
+                await ctx.runParser({
+                    entryStrategy: "symbols",
+                    removeDecorators: true,
+                });
+
+                await expectTypeScriptCompiles(ctx.getOutputDir());
+            } finally {
+                await ctx.teardown();
+            }
         });
     });
 });

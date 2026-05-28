@@ -7,6 +7,7 @@ import { FileSystem, nodeFileSystem } from "./file-system.js";
 import type {
     ContractMarkerNames,
     DecoratorNames,
+    EntryStrategy,
     MessageType,
 } from "./domain/index.js";
 import {
@@ -16,11 +17,8 @@ import {
 import { hasDecorator, hasLeadingCommentMarker } from "./class-analyzer.js";
 
 const CONTRACTS_GENERATOR_MODULE = "@hexaijs/plugin-contracts-generator";
-const CONTRACT_DECORATORS = new Set([
-    "PublicCommand",
-    "PublicEvent",
-    "PublicQuery",
-]);
+const CONTRACTS_ROOT_MODULE = "@hexaijs/contracts";
+const CONTRACTS_DECORATORS_MODULE = "@hexaijs/contracts/decorators";
 const TS_EXTENSION_PATTERN = /\.ts$/;
 const TS_EXTENSION = ".ts";
 const REQUEST_SUFFIX = "Request";
@@ -33,11 +31,13 @@ export interface CopyOptions {
     pathAliasRewrites?: Map<string, string>;
     removeDecorators?: boolean;
     responseTypesToExport?: Map<string, string[]>;
+    responseTypesToInclude?: Map<string, string[]>;
     publicContractsToExport?: Map<string, string[]>;
     messageTypes?: readonly MessageType[];
     decoratorNames?: DecoratorNames;
     contractMarkerNames?: ContractMarkerNames;
     includePublicContracts?: boolean;
+    entryStrategy?: EntryStrategy;
 }
 
 export interface CopyResult {
@@ -75,7 +75,8 @@ interface ExtractedSymbols {
 
 interface ImportInfo {
     moduleSpecifier: string;
-    isTypeOnly: boolean;
+    declaration: ts.ImportDeclaration;
+    localNames: Set<string>;
 }
 
 export class FileCopier {
@@ -93,11 +94,13 @@ export class FileCopier {
             pathAliasRewrites,
             removeDecorators,
             responseTypesToExport,
+            responseTypesToInclude,
             publicContractsToExport,
             messageTypes,
             decoratorNames,
             contractMarkerNames,
             includePublicContracts,
+            entryStrategy = "graph",
         } = options;
         const copiedFiles: string[] = [];
         const rewrittenImports = new Map<string, string[]>();
@@ -105,21 +108,25 @@ export class FileCopier {
         const { entryContents, usedLocalImports } =
             await this.preprocessEntryFiles(
                 fileGraph,
+                entryStrategy,
                 messageTypes,
                 decoratorNames,
                 contractMarkerNames,
                 includePublicContracts,
+                responseTypesToInclude,
                 sourceRoot
             );
 
-        this.expandTransitiveDependencies(usedLocalImports, fileGraph);
+        if (entryStrategy === "symbols") {
+            this.expandTransitiveDependencies(usedLocalImports, fileGraph);
+        }
 
         for (const node of fileGraph.nodes.values()) {
             const content = await this.resolveNodeContent(
                 node,
                 entryContents,
                 usedLocalImports,
-                messageTypes
+                entryStrategy
             );
 
             if (content === null) {
@@ -134,6 +141,8 @@ export class FileCopier {
                 removeDecorators,
                 responseTypesToExport,
                 publicContractsToExport,
+                decoratorNames,
+                contractMarkerNames,
                 pathAliasRewrites
             );
 
@@ -154,10 +163,12 @@ export class FileCopier {
 
     private async preprocessEntryFiles(
         fileGraph: FileGraph,
+        entryStrategy: EntryStrategy,
         messageTypes: readonly MessageType[] | undefined,
         decoratorNames: DecoratorNames | undefined,
         contractMarkerNames: ContractMarkerNames | undefined,
         includePublicContracts: boolean | undefined,
+        responseTypesToInclude: Map<string, string[]> | undefined,
         sourceRoot: string
     ): Promise<{
         entryContents: Map<string, string>;
@@ -166,7 +177,7 @@ export class FileCopier {
         const entryContents = new Map<string, string>();
         const usedLocalImports = new Set<string>();
 
-        if (messageTypes === undefined && includePublicContracts !== true) {
+        if (entryStrategy !== "symbols") {
             return { entryContents, usedLocalImports };
         }
 
@@ -204,7 +215,8 @@ export class FileCopier {
                     extractionMessageTypes,
                     decoratorNames,
                     contractMarkerNames,
-                    extractPublicContracts
+                    extractPublicContracts,
+                    responseTypesToInclude?.get(node.absolutePath)
                 );
             entryContents.set(node.absolutePath, extractedContent);
 
@@ -228,12 +240,14 @@ export class FileCopier {
         contractMarkerName: string,
         decoratorNames: DecoratorNames | undefined
     ): boolean {
-        if (messageTypes !== undefined) {
+        if (
+            this.containsSelectedMessageDecorator(
+                content,
+                messageTypes,
+                decoratorNames
+            )
+        ) {
             return true;
-        }
-
-        if (this.containsMessageDecorator(content, decoratorNames)) {
-            return false;
         }
 
         return (
@@ -244,14 +258,17 @@ export class FileCopier {
         );
     }
 
-    private containsMessageDecorator(
+    private containsSelectedMessageDecorator(
         content: string,
+        messageTypes: readonly MessageType[] | undefined,
         decoratorNames: DecoratorNames | undefined
     ): boolean {
         const names = { ...DEFAULT_DECORATOR_NAMES, ...decoratorNames };
+        const selectedTypes =
+            messageTypes ?? (["event", "command", "query"] as const);
 
-        return Object.values(names).some((decoratorName) =>
-            new RegExp(`@${this.escapeRegex(decoratorName)}\\s*\\(`).test(content)
+        return selectedTypes.some((type) =>
+            new RegExp(`@${this.escapeRegex(names[type])}\\s*\\(`).test(content)
         );
     }
 
@@ -285,7 +302,7 @@ export class FileCopier {
         node: FileNode,
         entryContents: Map<string, string>,
         usedLocalImports: Set<string>,
-        messageTypes: readonly MessageType[] | undefined
+        entryStrategy: EntryStrategy
     ): Promise<string | null> {
         const entryContent = entryContents.get(node.absolutePath);
         if (node.isEntryPoint && entryContent !== undefined) {
@@ -300,7 +317,7 @@ export class FileCopier {
         }
 
         const isUnusedDependency =
-            messageTypes !== undefined && !usedLocalImports.has(node.absolutePath);
+            entryStrategy === "symbols" && !usedLocalImports.has(node.absolutePath);
 
         if (isUnusedDependency) {
             return null;
@@ -317,6 +334,8 @@ export class FileCopier {
         removeDecorators: boolean | undefined,
         responseTypesToExport: Map<string, string[]> | undefined,
         publicContractsToExport: Map<string, string[]> | undefined,
+        decoratorNames: DecoratorNames | undefined,
+        contractMarkerNames: ContractMarkerNames | undefined,
         pathAliasRewrites: Map<string, string> | undefined
     ): { content: string; rewrites: string[] } {
         const rewrites: string[] = [];
@@ -332,6 +351,8 @@ export class FileCopier {
             transformedContent,
             node.absolutePath,
             removeDecorators,
+            decoratorNames,
+            contractMarkerNames,
             rewrites
         );
         transformedContent = this.processTypeExports(
@@ -423,6 +444,8 @@ export class FileCopier {
         content: string,
         filePath: string,
         removeDecorators: boolean | undefined,
+        decoratorNames: DecoratorNames | undefined,
+        contractMarkerNames: ContractMarkerNames | undefined,
         rewrites: string[]
     ): string {
         if (!removeDecorators) {
@@ -431,7 +454,9 @@ export class FileCopier {
 
         const decoratorResult = this.removeContractDecorators(
             content,
-            filePath
+            filePath,
+            decoratorNames,
+            contractMarkerNames
         );
         rewrites.push(...decoratorResult.changes);
         return decoratorResult.content;
@@ -723,13 +748,27 @@ export class FileCopier {
 
     private removeContractDecorators(
         content: string,
-        filePath: string
+        filePath: string,
+        decoratorNames?: DecoratorNames,
+        contractMarkerNames?: ContractMarkerNames
     ): TransformResult<string> {
         const changes: string[] = [];
-
-        const visitorFactory = this.createDecoratorRemovalVisitor(changes);
-        const transformedContent = this.transformSourceFile(
+        const contractDecoratorNames = this.buildContractDecoratorNames(
+            decoratorNames,
+            contractMarkerNames
+        );
+        const contentWithoutMarkerComments = this.removeContractMarkerComments(
             content,
+            contractDecoratorNames,
+            changes
+        );
+
+        const visitorFactory = this.createDecoratorRemovalVisitor(
+            contractDecoratorNames,
+            changes
+        );
+        const transformedContent = this.transformSourceFile(
+            contentWithoutMarkerComments,
             filePath,
             visitorFactory
         );
@@ -737,7 +776,72 @@ export class FileCopier {
         return { content: transformedContent, changes };
     }
 
+    private buildContractDecoratorNames(
+        decoratorNames?: DecoratorNames,
+        contractMarkerNames?: ContractMarkerNames
+    ): Set<string> {
+        const mergedDecoratorNames = {
+            ...DEFAULT_DECORATOR_NAMES,
+            ...decoratorNames,
+        };
+        const mergedContractMarkerNames = {
+            ...DEFAULT_CONTRACT_MARKER_NAMES,
+            ...contractMarkerNames,
+        };
+
+        return new Set([
+            ...Object.values(DEFAULT_DECORATOR_NAMES),
+            ...Object.values(mergedDecoratorNames),
+            DEFAULT_CONTRACT_MARKER_NAMES.contract,
+            mergedContractMarkerNames.contract,
+        ]);
+    }
+
+    private removeContractMarkerComments(
+        content: string,
+        markerNames: Set<string>,
+        changes: string[]
+    ): string {
+        let transformedContent = content;
+
+        for (const markerName of markerNames) {
+            const escapedMarkerName = this.escapeRegex(markerName);
+            const markerPattern = `@${escapedMarkerName}(?:\\s*\\(\\s*\\))?`;
+            const commentPatterns = [
+                new RegExp(
+                    `^[ \\t]*//[ \\t]*${markerPattern}[ \\t]*(?:\\r?\\n|$)`,
+                    "gm"
+                ),
+                new RegExp(
+                    `^[ \\t]*/\\*[ \\t]*${markerPattern}[ \\t]*\\*/[ \\t]*(?:\\r?\\n|$)`,
+                    "gm"
+                ),
+                new RegExp(
+                    `^[ \\t]*/\\*\\*[ \\t]*${markerPattern}[ \\t]*\\*/[ \\t]*(?:\\r?\\n|$)`,
+                    "gm"
+                ),
+                new RegExp(
+                    `^[ \\t]*\\*[ \\t]*${markerPattern}[ \\t]*(?:\\r?\\n|$)`,
+                    "gm"
+                ),
+            ];
+
+            for (const pattern of commentPatterns) {
+                if (pattern.test(transformedContent)) {
+                    changes.push(`removed marker comment: @${markerName}`);
+                    transformedContent = transformedContent.replace(
+                        pattern,
+                        ""
+                    );
+                }
+            }
+        }
+
+        return transformedContent;
+    }
+
     private createDecoratorRemovalVisitor(
+        contractDecoratorNames: Set<string>,
         changes: string[]
     ): (context: ts.TransformationContext) => VisitorFunction {
         return (context: ts.TransformationContext) => {
@@ -745,12 +849,17 @@ export class FileCopier {
                 node: ts.Node
             ): ts.Node | undefined => {
                 if (ts.isImportDeclaration(node)) {
-                    return this.processContractGeneratorImport(node, changes);
+                    return this.processContractDecoratorImport(
+                        node,
+                        contractDecoratorNames,
+                        changes
+                    );
                 }
 
                 if (ts.isClassDeclaration(node) && node.modifiers) {
                     return this.removeContractDecoratorsFromClass(
                         node,
+                        contractDecoratorNames,
                         changes
                     );
                 }
@@ -761,17 +870,20 @@ export class FileCopier {
         };
     }
 
-    private processContractGeneratorImport(
+    private processContractDecoratorImport(
         node: ts.ImportDeclaration,
+        contractDecoratorNames: Set<string>,
         changes: string[]
     ): ts.ImportDeclaration | undefined {
         const moduleSpecifier = (node.moduleSpecifier as ts.StringLiteral).text;
 
-        const isContractGeneratorModule =
+        const isContractDecoratorModule =
+            moduleSpecifier === CONTRACTS_ROOT_MODULE ||
+            moduleSpecifier === CONTRACTS_DECORATORS_MODULE ||
             moduleSpecifier === CONTRACTS_GENERATOR_MODULE ||
             moduleSpecifier.startsWith(CONTRACTS_GENERATOR_MODULE + "/");
 
-        if (!isContractGeneratorModule) {
+        if (!isContractDecoratorModule) {
             return node;
         }
 
@@ -781,7 +893,7 @@ export class FileCopier {
         }
 
         const remainingElements = namedBindings.elements.filter(
-            (el) => !CONTRACT_DECORATORS.has(el.name.text)
+            (el) => !contractDecoratorNames.has(el.name.text)
         );
 
         if (remainingElements.length === 0) {
@@ -821,6 +933,7 @@ export class FileCopier {
 
     private removeContractDecoratorsFromClass(
         node: ts.ClassDeclaration,
+        contractDecoratorNames: Set<string>,
         changes: string[]
     ): ts.ClassDeclaration {
         const filteredModifiers = node.modifiers!.filter((modifier) => {
@@ -829,7 +942,10 @@ export class FileCopier {
             }
 
             const decoratorName = this.extractDecoratorName(modifier);
-            if (decoratorName && CONTRACT_DECORATORS.has(decoratorName)) {
+            if (
+                decoratorName &&
+                contractDecoratorNames.has(decoratorName)
+            ) {
                 const decoratorSuffix = this.isDecoratorCallExpression(modifier)
                     ? "()"
                     : "";
@@ -1078,7 +1194,8 @@ export class FileCopier {
         messageTypes: readonly MessageType[],
         decoratorNames?: DecoratorNames,
         contractMarkerNames?: ContractMarkerNames,
-        includePublicContracts = true
+        includePublicContracts = true,
+        responseTypeNames: readonly string[] = []
     ): { content: string; usedModuleSpecifiers: Set<string> } {
         const sourceFile = ts.createSourceFile(
             filePath,
@@ -1110,7 +1227,10 @@ export class FileCopier {
             return { content, usedModuleSpecifiers: new Set() };
         }
 
-        const relatedTypeNames = this.computeRelatedTypeNames(targetClassNames);
+        const relatedTypeNames = this.computeRelatedTypeNames(
+            targetClassNames,
+            responseTypeNames
+        );
         const usedIdentifiers = this.collectUsedIdentifiers(targetDeclarations);
         const localTypeDeclarations =
             this.collectLocalTypeDeclarations(sourceFile);
@@ -1153,11 +1273,12 @@ export class FileCopier {
             if (ts.isClassDeclaration(node) && node.name) {
                 const isPublicContract =
                     context.includePublicContracts &&
-                    hasLeadingCommentMarker(
-                        node,
-                        context.content,
-                        context.contractMarkerName
-                    );
+                    (hasDecorator(node, context.contractMarkerName) ||
+                        hasLeadingCommentMarker(
+                            node,
+                            context.content,
+                            context.contractMarkerName
+                        ));
 
                 for (const [decoratorName, messageType] of Object.entries(
                     context.decoratorToMessageType
@@ -1213,9 +1334,10 @@ export class FileCopier {
     }
 
     private computeRelatedTypeNames(
-        targetClassNames: Set<string>
+        targetClassNames: Set<string>,
+        responseTypeNames: readonly string[] = []
     ): Set<string> {
-        const relatedTypeNames = new Set<string>();
+        const relatedTypeNames = new Set<string>(responseTypeNames);
 
         for (const className of targetClassNames) {
             if (className.endsWith(REQUEST_SUFFIX)) {
@@ -1241,32 +1363,7 @@ export class FileCopier {
         const usedIdentifiers = new Set<string>();
 
         const collectIdentifiers = (node: ts.Node): void => {
-            if (
-                ts.isTypeReferenceNode(node) &&
-                ts.isIdentifier(node.typeName)
-            ) {
-                usedIdentifiers.add(node.typeName.text);
-            }
-            if (
-                ts.isExpressionWithTypeArguments(node) &&
-                ts.isIdentifier(node.expression)
-            ) {
-                usedIdentifiers.add(node.expression.text);
-            }
-            if (ts.isIdentifier(node) && node.parent) {
-                const isHeritageOrTypeRef =
-                    ts.isHeritageClause(node.parent.parent) ||
-                    ts.isTypeReferenceNode(node.parent);
-                if (isHeritageOrTypeRef) {
-                    usedIdentifiers.add(node.text);
-                }
-            }
-            if (ts.isDecorator(node)) {
-                this.collectDecoratorIdentifier(node, usedIdentifiers);
-            }
-            if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-                usedIdentifiers.add(node.expression.text);
-            }
+            this.collectReferencedIdentifier(node, usedIdentifiers);
             ts.forEachChild(node, collectIdentifiers);
         };
 
@@ -1275,6 +1372,151 @@ export class FileCopier {
         }
 
         return usedIdentifiers;
+    }
+
+    private collectReferencedIdentifier(
+        node: ts.Node,
+        usedIdentifiers: Set<string>
+    ): void {
+        if (ts.isTypeReferenceNode(node)) {
+            this.collectEntityNameRootIdentifier(
+                node.typeName,
+                usedIdentifiers
+            );
+        }
+        if (ts.isExpressionWithTypeArguments(node)) {
+            this.collectExpressionRootIdentifier(
+                node.expression,
+                usedIdentifiers
+            );
+        }
+        if (ts.isDecorator(node)) {
+            this.collectDecoratorIdentifier(node, usedIdentifiers);
+        }
+        if (
+            ts.isCallExpression(node) ||
+            ts.isNewExpression(node) ||
+            ts.isPropertyAccessExpression(node)
+        ) {
+            this.collectExpressionRootIdentifier(
+                node.expression,
+                usedIdentifiers
+            );
+        }
+        if (
+            ts.isIdentifier(node) &&
+            this.isRuntimeReferenceIdentifier(node)
+        ) {
+            usedIdentifiers.add(node.text);
+        }
+    }
+
+    private collectEntityNameRootIdentifier(
+        entityName: ts.EntityName,
+        usedIdentifiers: Set<string>
+    ): void {
+        let current: ts.EntityName = entityName;
+
+        while (ts.isQualifiedName(current)) {
+            current = current.left;
+        }
+
+        usedIdentifiers.add(current.text);
+    }
+
+    private collectExpressionRootIdentifier(
+        expression: ts.Expression,
+        usedIdentifiers: Set<string>
+    ): void {
+        let current: ts.Expression = expression;
+
+        while (ts.isPropertyAccessExpression(current)) {
+            current = current.expression;
+        }
+
+        if (ts.isIdentifier(current)) {
+            usedIdentifiers.add(current.text);
+        }
+    }
+
+    private isRuntimeReferenceIdentifier(node: ts.Identifier): boolean {
+        if (!node.parent) {
+            return false;
+        }
+
+        if (
+            this.isDeclarationName(node) ||
+            this.isPropertyName(node) ||
+            this.isImportOrExportName(node) ||
+            this.isTypeOnlyIdentifier(node)
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private isDeclarationName(node: ts.Identifier): boolean {
+        const parent = node.parent;
+
+        return (
+            ((ts.isClassDeclaration(parent) ||
+                ts.isInterfaceDeclaration(parent) ||
+                ts.isTypeAliasDeclaration(parent) ||
+                ts.isEnumDeclaration(parent) ||
+                ts.isFunctionDeclaration(parent) ||
+                ts.isMethodDeclaration(parent) ||
+                ts.isPropertyDeclaration(parent) ||
+                ts.isParameter(parent)) &&
+                parent.name === node) ||
+            (ts.isVariableDeclaration(parent) && parent.name === node) ||
+            (ts.isEnumMember(parent) && parent.name === node)
+        );
+    }
+
+    private isPropertyName(node: ts.Identifier): boolean {
+        const parent = node.parent;
+
+        return (
+            (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+            (ts.isPropertyAssignment(parent) && parent.name === node) ||
+            (ts.isMethodDeclaration(parent) && parent.name === node) ||
+            (ts.isPropertyDeclaration(parent) && parent.name === node)
+        );
+    }
+
+    private isImportOrExportName(node: ts.Identifier): boolean {
+        const parent = node.parent;
+
+        return (
+            ts.isImportSpecifier(parent) ||
+            ts.isExportSpecifier(parent) ||
+            ts.isImportClause(parent) ||
+            ts.isNamespaceImport(parent)
+        );
+    }
+
+    private isTypeOnlyIdentifier(node: ts.Identifier): boolean {
+        let current: ts.Node | undefined = node.parent;
+
+        while (current) {
+            if (ts.isTypeNode(current)) {
+                return true;
+            }
+
+            if (
+                ts.isExpression(current) ||
+                ts.isStatement(current) ||
+                ts.isClassElement(current) ||
+                ts.isSourceFile(current)
+            ) {
+                return false;
+            }
+
+            current = current.parent;
+        }
+
+        return false;
     }
 
     private collectDecoratorIdentifier(
@@ -1297,49 +1539,54 @@ export class FileCopier {
     ): Map<string, ts.Node[]> {
         const localTypeDeclarations = new Map<string, ts.Node[]>();
 
-        const collectLocalTypes = (node: ts.Node): void => {
-            if (ts.isInterfaceDeclaration(node) && node.name) {
+        for (const statement of sourceFile.statements) {
+            if (ts.isInterfaceDeclaration(statement) && statement.name) {
                 this.addToDeclarationMap(
                     localTypeDeclarations,
-                    node.name.text,
-                    node
+                    statement.name.text,
+                    statement
                 );
             }
-            if (ts.isTypeAliasDeclaration(node) && node.name) {
+            if (ts.isTypeAliasDeclaration(statement) && statement.name) {
                 this.addToDeclarationMap(
                     localTypeDeclarations,
-                    node.name.text,
-                    node
+                    statement.name.text,
+                    statement
                 );
             }
-            if (ts.isVariableStatement(node)) {
-                for (const decl of node.declarationList.declarations) {
+            if (ts.isVariableStatement(statement)) {
+                for (const decl of statement.declarationList.declarations) {
                     if (ts.isIdentifier(decl.name)) {
                         this.addToDeclarationMap(
                             localTypeDeclarations,
                             decl.name.text,
-                            node
+                            statement
                         );
                     }
                 }
             }
-            if (ts.isClassDeclaration(node) && node.name) {
+            if (ts.isClassDeclaration(statement) && statement.name) {
                 this.addToDeclarationMap(
                     localTypeDeclarations,
-                    node.name.text,
-                    node
+                    statement.name.text,
+                    statement
                 );
             }
-            if (ts.isEnumDeclaration(node) && node.name) {
+            if (ts.isFunctionDeclaration(statement) && statement.name) {
                 this.addToDeclarationMap(
                     localTypeDeclarations,
-                    node.name.text,
-                    node
+                    statement.name.text,
+                    statement
                 );
             }
-            ts.forEachChild(node, collectLocalTypes);
-        };
-        collectLocalTypes(sourceFile);
+            if (ts.isEnumDeclaration(statement) && statement.name) {
+                this.addToDeclarationMap(
+                    localTypeDeclarations,
+                    statement.name.text,
+                    statement
+                );
+            }
+        }
 
         return localTypeDeclarations;
     }
@@ -1372,7 +1619,7 @@ export class FileCopier {
             includedLocalTypes.add(identifier);
 
             const typeIdentifiers =
-                this.collectTypeIdentifiersFromNodes(typeNodes);
+                this.collectReferencedIdentifiersFromNodes(typeNodes);
             for (const id of typeIdentifiers) {
                 if (!includedLocalTypes.has(id)) {
                     queue.push(id);
@@ -1384,22 +1631,11 @@ export class FileCopier {
         return includedLocalTypes;
     }
 
-    private collectTypeIdentifiersFromNodes(nodes: ts.Node[]): Set<string> {
+    private collectReferencedIdentifiersFromNodes(nodes: ts.Node[]): Set<string> {
         const typeIdentifiers = new Set<string>();
 
         const collectFromType = (node: ts.Node): void => {
-            if (
-                ts.isTypeReferenceNode(node) &&
-                ts.isIdentifier(node.typeName)
-            ) {
-                typeIdentifiers.add(node.typeName.text);
-            }
-            if (
-                ts.isExpressionWithTypeArguments(node) &&
-                ts.isIdentifier(node.expression)
-            ) {
-                typeIdentifiers.add(node.expression.text);
-            }
+            this.collectReferencedIdentifier(node, typeIdentifiers);
             if (ts.isComputedPropertyName(node)) {
                 this.collectComputedPropertyIdentifier(node, typeIdentifiers);
             }
@@ -1442,7 +1678,11 @@ export class FileCopier {
             symbols.includedLocalTypes
         );
 
-        this.appendImportStatements(output, filteredImports);
+        this.appendImportStatements(
+            output,
+            filteredImports,
+            context.sourceFile
+        );
         const emittedNodes = new Set<ts.Node>(symbols.targetDeclarations);
         this.appendLocalTypeDeclarations(output, context, symbols, emittedNodes);
         this.appendTargetDeclarations(
@@ -1451,7 +1691,12 @@ export class FileCopier {
             symbols.targetDeclarations
         );
 
-        const usedModuleSpecifiers = new Set(filteredImports.keys());
+        const usedModuleSpecifiers = new Set(
+            filteredImports.map(
+                (importDeclaration) =>
+                    (importDeclaration.moduleSpecifier as ts.StringLiteral).text
+            )
+        );
 
         return {
             content: output.join("\n"),
@@ -1459,24 +1704,15 @@ export class FileCopier {
         };
     }
 
-    private buildImportMap(sourceFile: ts.SourceFile): Map<string, ImportInfo> {
-        const importMap = new Map<string, ImportInfo>();
+    private buildImportMap(sourceFile: ts.SourceFile): ImportInfo[] {
+        const importMap: ImportInfo[] = [];
 
         const collectImports = (node: ts.Node): void => {
             if (ts.isImportDeclaration(node)) {
-                const moduleSpecifier = (
-                    node.moduleSpecifier as ts.StringLiteral
-                ).text;
-                const namedBindings = node.importClause?.namedBindings;
-                const isTypeOnly = node.importClause?.isTypeOnly ?? false;
+                const importInfo = this.createImportInfo(node);
 
-                if (namedBindings && ts.isNamedImports(namedBindings)) {
-                    for (const element of namedBindings.elements) {
-                        importMap.set(element.name.text, {
-                            moduleSpecifier,
-                            isTypeOnly,
-                        });
-                    }
+                if (importInfo) {
+                    importMap.push(importInfo);
                 }
             }
             ts.forEachChild(node, collectImports);
@@ -1486,48 +1722,176 @@ export class FileCopier {
         return importMap;
     }
 
-    private filterImports(
-        usedIdentifiers: Set<string>,
-        importMap: Map<string, ImportInfo>,
-        includedLocalTypes: Set<string>
-    ): Map<string, { identifiers: Set<string>; isTypeOnly: boolean }> {
-        const filteredImports = new Map<
-            string,
-            { identifiers: Set<string>; isTypeOnly: boolean }
-        >();
+    private createImportInfo(
+        declaration: ts.ImportDeclaration
+    ): ImportInfo | undefined {
+        if (!ts.isStringLiteral(declaration.moduleSpecifier)) {
+            return undefined;
+        }
 
-        for (const identifier of usedIdentifiers) {
-            const importInfo = importMap.get(identifier);
-            if (!importInfo || includedLocalTypes.has(identifier)) {
-                continue;
-            }
+        const importClause = declaration.importClause;
+        if (!importClause) {
+            return undefined;
+        }
 
-            const existing = filteredImports.get(importInfo.moduleSpecifier);
-            if (existing) {
-                existing.identifiers.add(identifier);
+        const localNames = new Set<string>();
+
+        if (importClause.name) {
+            localNames.add(importClause.name.text);
+        }
+
+        const namedBindings = importClause.namedBindings;
+        if (namedBindings) {
+            if (ts.isNamespaceImport(namedBindings)) {
+                localNames.add(namedBindings.name.text);
             } else {
-                filteredImports.set(importInfo.moduleSpecifier, {
-                    identifiers: new Set([identifier]),
-                    isTypeOnly: importInfo.isTypeOnly,
-                });
+                for (const element of namedBindings.elements) {
+                    localNames.add(element.name.text);
+                }
             }
         }
 
-        return filteredImports;
+        if (localNames.size === 0) {
+            return undefined;
+        }
+
+        return {
+            declaration,
+            moduleSpecifier: declaration.moduleSpecifier.text,
+            localNames,
+        };
+    }
+
+    private filterImports(
+        usedIdentifiers: Set<string>,
+        importMap: ImportInfo[],
+        includedLocalTypes: Set<string>
+    ): ts.ImportDeclaration[] {
+        const usedImportIdentifiers = new Set(
+            [...usedIdentifiers].filter(
+                (identifier) => !includedLocalTypes.has(identifier)
+            )
+        );
+
+        return importMap
+            .filter((importInfo) =>
+                [...importInfo.localNames].some((localName) =>
+                    usedImportIdentifiers.has(localName)
+                )
+            )
+            .map((importInfo) =>
+                this.filterImportDeclaration(
+                    importInfo.declaration,
+                    usedImportIdentifiers
+                )
+            )
+            .filter(
+                (
+                    importDeclaration
+                ): importDeclaration is ts.ImportDeclaration =>
+                    importDeclaration !== undefined
+            );
+    }
+
+    private filterImportDeclaration(
+        declaration: ts.ImportDeclaration,
+        usedIdentifiers: Set<string>
+    ): ts.ImportDeclaration | undefined {
+        const importClause = declaration.importClause;
+        if (!importClause) {
+            return undefined;
+        }
+
+        const filteredImportClause = this.filterImportClause(
+            importClause,
+            usedIdentifiers
+        );
+        if (!filteredImportClause) {
+            return undefined;
+        }
+
+        return ts.factory.updateImportDeclaration(
+            declaration,
+            declaration.modifiers,
+            filteredImportClause,
+            declaration.moduleSpecifier,
+            declaration.attributes
+        );
+    }
+
+    private filterImportClause(
+        importClause: ts.ImportClause,
+        usedIdentifiers: Set<string>
+    ): ts.ImportClause | undefined {
+        const defaultImportName =
+            importClause.name && usedIdentifiers.has(importClause.name.text)
+                ? importClause.name
+                : undefined;
+        const namedBindings = this.filterNamedImportBindings(
+            importClause.namedBindings,
+            usedIdentifiers
+        );
+
+        if (!defaultImportName && !namedBindings) {
+            return undefined;
+        }
+
+        return ts.factory.updateImportClause(
+            importClause,
+            importClause.isTypeOnly,
+            defaultImportName,
+            namedBindings
+        );
+    }
+
+    private filterNamedImportBindings(
+        namedBindings: ts.NamedImportBindings | undefined,
+        usedIdentifiers: Set<string>
+    ): ts.NamedImportBindings | undefined {
+        if (!namedBindings) {
+            return undefined;
+        }
+
+        if (ts.isNamespaceImport(namedBindings)) {
+            return usedIdentifiers.has(namedBindings.name.text)
+                ? namedBindings
+                : undefined;
+        }
+
+        const retainedElements = namedBindings.elements.filter((element) =>
+            usedIdentifiers.has(element.name.text)
+        );
+
+        if (retainedElements.length === 0) {
+            return undefined;
+        }
+
+        if (retainedElements.length === namedBindings.elements.length) {
+            return namedBindings;
+        }
+
+        return ts.factory.updateNamedImports(
+            namedBindings,
+            retainedElements
+        );
     }
 
     private appendImportStatements(
         output: string[],
-        filteredImports: Map<
-            string,
-            { identifiers: Set<string>; isTypeOnly: boolean }
-        >
+        filteredImports: ts.ImportDeclaration[],
+        sourceFile: ts.SourceFile
     ): void {
-        for (const [moduleSpecifier, info] of filteredImports) {
-            const identifiers = [...info.identifiers].sort().join(", ");
-            const typeOnlyPrefix = info.isTypeOnly ? "type " : "";
+        const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+
+        for (const importDeclaration of filteredImports) {
             output.push(
-                `import ${typeOnlyPrefix}{ ${identifiers} } from "${moduleSpecifier}";`
+                printer
+                    .printNode(
+                        ts.EmitHint.Unspecified,
+                        importDeclaration,
+                        sourceFile
+                    )
+                    .trim()
             );
         }
 
@@ -1561,8 +1925,64 @@ export class FileCopier {
         targetDeclarations: ts.Node[]
     ): void {
         for (const declaration of targetDeclarations) {
+            if (
+                ts.isClassDeclaration(declaration) &&
+                this.isPublicContractClassDeclaration(declaration, context)
+            ) {
+                this.appendClassWithExport(output, context, declaration);
+                continue;
+            }
+
             this.appendNodeWithExport(output, context, declaration);
         }
+    }
+
+    private appendClassWithExport(
+        output: string[],
+        context: SymbolExtractionContext,
+        node: ts.ClassDeclaration
+    ): void {
+        const exportableClassNode = this.ensureClassExport(node);
+        const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+        output.push(
+            printer
+                .printNode(
+                    ts.EmitHint.Unspecified,
+                    exportableClassNode,
+                    context.sourceFile
+                )
+                .trim()
+        );
+        output.push("");
+    }
+
+    private ensureClassExport(node: ts.ClassDeclaration): ts.ClassDeclaration {
+        if (this.nodeHasExportKeyword(node)) {
+            return node;
+        }
+
+        return ts.factory.updateClassDeclaration(
+            node,
+            this.prependExportModifier(node.modifiers),
+            node.name,
+            node.typeParameters,
+            node.heritageClauses,
+            node.members
+        );
+    }
+
+    private isPublicContractClassDeclaration(
+        node: ts.ClassDeclaration,
+        context: SymbolExtractionContext
+    ): boolean {
+        return (
+            hasDecorator(node, context.contractMarkerName) ||
+            hasLeadingCommentMarker(
+                node,
+                context.content,
+                context.contractMarkerName
+            )
+        );
     }
 
     private appendNodeWithExport(
@@ -1590,6 +2010,7 @@ export class FileCopier {
             ts.isTypeAliasDeclaration(node) ||
             ts.isVariableStatement(node) ||
             ts.isClassDeclaration(node) ||
+            ts.isFunctionDeclaration(node) ||
             ts.isEnumDeclaration(node);
 
         if (!isExportableDeclaration) {
@@ -1601,6 +2022,7 @@ export class FileCopier {
             | ts.TypeAliasDeclaration
             | ts.VariableStatement
             | ts.ClassDeclaration
+            | ts.FunctionDeclaration
             | ts.EnumDeclaration;
 
         return (

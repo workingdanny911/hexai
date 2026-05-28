@@ -37,8 +37,8 @@ export type {
     EnumDefinition,
     ClassDefinition,
     ClassImport,
-    PublicContract,
     PublicContractDeclarationKind,
+    EntryStrategy,
     Message,
     MessageBase,
     DomainEvent,
@@ -53,6 +53,8 @@ export type {
     Config,
     ContractMarkerNames,
 } from "./domain/types.js";
+
+export type PublicContract = import("./domain/types.js").PublicContract;
 
 export {
     isPrimitiveType,
@@ -77,6 +79,10 @@ export {
     type PublicCommandOptions,
     type PublicQueryOptions,
 } from "@hexaijs/contracts/decorators";
+
+export function PublicContract(): ClassDecorator {
+    return (target) => target;
+}
 
 export { Scanner, type ScannerOptions } from "./scanner.js";
 export { Parser, type ParseResult } from "./parser.js";
@@ -137,6 +143,7 @@ import { ContextConfig } from "./context-config.js";
 import type {
     ContractMarkerNames,
     DecoratorNames,
+    EntryStrategy,
     MessageType,
     ResponseNamingConvention,
 } from "./domain/types.js";
@@ -154,6 +161,7 @@ export interface ProcessContextOptions {
     removeDecorators?: boolean;
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
+    entryStrategy?: EntryStrategy;
     fileSystem?: FileSystem;
     logger?: Logger;
 }
@@ -182,6 +190,7 @@ export async function processContext(
         removeDecorators,
         messageTypes,
         includePublicContracts,
+        entryStrategy,
         fileSystem = nodeFileSystem,
         logger = noopLogger,
     } = options;
@@ -205,6 +214,7 @@ export async function processContext(
         contractMarkerNames,
         messageTypes,
         includePublicContracts,
+        entryStrategy,
         fileSystem,
         logger,
     }).execute({

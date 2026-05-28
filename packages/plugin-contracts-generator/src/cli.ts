@@ -13,6 +13,7 @@ import { nodeFileSystem } from "./file-system.js";
 import type {
     ContractMarkerNames,
     DecoratorNames,
+    EntryStrategy,
     MessageType,
     ResponseNamingConvention,
 } from "./domain/types.js";
@@ -29,6 +30,7 @@ const VALID_INCLUDE_MODES: readonly IncludeMode[] = [
     "messages",
     "contracts",
 ];
+const VALID_ENTRY_STRATEGIES: readonly EntryStrategy[] = ["graph", "symbols"];
 const CHECK_DIFF_LIST_LIMIT = 20;
 
 export type IncludeMode = "all" | "messages" | "contracts";
@@ -39,6 +41,11 @@ const CLI_OPTIONS = {
     include: { short: null, long: "--include", requiresValue: true },
     messages: { short: null, long: "--messages", requiresValue: true },
     messageTypes: { short: "-m", long: "--message-types", requiresValue: true },
+    entryStrategy: {
+        short: null,
+        long: "--entry-strategy",
+        requiresValue: true,
+    },
     registry: { short: null, long: "--registry", requiresValue: false },
     generateMessageRegistry: { short: null, long: "--generate-message-registry", requiresValue: false },
     dryRun: { short: null, long: "--dry-run", requiresValue: false },
@@ -51,6 +58,7 @@ interface CliOptions {
     outputDir: string;
     include?: IncludeMode;
     messageTypes?: MessageType[];
+    entryStrategy?: EntryStrategy;
     generateMessageRegistry?: boolean;
     dryRun?: boolean;
     check?: boolean;
@@ -63,6 +71,7 @@ export interface RunWithConfigOptions {
     outputDir: string;
     include?: IncludeMode;
     messageTypes?: MessageType[];
+    entryStrategy?: EntryStrategy;
     generateMessageRegistry?: boolean;
     dryRun?: boolean;
     check?: boolean;
@@ -78,6 +87,7 @@ export interface ContractsPluginConfig {
     externalDependencies?: Record<string, string>;
     decoratorNames?: DecoratorNames;
     contractMarkerNames?: ContractMarkerNames;
+    entryStrategy?: EntryStrategy;
     responseNamingConventions?: ResponseNamingConvention[];
     removeDecorators?: boolean;
 }
@@ -117,6 +127,18 @@ function parseIncludeMode(value: string): IncludeMode {
     }
 
     return mode as IncludeMode;
+}
+
+function parseEntryStrategy(value: string): EntryStrategy {
+    const strategy = value.trim().toLowerCase();
+    if (!VALID_ENTRY_STRATEGIES.includes(strategy as EntryStrategy)) {
+        throw new Error(
+            `Invalid entry strategy: ${value}. ` +
+            `Valid strategies are: ${VALID_ENTRY_STRATEGIES.join(", ")}`
+        );
+    }
+
+    return strategy as EntryStrategy;
 }
 
 function resolveGenerationScope(options: {
@@ -201,6 +223,10 @@ function parseArgs(args: string[]): CliOptions {
             const { value, nextIndex } = extractOptionValue(args, i, "--message-types");
             options.messageTypes = parseMessageTypes(value);
             i = nextIndex;
+        } else if (matchesOption(arg, CLI_OPTIONS.entryStrategy)) {
+            const { value, nextIndex } = extractOptionValue(args, i, "--entry-strategy");
+            options.entryStrategy = parseEntryStrategy(value);
+            i = nextIndex;
         } else if (
             matchesOption(arg, CLI_OPTIONS.registry) ||
             matchesOption(arg, CLI_OPTIONS.generateMessageRegistry)
@@ -241,6 +267,8 @@ Options:
                                 Valid types: ${VALID_MESSAGE_TYPES.join(", ")}
                                 Default: all types
   -m, --message-types <types>   Alias for --messages
+  --entry-strategy <strategy>   Entry copy strategy: graph, symbols
+                                Default: symbols
   --registry                    Generate message registry index.ts file
   --generate-message-registry   Alias for --registry
                                 Default: not generated
@@ -345,6 +373,9 @@ function logGenerationSettings(
     logger.info(`Found ${config.contexts.length} context(s) to process`);
     logger.info(`Output directory: ${outputDir}`);
     logger.info(`Include mode: ${options.include ?? "all"}`);
+    logger.info(
+        `Entry strategy: ${options.entryStrategy ?? config.entryStrategy ?? "symbols"}`
+    );
     logger.info(`Message types filter: ${formatMessageTypesForLog(scope.messageTypes)}`);
     logger.info(
         `Public contracts: ${scope.includePublicContracts ? "included" : "excluded"}`
@@ -502,6 +533,7 @@ async function generateContracts(
             contractMarkerNames: config.contractMarkerNames,
             messageTypes: scope.messageTypes,
             includePublicContracts: scope.includePublicContracts,
+            entryStrategy: options.entryStrategy ?? config.entryStrategy,
             logger,
         });
 
@@ -609,6 +641,7 @@ async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<C
         contractMarkerNames: mergeContractMarkerNames(
             pluginConfig.contractMarkerNames
         ),
+        entryStrategy: pluginConfig.entryStrategy,
         responseNamingConventions: pluginConfig.responseNamingConventions,
         removeDecorators: pluginConfig.removeDecorators ?? true,
     };
