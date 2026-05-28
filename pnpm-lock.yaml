@@ -115,7 +115,7 @@ importers:
         specifier: ^9.0.1
         version: 9.0.1
       vitest:
-        specifier: '>=1.0.0'
+        specifier: '>=4.0.0'
         version: 4.0.18(@types/node@25.3.5)
     devDependencies:
       '@hexaijs/tooling':
@@ -159,8 +159,8 @@ importers:
   packages/plugin-contracts-generator:
     dependencies:
       '@hexaijs/contracts':
-        specifier: workspace:^
-        version: link:../contracts
+        specifier: ^0.1.2
+        version: 0.1.2(@hexaijs/core@packages+core)
       glob:
         specifier: ^10.3.0
         version: 10.5.0
@@ -564,6 +564,11 @@ packages:
   '@eslint/js@8.57.1':
     resolution: {integrity: sha512-d9zaMRSTIKDLhctzH12MtXvJKSSUhaHcjV+2Z+GK+EEY7XKpP5yR4x+N3TAcHTcu963nIr+TMcCb4DBCYX1z6Q==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
+
+  '@hexaijs/contracts@0.1.2':
+    resolution: {integrity: sha512-SzMgsACdFp39TuVAIKWYLKm8GIjmtvHg1JyXMvpQyUSdyefus2CA9yGOsPcvChtqRFpScTZAdM6ayguW8MtxDg==}
+    peerDependencies:
+      '@hexaijs/core': ^0.9.0
 
   '@humanwhocodes/config-array@0.13.0':
     resolution: {integrity: sha512-DZLEEqFWQFiyK6h5YIeynKx7JlvCYWL0cImfSRXZ9l4Sg2efkFGTuFf6vzXjK1cq6IYkU+Eg/JizXw+TD2vRNw==}
@@ -2417,6 +2422,10 @@ snapshots:
       - supports-color
 
   '@eslint/js@8.57.1': {}
+
+  '@hexaijs/contracts@0.1.2(@hexaijs/core@packages+core)':
+    dependencies:
+      '@hexaijs/core': link:packages/core
 
   '@humanwhocodes/config-array@0.13.0':
     dependencies:
