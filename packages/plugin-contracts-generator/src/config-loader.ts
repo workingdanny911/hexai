@@ -6,9 +6,11 @@ import { FileSystem, nodeFileSystem } from "./file-system.js";
 import type {
     ContractMarkerNames,
     DecoratorNames,
+    EntryStrategy,
     ResponseNamingConvention,
 } from "./domain/index.js";
 import {
+    isEntryStrategy,
     mergeContractMarkerNames,
     mergeDecoratorNames,
 } from "./domain/index.js";
@@ -22,6 +24,7 @@ export interface ContractsConfig {
     readonly externalDependencies?: Readonly<Record<string, string>>;
     readonly decoratorNames: Required<DecoratorNames>;
     readonly contractMarkerNames: Required<ContractMarkerNames>;
+    readonly entryStrategy?: EntryStrategy;
     readonly responseNamingConventions?: readonly ResponseNamingConvention[];
     readonly removeDecorators?: boolean;
 }
@@ -33,6 +36,7 @@ interface ApplicationConfig {
         externalDependencies?: Record<string, string>;
         decoratorNames?: DecoratorNames;
         contractMarkerNames?: ContractMarkerNames;
+        entryStrategy?: EntryStrategy;
         responseNamingConventions?: ResponseNamingConvention[];
         removeDecorators?: boolean;
     };
@@ -223,6 +227,9 @@ export class ConfigLoader {
         const contractMarkerNames = mergeContractMarkerNames(
             contracts.contractMarkerNames
         );
+        const entryStrategy = this.validateEntryStrategy(
+            contracts.entryStrategy
+        );
 
         return {
             contexts,
@@ -230,9 +237,26 @@ export class ConfigLoader {
             externalDependencies: contracts.externalDependencies,
             decoratorNames,
             contractMarkerNames,
+            entryStrategy,
             responseNamingConventions: contracts.responseNamingConventions,
             removeDecorators: contracts.removeDecorators ?? true,
         };
+    }
+
+    private validateEntryStrategy(
+        entryStrategy: EntryStrategy | undefined
+    ): EntryStrategy | undefined {
+        if (entryStrategy === undefined) {
+            return undefined;
+        }
+
+        if (isEntryStrategy(entryStrategy)) {
+            return entryStrategy;
+        }
+
+        throw new ConfigLoadError(
+            `Invalid contracts.entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
+        );
     }
 }
 

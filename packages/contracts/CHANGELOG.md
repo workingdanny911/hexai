@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0] - 2026-05-28
+
+### Added
+
+- Added the `PublicContract` marker decorator for general public contract classes.
+- Exported `PublicContract` from both the package root and `@hexaijs/contracts/decorators`.
+
 ## [0.1.2] - 2026-03-07
 
 ### Changed

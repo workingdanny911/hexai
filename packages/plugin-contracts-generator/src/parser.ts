@@ -196,7 +196,16 @@ export class Parser {
     ): void {
         if (!this.includePublicContracts) return;
         if (!node.name) return;
-        if (!hasLeadingCommentMarker(node, sourceCode, this.contractMarkerName)) {
+        const isClassDecorator =
+            declarationKind === "class" &&
+            hasDecorator(node as ts.ClassDeclaration, this.contractMarkerName);
+        const isCommentMarker = hasLeadingCommentMarker(
+            node,
+            sourceCode,
+            this.contractMarkerName
+        );
+
+        if (!isClassDecorator && !isCommentMarker) {
             return;
         }
 

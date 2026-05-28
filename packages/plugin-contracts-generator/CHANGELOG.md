@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0] - 2026-05-28
+
+### Added
+
+- Added `entryStrategy: "symbols" | "graph"` for explicit entry file generation behavior.
+- Added default `symbols` extraction for selected public messages and public contracts.
+- Added explicit `graph` opt-in for conservative entry file graph copying.
+- Added support for `PublicContract` class decorators and block comment markers.
+- Added symbol dependency extraction for default imports, namespace imports, aliased named imports, mixed imports, type-only default imports, and qualified namespace references.
+
+### Changed
+
+- Changed the public default entry strategy from graph copying to strict symbol extraction.
+- Preserved same-file command/query response contracts in default `symbols` output when discovered by explicit decorator response options or response naming conventions.
+- Limited `MessageRegistry` generation to selected decorated messages while keeping general public contracts out of the registry.
+- Updated the `@hexaijs/contracts` dependency to `^0.2.0`.
+
 ## [0.3.0] - 2026-05-28
 
 ### Added

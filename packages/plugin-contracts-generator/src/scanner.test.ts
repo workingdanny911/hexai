@@ -42,7 +42,7 @@ describe("Scanner", () => {
         expect(files.some((f) => f.includes("event-file.ts"))).toBe(true);
     });
 
-    it("should find files containing @PublicContract comment markers", async () => {
+    it("should find files containing @PublicContract comment markers or class decorators", async () => {
         const tempDir = await mkdtemp(join(tmpdir(), "scanner-contract-"));
 
         try {
@@ -67,6 +67,24 @@ export type PublicSettings = {
 `
             );
             await writeFile(
+                join(tempDir, "block-contract.ts"),
+                `
+/* @PublicContract() */
+export enum PublicVisibility {
+    Visible = "visible",
+}
+`
+            );
+            await writeFile(
+                join(tempDir, "decorator-contract.ts"),
+                `
+@PublicContract()
+export class PublicProjection {
+    readonly id = "projection";
+}
+`
+            );
+            await writeFile(
                 join(tempDir, "internal.ts"),
                 `
 export interface InternalProfile {
@@ -78,13 +96,19 @@ export interface InternalProfile {
             const scanner = new Scanner();
             const files = await scanner.scan(tempDir);
 
-            expect(files).toHaveLength(2);
+            expect(files).toHaveLength(4);
             expect(files.some((f) => f.includes("line-contract.ts"))).toBe(
                 true
             );
             expect(files.some((f) => f.includes("jsdoc-contract.ts"))).toBe(
                 true
             );
+            expect(files.some((f) => f.includes("block-contract.ts"))).toBe(
+                true
+            );
+            expect(
+                files.some((f) => f.includes("decorator-contract.ts"))
+            ).toBe(true);
             expect(files.some((f) => f.includes("internal.ts"))).toBe(false);
         } finally {
             await rm(tempDir, { recursive: true, force: true });

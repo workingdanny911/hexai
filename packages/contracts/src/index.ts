@@ -2,6 +2,7 @@ export {
   PublicEvent,
   PublicCommand,
   PublicQuery,
+  PublicContract,
   type PublicEventOptions,
   type PublicCommandOptions,
   type PublicQueryOptions,

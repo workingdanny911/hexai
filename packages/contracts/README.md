@@ -7,7 +7,7 @@
 `@hexaijs/contracts` provides the foundational contract types used across hexai:
 
 - **Command** and **Query** base classes with typed payload and result
-- **Decorator markers** (`@PublicEvent`, `@PublicCommand`, `@PublicQuery`) for static analysis by the contracts generator
+- **Decorator markers** (`@PublicEvent`, `@PublicCommand`, `@PublicQuery`, `@PublicContract`) for static analysis by the contracts generator
 
 This package has no runtime dependencies beyond `@hexaijs/core` as a peer dependency.
 
@@ -48,7 +48,7 @@ class GetOrderQuery extends Query<
 Pure no-op markers used by `@hexaijs/plugin-contracts-generator` for static analysis. They have no runtime effect.
 
 ```typescript
-import { PublicCommand, PublicEvent, PublicQuery } from "@hexaijs/contracts/decorators";
+import { PublicCommand, PublicContract, PublicEvent, PublicQuery } from "@hexaijs/contracts/decorators";
 
 @PublicCommand()
 class CreateOrderCommand extends Command<CreateOrderPayload, CreateOrderResult> { ... }
@@ -58,7 +58,12 @@ class OrderPlaced extends DomainEvent<OrderPlacedPayload> { ... }
 
 @PublicQuery({ response: "UserProfile" })
 class GetUserQuery extends Query<{ userId: string }, UserProfile> { ... }
+
+@PublicContract()
+class OrderSnapshotContract { ... }
 ```
+
+`@PublicContract()` is supported as a class decorator for general public contract classes. Interfaces, type aliases, and enums cannot use decorators; mark them with `// @PublicContract()`, `/* @PublicContract() */`, or `/** @PublicContract() */` comments for generator extraction.
 
 #### Decorator Options
 
@@ -67,6 +72,7 @@ class GetUserQuery extends Query<{ userId: string }, UserProfile> { ... }
 | `@PublicEvent(options?)` | `version?: number` — event version; `context?: string` — business context (inferred from package) |
 | `@PublicCommand(options?)` | `context?: string` — business context; `response?: string` — explicit response type name |
 | `@PublicQuery(options?)` | `context?: string` — business context; `response?: string` — explicit response type name |
+| `@PublicContract()` | No options — class marker for general public contracts |
 
 ## API Highlights
 
@@ -77,6 +83,7 @@ class GetUserQuery extends Query<{ userId: string }, UserProfile> { ... }
 | `PublicEvent` | `./decorators` | No-op marker for domain events |
 | `PublicCommand` | `./decorators` | No-op marker for commands |
 | `PublicQuery` | `./decorators` | No-op marker for queries |
+| `PublicContract` | `./decorators` | No-op class marker for general public contracts |
 
 ## See Also
 

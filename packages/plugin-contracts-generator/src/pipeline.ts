@@ -9,14 +9,17 @@ import type {
     ContractMarkerNames,
     DecoratorNames,
     DomainEvent,
+    EntryStrategy,
     MessageType,
     PublicContract,
     Query,
     ResponseNamingConvention,
     TypeDefinition,
 } from "./domain/types.js";
+import { isEntryStrategy } from "./domain/types.js";
 import { type FileSystem, nodeFileSystem } from "./file-system.js";
 import { type Logger, noopLogger } from "./logger.js";
+import { ConfigurationError } from "./errors.js";
 
 const DEFAULT_EXCLUDE_DEPENDENCIES = [
     "**/*.test.ts",
@@ -45,6 +48,7 @@ interface PipelineCreateOptions {
     contractMarkerNames?: ContractMarkerNames;
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
+    entryStrategy?: EntryStrategy;
 }
 
 export interface PipelineOptions {
@@ -76,26 +80,29 @@ export class ContractsPipeline {
     private readonly decoratorNames?: DecoratorNames;
     private readonly contractMarkerNames?: ContractMarkerNames;
     private readonly includePublicContracts?: boolean;
+    private readonly entryStrategy: EntryStrategy;
 
     private constructor(
         private readonly deps: PipelineDependencies,
         messageTypes?: readonly MessageType[],
         decoratorNames?: DecoratorNames,
         contractMarkerNames?: ContractMarkerNames,
-        includePublicContracts?: boolean
+        includePublicContracts?: boolean,
+        entryStrategy: EntryStrategy = "symbols"
     ) {
         this.messageTypes = messageTypes;
         this.decoratorNames = decoratorNames;
         this.contractMarkerNames = contractMarkerNames;
         this.includePublicContracts = includePublicContracts;
+        this.entryStrategy = entryStrategy;
     }
 
     static create(options: PipelineCreateOptions): ContractsPipeline {
         const fileSystem = options.fileSystem ?? nodeFileSystem;
         const logger = options.logger ?? noopLogger;
         const excludeDependencies = options.excludeDependencies ?? DEFAULT_EXCLUDE_DEPENDENCIES;
-        const includePublicContracts =
-            options.includePublicContracts ?? options.messageTypes === undefined;
+        const includePublicContracts = options.includePublicContracts ?? true;
+        const entryStrategy = validateEntryStrategy(options.entryStrategy);
         const scanner = new Scanner({
             fileSystem,
             decoratorNames: options.decoratorNames,
@@ -129,7 +136,8 @@ export class ContractsPipeline {
             options.messageTypes,
             options.decoratorNames,
             options.contractMarkerNames,
-            includePublicContracts
+            includePublicContracts,
+            entryStrategy
         );
     }
 
@@ -144,14 +152,35 @@ export class ContractsPipeline {
         this.deps.logger.info(`Processing context: ${contextName}`);
         this.deps.logger.debug(`  Source: ${sourceDir}`);
         this.deps.logger.debug(`  Output: ${contextOutputDir}`);
+        if (
+            this.entryStrategy === "graph" &&
+            this.messageTypes !== undefined &&
+            this.messageTypes.length > 0
+        ) {
+            this.deps.logger.warn(
+                "Message type filters limit graph root selection only when entryStrategy is 'graph'; entire selected entry files and dependencies may still be copied. Use entryStrategy 'symbols' to extract selected declarations only."
+            );
+        }
 
         const candidateFiles = await this.scan(sourceDir);
         const messages = await this.parse(candidateFiles, sourceDir);
         const entryPoints = this.collectEntryPoints(messages);
         const fileGraph = await this.resolve(entryPoints, sourceDir);
+        const responseTypesToInclude = this.collectResponseTypesToInclude(messages);
         const responseTypesToExport = this.collectResponseTypesToExport(messages);
         const publicContractsToExport = this.collectPublicContractsToExport(messages);
-        const copiedFiles = await this.copy(fileGraph, sourceDir, contextOutputDir, pathAliasRewrites, responseTypesToExport, publicContractsToExport, removeDecorators, this.messageTypes);
+        const copiedFiles = await this.copy(
+            fileGraph,
+            sourceDir,
+            contextOutputDir,
+            pathAliasRewrites,
+            responseTypesToExport,
+            publicContractsToExport,
+            responseTypesToInclude,
+            removeDecorators,
+            this.messageTypes,
+            this.entryStrategy
+        );
         await this.exportBarrel(copiedFiles, contextOutputDir);
 
         this.deps.logger.info(`Completed context: ${contextName} (${messages.events.length} events, ${messages.commands.length} commands, ${messages.queries.length} queries, ${messages.publicContracts.length} public contracts, ${copiedFiles.length} files)`);
@@ -194,6 +223,33 @@ export class ContractsPipeline {
 
         if (result.size > 0) {
             this.deps.logger.debug(`Found ${result.size} file(s) with unexported response types`);
+        }
+
+        return result;
+    }
+
+    private collectResponseTypesToInclude(messages: ParsedMessages): Map<string, string[]> {
+        const result = new Map<string, string[]>();
+        const allMessages = [...messages.commands, ...messages.queries];
+
+        for (const message of allMessages) {
+            if (message.resultType?.kind !== "reference") continue;
+
+            const typeName = message.resultType.name;
+            const sourceFile = message.sourceFile.absolutePath;
+            const typeDef = messages.typeDefinitions.find(
+                (t) =>
+                    t.name === typeName &&
+                    t.sourceFile.absolutePath === sourceFile
+            );
+
+            if (!typeDef) continue;
+
+            const existing = result.get(sourceFile) ?? [];
+            if (!existing.includes(typeName)) {
+                existing.push(typeName);
+                result.set(sourceFile, existing);
+            }
         }
 
         return result;
@@ -291,8 +347,10 @@ export class ContractsPipeline {
         pathAliasRewrites?: Map<string, string>,
         responseTypesToExport?: Map<string, string[]>,
         publicContractsToExport?: Map<string, string[]>,
+        responseTypesToInclude?: Map<string, string[]>,
         removeDecorators?: boolean,
-        messageTypes?: readonly MessageType[]
+        messageTypes?: readonly MessageType[],
+        entryStrategy: EntryStrategy = "symbols"
     ): Promise<string[]> {
         this.deps.logger.debug(`Copying files to ${outputDir}`);
         await this.deps.fileSystem.mkdir(outputDir, { recursive: true });
@@ -303,12 +361,14 @@ export class ContractsPipeline {
             fileGraph,
             pathAliasRewrites,
             responseTypesToExport,
+            responseTypesToInclude,
             publicContractsToExport,
             removeDecorators,
             messageTypes,
             decoratorNames: this.decoratorNames,
             contractMarkerNames: this.contractMarkerNames,
             includePublicContracts: this.includePublicContracts,
+            entryStrategy,
         });
 
         this.deps.logger.debug(`Copied ${result.copiedFiles.length} file(s)`);
@@ -320,4 +380,20 @@ export class ContractsPipeline {
         const indexContent = this.deps.fileCopier.generateBarrelExport(copiedFiles, outputDir);
         await this.deps.fileSystem.writeFile(join(outputDir, "index.ts"), indexContent);
     }
+}
+
+function validateEntryStrategy(
+    entryStrategy: EntryStrategy | undefined
+): EntryStrategy {
+    if (entryStrategy === undefined) {
+        return "symbols";
+    }
+
+    if (isEntryStrategy(entryStrategy)) {
+        return entryStrategy;
+    }
+
+    throw new ConfigurationError(
+        `Invalid entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
+    );
 }

@@ -5,10 +5,11 @@ import {
     type IncludeMode,
     type RunWithConfigOptions,
 } from "./cli.js";
-import type { MessageType } from "./domain/types.js";
+import type { EntryStrategy, MessageType } from "./domain/types.js";
 
 const VALID_MESSAGE_TYPES: MessageType[] = ["event", "command", "query"];
 const VALID_INCLUDE_MODES: IncludeMode[] = ["all", "messages", "contracts"];
+const VALID_ENTRY_STRATEGIES: EntryStrategy[] = ["graph", "symbols"];
 
 /**
  * Parses comma-separated message types string into MessageType array.
@@ -39,6 +40,18 @@ function parseIncludeMode(value: string): IncludeMode {
     }
 
     return mode as IncludeMode;
+}
+
+function parseEntryStrategy(value: string): EntryStrategy {
+    const strategy = value.trim().toLowerCase();
+    if (!VALID_ENTRY_STRATEGIES.includes(strategy as EntryStrategy)) {
+        throw new Error(
+            `Invalid entry strategy: ${value}. ` +
+                `Valid strategies are: ${VALID_ENTRY_STRATEGIES.join(", ")}`
+        );
+    }
+
+    return strategy as EntryStrategy;
 }
 
 function readMessageTypes(args: Record<string, unknown>): MessageType[] | undefined {
@@ -82,6 +95,10 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
             description: "Alias for --messages",
         },
         {
+            flags: "--entry-strategy <strategy>",
+            description: "Entry copy strategy: graph, symbols",
+        },
+        {
             flags: "--registry",
             description: "Generate message registry index.ts file",
         },
@@ -108,6 +125,9 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
                 ? parseIncludeMode(String(args.include))
                 : undefined,
             messageTypes: readMessageTypes(args),
+            entryStrategy: args.entryStrategy
+                ? parseEntryStrategy(String(args.entryStrategy))
+                : undefined,
             generateMessageRegistry:
                 args.registry === true ||
                 args.generateMessageRegistry === true,

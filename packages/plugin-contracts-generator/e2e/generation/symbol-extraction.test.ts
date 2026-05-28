@@ -25,6 +25,7 @@ describe("E2E: Symbol Extraction", () => {
             await ctx.setup();
             result = await ctx.runParser({
                 messageTypes: ["event"],
+                entryStrategy: "symbols",
             });
         });
 
@@ -148,6 +149,7 @@ describe("E2E: Symbol Extraction", () => {
             await ctx.setup();
             result = await ctx.runParser({
                 messageTypes: ["command"],
+                entryStrategy: "symbols",
             });
         });
 
@@ -251,6 +253,7 @@ describe("E2E: Symbol Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["event"],
+                entryStrategy: "symbols",
             });
         });
 
@@ -263,6 +266,50 @@ describe("E2E: Symbol Extraction", () => {
                 "symbol-extraction/repository.ts"
             );
             expectFileNotExists(repositoryPath);
+        });
+    });
+
+    describe("graph entry strategy with messageTypes filtering", () => {
+        const ctx = new E2ETestContext("symbol-extraction");
+        let result: ProcessContextResult;
+
+        beforeAll(async () => {
+            await ctx.setup();
+            result = await ctx.runParser({
+                messageTypes: ["event"],
+                entryStrategy: "graph",
+            });
+        });
+
+        afterAll(async () => {
+            await ctx.teardown();
+        });
+
+        it("should select only event roots for metadata", () => {
+            expectExtractionResult(result, {
+                eventCount: 1,
+                commandCount: 0,
+            });
+            expectEvents(result, ["UserRegistered"]);
+        });
+
+        it("should copy the selected entry file as a graph root, not extract symbols", async () => {
+            await expectFileContains(
+                ctx.getOutputFile("symbol-extraction/mixed-messages.ts"),
+                [
+                    "export class UserRegistered",
+                    "export class RegisterUser",
+                    "export class RegisterUserHandler",
+                    "export interface SomeUnrelatedType",
+                    "export function someUnrelatedFunction",
+                ]
+            );
+        });
+
+        it("should copy local runtime dependencies reachable from the entry file", () => {
+            expectGeneratedFiles(ctx.getOutputDir(), "symbol-extraction", [
+                "repository.ts",
+            ]);
         });
     });
 });

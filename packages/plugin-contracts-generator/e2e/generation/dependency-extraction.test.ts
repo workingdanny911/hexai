@@ -2,6 +2,8 @@ import { describe, it, beforeAll, afterAll } from "vitest";
 import {
     E2ETestContext,
     expectFileContains,
+    expectFileExists,
+    expectFileNotContains,
     expectTypeScriptCompiles,
 } from "@e2e/helpers";
 
@@ -19,6 +21,7 @@ describe("E2E: Dependency Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["query"],
+                entryStrategy: "symbols",
             });
         });
 
@@ -54,6 +57,7 @@ describe("E2E: Dependency Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["query"],
+                entryStrategy: "symbols",
             });
         });
 
@@ -89,6 +93,7 @@ describe("E2E: Dependency Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["query"],
+                entryStrategy: "symbols",
             });
         });
 
@@ -99,6 +104,88 @@ describe("E2E: Dependency Extraction", () => {
         it("should compile without TypeScript errors", async () => {
             // This verifies that all dependencies are properly imported
             // If any import is missing, TypeScript compilation will fail
+            await expectTypeScriptCompiles(ctx.getOutputDir());
+        });
+    });
+
+    describe("Import shape dependency resolution", () => {
+        const ctx = new E2ETestContext("dependency-extraction");
+
+        beforeAll(async () => {
+            await ctx.setup();
+            await ctx.runParser({
+                messageTypes: ["query"],
+                entryStrategy: "symbols",
+            });
+        });
+
+        afterAll(async () => {
+            await ctx.teardown();
+        });
+
+        const outputFile = () =>
+            ctx.getOutputFile("dependency-extraction/import-shapes-query.ts");
+
+        it("should preserve default and type-only default imports", async () => {
+            await expectFileContains(outputFile(), [
+                'import DefaultProfile from "./default-profile";',
+                'import type TypeOnlyDefault from "./type-only-default";',
+                "primary: DefaultProfile",
+                "typeOnly: TypeOnlyDefault",
+            ]);
+        });
+
+        it("should preserve namespace imports and nested qualified type names", async () => {
+            await expectFileContains(outputFile(), [
+                'import * as Types from "./namespace-types";',
+                "namespaceUser: Types.User",
+                "nestedNamespaceUser: Types.Inner.User",
+            ]);
+        });
+
+        it("should preserve named import aliases", async () => {
+            await expectFileContains(outputFile(), [
+                'import { AliasedUser as DomainUser } from "./aliased-user";',
+                "owner: DomainUser",
+            ]);
+        });
+
+        it("should preserve mixed imports and remove unused named imports", async () => {
+            await expectFileContains(outputFile(), [
+                'import MixedDefault, { MixedUserSource as MixedUser } from "./mixed-user";',
+                "mixedDefault: MixedDefault",
+                "mixedUser: MixedUser",
+            ]);
+
+            await expectFileNotContains(outputFile(), ["UnusedUser"]);
+        });
+
+        it("should preserve already exported local function dependencies", async () => {
+            await expectFileContains(outputFile(), [
+                "export function deriveImportShapeLabel",
+                "deriveImportShapeLabel(this.payload.primary.id)",
+            ]);
+
+            await expectFileNotContains(outputFile(), [
+                "export export function deriveImportShapeLabel",
+            ]);
+        });
+
+        it("should copy dependency files referenced by retained import shapes", () => {
+            for (const fileName of [
+                "default-profile.ts",
+                "namespace-types.ts",
+                "aliased-user.ts",
+                "mixed-user.ts",
+                "type-only-default.ts",
+            ]) {
+                expectFileExists(
+                    ctx.getOutputFile("dependency-extraction", fileName)
+                );
+            }
+        });
+
+        it("should compile generated output", async () => {
             await expectTypeScriptCompiles(ctx.getOutputDir());
         });
     });

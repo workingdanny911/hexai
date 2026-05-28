@@ -45,6 +45,10 @@ export interface PublicQueryOptions {
   response?: string;
 }
 
+export function PublicContract(): ClassDecorator {
+  return (target) => target;
+}
+
 export function PublicEvent(_options: PublicEventOptions = {}): ClassDecorator {
   return (target) => target;
 }

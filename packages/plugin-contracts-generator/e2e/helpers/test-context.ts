@@ -3,8 +3,15 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { processContext, ProcessContextResult, RegistryGenerator, ContextMessages } from "../../src/index.js";
+import {
+    processContext,
+    ProcessContextResult,
+    RegistryGenerator,
+    ContextMessages,
+} from "../../src/index.js";
 import type { ResponseNamingConvention, MessageType } from "../../src/domain/types.js";
+
+export type EntryStrategy = "graph" | "symbols";
 
 export interface RunParserOptions {
     contextName?: string;
@@ -14,6 +21,8 @@ export interface RunParserOptions {
     tsconfigPath?: string;
     responseNamingConventions?: readonly ResponseNamingConvention[];
     messageTypes?: MessageType[];
+    entryStrategy?: EntryStrategy;
+    removeDecorators?: boolean;
 }
 
 export class E2ETestContext {
@@ -98,7 +107,7 @@ export class E2ETestContext {
         const pathAliasRewrites = opts.pathAliasRewrites
             ?? this.buildPathAliasRewrites(contextName);
 
-        return processContext({
+        const processOptions = {
             contextName,
             path: contextPath,
             sourceDir,
@@ -107,7 +116,13 @@ export class E2ETestContext {
             tsconfigPath: opts.tsconfigPath,
             responseNamingConventions: opts.responseNamingConventions,
             messageTypes: opts.messageTypes,
-        });
+            entryStrategy: opts.entryStrategy,
+            removeDecorators: opts.removeDecorators,
+        } as Parameters<typeof processContext>[0] & {
+            entryStrategy?: EntryStrategy;
+        };
+
+        return processContext(processOptions);
     }
 
     /**

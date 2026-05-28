@@ -400,6 +400,67 @@ describe("FileCopier", () => {
                 "@hexaijs/plugin-contracts-generator"
             );
         });
+
+        it("should remove PublicContract and configured contract decorators", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "contracts.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { PublicContract, PublicCommand, PublicEvent, PublicQuery, PublicEventOptions } from "@hexaijs/contracts";
+
+/** @PublicContract() */
+export interface PublicProfile {
+    id: string;
+}
+
+@PublicContract()
+export class PublicProjection {}
+
+@SharedContract()
+export class SharedProjection {}
+
+@ContractCommand()
+export class CreateUserCommand {}
+`
+            );
+
+            const resolver = FileGraphResolver.create({
+                contextConfig: createTestContextConfig(testDir),
+            });
+            const fileGraph = await resolver.buildGraph([sourceFile], testDir);
+
+            const copier = new FileCopier();
+            await copier.copyFiles({
+                sourceRoot: testDir,
+                outputDir,
+                fileGraph,
+                removeDecorators: true,
+                decoratorNames: {
+                    command: "ContractCommand",
+                },
+                contractMarkerNames: {
+                    contract: "SharedContract",
+                },
+            });
+
+            const copiedContent = fs.readFileSync(
+                path.join(outputDir, "contracts.ts"),
+                "utf-8"
+            );
+
+            expect(copiedContent).not.toContain("@PublicContract");
+            expect(copiedContent).not.toContain("@SharedContract");
+            expect(copiedContent).not.toContain("@ContractCommand");
+            expect(copiedContent).not.toContain("PublicCommand");
+            expect(copiedContent).not.toMatch(/\bPublicEvent\b/);
+            expect(copiedContent).not.toContain("PublicQuery");
+            expect(copiedContent).toContain("PublicEventOptions");
+            expect(copiedContent).toContain(
+                "@hexaijs/contracts"
+            );
+        });
     });
 
     describe("excluded import removal", () => {

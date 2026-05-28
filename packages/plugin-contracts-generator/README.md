@@ -6,13 +6,13 @@
 
 `@hexaijs/plugin-contracts-generator` solves the problem of keeping frontend and backend type definitions in sync. In a hexagonal architecture, your backend defines domain events, commands, queries, and shared public contracts - but your frontend also needs type-safe access to these message types and general contract declarations for API calls, event handling, and validation.
 
-Instead of manually duplicating type definitions (which inevitably drift out of sync), this plugin scans your backend source code for public message decorators and comment-based public contract markers, then extracts the matching declarations into a standalone contracts package. The generated package contains only the public API surface - message types, their payloads, response types, and explicitly marked general contracts - without backend implementation details.
+Instead of manually duplicating type definitions (which inevitably drift out of sync), this plugin scans your backend source code for public message decorators and public contract markers, then extracts the matching declarations into a standalone contracts package. The generated package contains only the public API surface - message types, their payloads, response types, and explicitly marked general contracts - without backend implementation details.
 
 The plugin works at build time by:
 
-1. Scanning TypeScript files for message classes decorated with `@PublicEvent()`, `@PublicCommand()`, or `@PublicQuery()`, plus declarations with a leading `@PublicContract()` comment marker
+1. Scanning TypeScript files for message classes decorated with `@PublicEvent()`, `@PublicCommand()`, or `@PublicQuery()`, plus `@PublicContract()` class decorators and leading `@PublicContract()` comment markers
 2. Resolving all type dependencies (including response types, shared value objects, and general contract declarations)
-3. Generating a clean contracts package with namespace exports and, when requested, a MessageRegistry for decorated messages only
+3. Generating a clean contracts package with namespace exports and, when requested, a MessageRegistry for selected decorated messages only
 
 ## Installation
 
@@ -27,7 +27,7 @@ npm install @hexaijs/plugin-contracts-generator
 
 ### Message Decorators
 
-The package provides three decorators that mark messages for extraction. These decorators have **no runtime overhead** - they simply tag classes for discovery during the build process. Decorated messages are the only generated contracts registered in `MessageRegistry`.
+The package provides three decorators that mark messages for extraction. These decorators have **no runtime overhead** - they simply tag classes for discovery during the build process. Selected decorated messages are the only generated contracts registered in `MessageRegistry`.
 
 ```typescript
 import { PublicEvent, PublicCommand, PublicQuery } from "@hexaijs/contracts/decorators";
@@ -89,11 +89,18 @@ Each decorator accepts optional configuration:
 - `version` - Specify a version number for versioned events
 - `response` - Explicitly name the response type (for commands/queries)
 
-### PublicContract Comment Marker
+### PublicContract Markers
 
-General contracts that are not messages use a TypeScript leading comment marker instead of a decorator. The marker can be a line comment or a JSDoc block placed immediately before a `class`, `interface`, `type`, or `enum` declaration. If the marked declaration is not exported in the source file, the generator adds `export` in the generated contracts output.
+General contracts that are not messages can be exposed with `@PublicContract()`. Classes support the no-op runtime decorator form. Interfaces, type aliases, and enums do not support TypeScript decorators, so they must use a leading comment marker.
+
+Comment markers can be line comments, block comments, or JSDoc comments placed immediately before a `class`, `interface`, `type`, or `enum` declaration. Interfaces, type aliases, and enums are comment-marker only. If the marked declaration is not exported in the source file, the generator adds `export` in the generated contracts output.
 
 ```typescript
+@PublicContract()
+export class OrderSnapshotContract {
+    constructor(public readonly orderId: string) {}
+}
+
 // @PublicContract()
 interface OrderSnapshot {
     orderId: string;
@@ -101,21 +108,17 @@ interface OrderSnapshot {
     totalAmount: number;
 }
 
+/* @PublicContract() */
+enum OrderChannel {
+    Online = "online",
+    Store = "store",
+}
+
 /** @PublicContract() */
 type OrderStatus = "draft" | "placed" | "cancelled";
 ```
 
-`@PublicContract()` is a comment marker, not a runtime decorator. Do not write it as decorator syntax:
-
-```typescript
-// Unsupported: TypeScript decorators cannot be applied to interfaces or type aliases.
-@PublicContract()
-export interface OrderSnapshot {
-    orderId: string;
-}
-```
-
-Comment-marked public contracts are included in the generated contracts output, but they are not message contracts and are never registered in `MessageRegistry`.
+Public contracts are included in the generated contracts output, but they are not message contracts and are never registered in `MessageRegistry`. `MessageRegistry` registers selected decorated messages only.
 
 ### Configuration
 
@@ -167,6 +170,9 @@ export default {
         contractMarkerNames: {
             contract: "PublicContract",
         },
+
+        // Entry strategy (optional, default: "symbols")
+        entryStrategy: "symbols",
 
         // Strip decorators from generated output (optional, default: true)
         removeDecorators: true,
@@ -228,17 +234,21 @@ Response types must be in the same file as the command/query. Both `type` aliase
 
 The generator handles two types of files differently:
 
-**Entry files** (files with message decorators or `@PublicContract()` comment markers) are contract entry points:
-- Default message generation preserves message entry files and their runtime dependencies
-- Message filters (`--messages`, `--message-types`) extract only matching decorated message classes
-- PublicContract-only files extract comment-marked `class`, `interface`, `type`, and `enum` declarations
-- Handler classes and unused imports are excluded in extraction modes
+**Entry files** (files with message decorators, `@PublicContract()` class decorators, or `@PublicContract()` comment markers) are contract entry points:
+- The default `entryStrategy` is `symbols`, which extracts selected declarations and filters imports for generated contract packages
+- Use `entryStrategy: "graph"` or `--entry-strategy graph` when you intentionally want to copy selected entry files and their dependency graphs
+- Under `graph`, message filters (`--messages`, `--message-types`) select graph roots and registry entries only; selected entry files can still be copied whole with other declarations from the same file, and the generator logs a warning when filters are used
+- In `symbols`, matching decorated message classes and marked public contract declarations are extracted with minimal local dependencies
+- In `symbols`, selected entry files preserve retained default imports, namespace imports, named aliases, mixed default + named imports, type-only default imports, and qualified type references such as `Types.User` or `Types.Inner.User`
+- In `symbols`, unused named specifiers in retained mixed imports are removed when the AST shape is safe to rewrite, and already-exported local function dependencies are preserved without adding a duplicate `export`
 - Response types are included based on naming conventions
 
 **Dependency files** (imported by entry files) are copied entirely:
 - Supports barrel files (`export * from './module'`)
 - Preserves all exports for transitive dependencies
 - Ensures type dependencies remain intact
+
+`symbols` is still an AST-based slicer, not a full TypeScript TypeChecker semantic slicer. Dependency files referenced by retained local imports are copied as files; they are not symbol-sliced.
 
 ## Usage
 
@@ -254,7 +264,7 @@ npx generate-contracts --output-dir packages/contracts/src
 npx generate-contracts -o packages/contracts/src --config ./app.config.ts
 ```
 
-By default, the CLI uses `--include all` and `--messages event,command,query`. This generates decorated `@PublicEvent()`, `@PublicCommand()`, and `@PublicQuery()` message contracts plus comment-marked `@PublicContract()` declarations.
+By default, the CLI uses `--include all`, all message types, and `--entry-strategy symbols`. This generates decorated `@PublicEvent()`, `@PublicCommand()`, and `@PublicQuery()` message contracts plus marked `@PublicContract()` declarations as a strict public contract surface.
 
 | Option | Description |
 |--------|-------------|
@@ -263,12 +273,39 @@ By default, the CLI uses `--include all` and `--messages event,command,query`. T
 | `--include <scope>` | Select generated contract categories: `all`, `messages`, or `contracts` |
 | `--messages <types>` | Recommended message subtype filter. Accepts comma-separated `event`, `command`, and `query` values |
 | `-m, --message-types <types>` | Legacy alias for `--messages`; kept for backwards compatibility |
+| `--entry-strategy <strategy>` | Entry strategy: `symbols` strictly extracts selected declarations (default); `graph` copies selected entry file graphs |
 | `--registry` | Generate the root `MessageRegistry` export |
 | `--generate-message-registry` | Legacy verbose alias for `--registry` |
 | `--dry-run` | Print the planned context extraction and file summary without writing files |
 | `--check` | Verify generated output freshness for CI and exit non-zero when changes are required |
 
-`--include contracts` generates only `@PublicContract()` declarations. `--include messages` generates only decorated messages. `--messages` filters only the message subtypes and does not exclude `@PublicContract()` declarations when `--include all` is used. The generated `MessageRegistry` registers messages only; general public contracts are never registered.
+`--include contracts` generates only `@PublicContract()` declarations. `--include messages` generates only decorated messages. `--messages` filters only the message subtypes and does not exclude `@PublicContract()` declarations when `--include all` is used. In the default `symbols` strategy, retained local imports can use default, namespace, aliased named, mixed default + named, and type-only default import forms; qualified namespace references are tracked in selected entry files. Use `--entry-strategy graph` for conservative entry file graph copying. Under `graph`, message filters select graph roots and registry entries only; selected entry files can still be copied whole with other declarations from the same file, and the generator logs a warning. The generated `MessageRegistry` registers selected decorated messages only; general public contracts are never registered.
+
+### hexai CLI Plugin
+
+When loaded through `hexai.config.ts`, the same options are available through the `hexai` plugin command:
+
+```typescript
+// hexai.config.ts
+export default {
+    plugins: [
+        {
+            plugin: "@hexaijs/plugin-contracts-generator",
+            config: {
+                contexts: ["packages/*"],
+                entryStrategy: "symbols",
+                contractMarkerNames: { contract: "PublicContract" },
+            },
+        },
+    ],
+};
+```
+
+```bash
+pnpm hexai generate-contracts -o packages/contracts/src --registry
+pnpm hexai generate-contracts -o packages/contracts/src --include messages --messages event,command
+pnpm hexai generate-contracts -o packages/contracts/src --entry-strategy graph
+```
 
 Common workflows:
 
@@ -282,6 +319,9 @@ npx generate-contracts -o packages/contracts/src --include messages --messages e
 
 # Generate general public contracts only
 npx generate-contracts -o packages/contracts/src --include contracts
+
+# Opt into conservative entry file graph copying
+npx generate-contracts -o packages/contracts/src --messages event --entry-strategy graph
 
 # CI freshness check
 npx generate-contracts -o packages/contracts/src --check
@@ -303,6 +343,7 @@ const result = await processContext({
     contractMarkerNames: { contract: "PublicContract" },
     messageTypes: ["event", "command"],
     includePublicContracts: true,
+    entryStrategy: "symbols",
     responseNamingConventions: [
         { messageSuffix: "Command", responseSuffix: "CommandResult" },
     ],
@@ -406,9 +447,10 @@ try {
 | `PublicEvent` | Decorator to mark event messages for extraction and registry generation |
 | `PublicCommand` | Decorator to mark command messages for extraction and registry generation |
 | `PublicQuery` | Decorator to mark query messages for extraction and registry generation |
-| `PublicContract` marker | Comment marker (`// @PublicContract()` or JSDoc) for general contracts; not a decorator export |
-| `PublicContract` type | Domain model for comment-marked `class`, `interface`, `type`, and `enum` declarations |
+| `PublicContract` | No-op class decorator for general public contract classes; also the default comment marker name for non-class declarations |
+| `PublicContract` type | Domain model for marked `class`, `interface`, `type`, and `enum` declarations |
 | `ContractMarkerNames` | Configuration shape for customizing public contract comment marker names |
+| `EntryStrategy` | `symbols` for default strict declaration extraction, or `graph` for entry file graph copy |
 | `MessageRegistry` | Runtime registry for decorated message deserialization |
 | `ConsoleLogger` | Configurable logger for build output |
 | Error types | `ConfigLoadError`, `FileReadError`, `MessageParserError`, etc. |

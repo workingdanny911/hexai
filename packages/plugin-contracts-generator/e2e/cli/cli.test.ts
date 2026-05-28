@@ -71,6 +71,19 @@ describe("CLI E2E", () => {
         };
     }
 
+    function createSymbolExtractionConfig() {
+        return {
+            contracts: {
+                contexts: [
+                    {
+                        name: "symbol-extraction",
+                        path: join(fixturesDir, "symbol-extraction"),
+                    },
+                ],
+            },
+        };
+    }
+
     async function expectNoGeneratedFiles(path: string): Promise<void> {
         if (!existsSync(path)) {
             return;
@@ -589,6 +602,49 @@ describe("CLI E2E", () => {
             ).toBe(false);
         });
 
+        it("should extract symbols by default when --messages=event", async () => {
+            await createConfig(createSymbolExtractionConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--messages=event",
+            ]);
+
+            const content = readFileSync(
+                join(contractsDir, "symbol-extraction", "mixed-messages.ts"),
+                "utf-8"
+            );
+            expect(content).toContain("export class UserRegistered");
+            expect(content).not.toContain("export class RegisterUser");
+            expect(content).not.toContain("export class RegisterUserHandler");
+            expect(content).not.toContain("export interface SomeUnrelatedType");
+        });
+
+        it("should keep graph-copy semantics when --entry-strategy=graph and --messages=event", async () => {
+            await createConfig(createSymbolExtractionConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--messages=event",
+                "--entry-strategy=graph",
+            ]);
+
+            const content = readFileSync(
+                join(contractsDir, "symbol-extraction", "mixed-messages.ts"),
+                "utf-8"
+            );
+            expect(content).toContain("export class UserRegistered");
+            expect(content).toContain("export class RegisterUser");
+            expect(content).toContain("export class RegisterUserHandler");
+            expect(content).toContain("export interface SomeUnrelatedType");
+        });
+
         it("should extract only commands when --messages command", async () => {
             await createConfig(createLectureConfig());
             const contractsDir = join(outputDir, "contracts");
@@ -607,6 +663,35 @@ describe("CLI E2E", () => {
             expect(existsSync(join(contractsDir, "lecture", "events.ts"))).toBe(
                 false
             );
+        });
+    });
+
+    describe("--entry-strategy option", () => {
+        it("should accept --entry-strategy=symbols and extract marked PublicContract symbols only", async () => {
+            await createConfig(createMessagesAndPublicContractsConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--entry-strategy=symbols",
+            ]);
+
+            const content = readFileSync(
+                join(contractsDir, "public-contract", "contracts.ts"),
+                "utf-8"
+            );
+            expect(content).toContain("export interface PublicProfile");
+            expect(content).toContain("export type PublicUserId");
+            expect(content).toContain("export class PublicProjection");
+            expect(content).toContain("export enum PublicStatus");
+            expect(content).toContain("deriveDisplayName");
+            expect(content).toContain("DEFAULT_STATUS");
+            expect(content).toContain("Status.Active");
+            expect(content).toContain("Factory.create()");
+            expect(content).not.toContain("InternalProfileRecord");
+            expect(content).not.toContain("InternalProjection");
         });
     });
 
@@ -680,6 +765,14 @@ describe("CLI E2E", () => {
             expect(
                 existsSync(join(contractsDir, "lecture", "commands.ts"))
             ).toBe(false);
+
+            const registryContent = readFileSync(
+                join(contractsDir, "index.ts"),
+                "utf-8"
+            );
+            expect(registryContent).toContain("LectureCreated");
+            expect(registryContent).toContain("LectureDeleted");
+            expect(registryContent).not.toContain("CreateLecture");
         });
     });
 

@@ -197,7 +197,28 @@ describe("Parser", () => {
         });
     });
 
-    describe("parsing @PublicContract comment markers", () => {
+    describe("parsing @PublicContract markers", () => {
+        it("should extract a class marked with the @PublicContract decorator", () => {
+            const sourceCode = `
+        @PublicContract()
+        export class PublicProjection {
+          constructor(readonly id: string) {}
+        }
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.publicContracts).toHaveLength(1);
+            expect(result.publicContracts[0]).toMatchObject({
+                name: "PublicProjection",
+                contractType: "contract",
+                declarationKind: "class",
+                exported: true,
+                sourceFile: testSourceFile,
+            });
+        });
+
         it("should extract line comment markers from type, interface, and class declarations", () => {
             const sourceCode = `
         // @PublicContract()
@@ -244,6 +265,27 @@ describe("Parser", () => {
             expect(contractsByName.get("UserProjection")).toMatchObject({
                 contractType: "contract",
                 declarationKind: "class",
+                exported: true,
+                sourceFile: testSourceFile,
+            });
+        });
+
+        it("should extract block comment markers from public contract declarations", () => {
+            const sourceCode = `
+        /* @PublicContract() */
+        export interface PublicSettings {
+          theme: string;
+        }
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.publicContracts).toHaveLength(1);
+            expect(result.publicContracts[0]).toMatchObject({
+                name: "PublicSettings",
+                contractType: "contract",
+                declarationKind: "interface",
                 exported: true,
                 sourceFile: testSourceFile,
             });
