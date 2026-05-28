@@ -23,8 +23,8 @@ src/
 ├── pipeline.ts           # ContractsPipeline orchestrator
 │
 ├── # Core Modules
-├── scanner.ts            # Find decorated files
-├── parser.ts             # Extract events/commands from AST
+├── scanner.ts            # Find public contract entry files
+├── parser.ts             # Extract messages and public contract metadata from AST
 ├── ast-utils.ts          # Low-level AST manipulation
 ├── import-analyzer.ts    # Import statement analysis
 ├── class-analyzer.ts     # Class declaration analysis
@@ -43,9 +43,9 @@ src/
 
 ## Module Overview
 
-### 1. Decorators (moved to `@hexaijs/contracts`)
+### 1. Public Markers
 
-**Note**: Decorators have been moved to the `@hexaijs/contracts` package (`@hexaijs/contracts/decorators`). They are pure no-op class decorators used as markers for the Scanner's static analysis. No `reflect-metadata` dependency.
+Message decorators have been moved to the `@hexaijs/contracts` package (`@hexaijs/contracts/decorators`). They are pure no-op class decorators used as markers for the Scanner's static analysis. No `reflect-metadata` dependency.
 
 ```typescript
 // @hexaijs/contracts/decorators
@@ -54,17 +54,37 @@ src/
 @PublicQuery(options?: PublicQueryOptions)    // { context?, response? }
 ```
 
-The Scanner finds files containing these decorator patterns via text search, then the Parser extracts class metadata from AST.
+General public contracts use a leading TypeScript comment marker, not a decorator:
+
+```typescript
+// @PublicContract()
+interface PublicOrderSnapshot {
+  orderId: string;
+}
+
+/** @PublicContract() */
+type PublicOrderStatus = "draft" | "placed";
+```
+
+The comment marker applies to the following declaration only when it appears in the declaration's leading comments. It supports `class`, `interface`, `type`, and `enum`.
+
+`@PublicContract()` decorator syntax is intentionally unsupported. TypeScript decorators cannot be applied to `interface` or `type` declarations, and the generator treats `PublicContract` as a comment marker for all general contracts.
+
+The Scanner finds files containing message decorator patterns or public contract comment marker text via text search. The Parser then validates the AST shape and extracts message metadata or public contract metadata.
 
 ---
 
 ### 2. Scanner (`src/scanner.ts`)
 
-Finds files containing `@PublicEvent` or `@PublicCommand` decorators in the source directory.
+Finds files containing public contract entry markers in the source directory. Entry markers include message decorators (`@PublicEvent`, `@PublicCommand`, `@PublicQuery`) and comment-based general contract markers (`@PublicContract` by default).
 
 ```typescript
 interface ScannerOptions {
   exclude?: string[];  // Exclude glob patterns
+  decoratorNames?: DecoratorNames
+  contractMarkerNames?: ContractMarkerNames
+  messageTypes?: MessageType[]
+  includePublicContracts?: boolean
 }
 
 class Scanner {
@@ -80,35 +100,41 @@ class Scanner {
 
 **Algorithm**:
 1. Traverse all TypeScript files using `**/*.ts` glob
-2. Search file contents for `@PublicEvent(` or `@PublicCommand(` text
-3. Return matching file paths
+2. Search file contents for configured message decorator text (`@PublicEvent(`, `@PublicCommand(`, `@PublicQuery(` by default)
+3. Search file contents for configured public contract marker text (`@PublicContract` by default) when public contracts are included
+4. Return matching file paths
 
-**Characteristics**: Optimizes performance with fast text matching before AST parsing
+**Characteristics**: Optimizes performance with fast text matching before AST parsing. Text matching is intentionally broad; the Parser is responsible for enforcing that `@PublicContract()` appears in a leading comment before a supported declaration. When `messageTypes` is provided, public contract marker scanning is disabled by default unless `includePublicContracts` is set.
 
 ---
 
 ### 3. Parser (`src/parser.ts`)
 
-Analyzes TypeScript AST to extract Event/Command class information.
+Analyzes TypeScript AST to extract message class information and general public contract metadata.
 
 ```typescript
 interface ParseResult {
   readonly events: readonly DomainEvent[]
   readonly commands: readonly Command[]
+  readonly queries: readonly Query[]
+  readonly publicContracts: readonly PublicContract[]
+  readonly typeDefinitions: readonly TypeDefinition[]
 }
 
 class Parser {
-  parse(sourceCode: string): ParseResult
+  parse(sourceCode: string, sourceFileInfo: SourceFile): ParseResult
 }
 ```
 
 **Extraction Process**:
 1. Generate TypeScript AST
-2. Traverse `ClassDeclaration` nodes
-3. Check decorators (`@PublicEvent`, `@PublicCommand`)
-4. Extract payload type (`extends Message<PayloadType>`)
-5. Collect class imports and dependencies
-6. Extract base class name
+2. Traverse `ClassDeclaration`, `InterfaceDeclaration`, `TypeAliasDeclaration`, and `EnumDeclaration` nodes
+3. For classes, check message decorators (`@PublicEvent`, `@PublicCommand`, `@PublicQuery`) and apply `messageTypes` filtering
+4. For classes, interfaces, type aliases, and enums, check configured leading comment marker (`@PublicContract` by default)
+5. Extract message payload type (`extends Message<PayloadType>`)
+6. Collect class imports and dependencies
+7. Extract base class name
+8. Record `PublicContract` metadata separately from the `Message` union
 
 **Extracted Data**:
 - `name`: Class name
@@ -117,6 +143,15 @@ class Parser {
 - `sourceText`: Complete class source code
 - `imports`: All import statements in the file
 - `baseClass`: Inherited class name
+
+**PublicContract Data**:
+- `name`: Declaration name
+- `contractType`: Always `"contract"`
+- `declarationKind`: `"class"`, `"interface"`, `"type"`, or `"enum"`
+- `sourceFile`: Original source file
+- `exported`: Whether the source declaration was exported. Unexported public contracts are exported in generated output.
+
+Public contracts are included in generated contracts output, but they are not message contracts and are not registered in `MessageRegistry`.
 
 ---
 
@@ -156,6 +191,7 @@ Class analysis functions:
 
 ```typescript
 hasDecorator(node: ts.ClassDeclaration, decoratorName: string): boolean
+hasLeadingCommentMarker(node: ts.Node, sourceCode: string, markerName: string): boolean
 hasExportModifier(node: ts.Node): boolean
 extractClassSourceText(node: ts.ClassDeclaration, sourceCode: string): string
 getBaseClassName(node: ts.ClassDeclaration): string | undefined
@@ -225,10 +261,13 @@ interface CopyOptions {
   outputDir: string
   fileGraph: FileGraph
   pathAliasRewrites?: Map<string, string>  // e.g., Map([['@libera/', '@/']])
-  removeDecorators?: boolean               // Remove @PublicCommand/@PublicEvent decorators
+  removeDecorators?: boolean               // Remove message decorators from generated output
   messageTypes?: MessageType[]             // Message types to extract ('event' | 'command' | 'query')
-  decoratorNames?: string[]                // Decorator names for each messageType
-  responseTypesToExport?: Map<string, string>  // Message class → Response type name mapping
+  decoratorNames?: DecoratorNames          // Decorator names for each messageType
+  contractMarkerNames?: ContractMarkerNames // Comment marker names for general contracts
+  includePublicContracts?: boolean          // Include comment-marked general contracts
+  responseTypesToExport?: Map<string, string>  // Message class to Response type name mapping
+  publicContractsToExport?: Map<string, string[]> // Unexported public contracts to export
 }
 
 interface CopyResult {
@@ -246,13 +285,15 @@ class FileCopier {
 
 | File Type | Processing Method | Reason |
 |-----------|-------------------|--------|
-| **Entry files** | Symbol extraction + Import filtering | Exclude handlers and unnecessary code |
+| **Message entry files without filters** | Full module copy + common post-processing | Preserve runtime validation/domain dependencies for existing generated contracts |
+| **Filtered message entry files** | Symbol extraction + import filtering | Include only selected message types while excluding handlers and unnecessary code |
+| **PublicContract-only entry files** | Symbol extraction + import filtering | Include only comment-marked public declarations |
 | **Dependency files** | Full module copy | Simplification, automatic barrel file support |
 
 **Entry File Symbol Extraction (`extractSymbolsFromEntry()`)**:
-1. Extract only `@Public*` classes matching `messageTypes`
-2. Extract Response types for those classes (naming convention)
-3. BFS tracking of local type dependencies
+1. Extract message classes matching `messageTypes` when a message filter is active
+2. Extract comment-marked public contract declarations from PublicContract-only files
+3. Track local type dependencies used by extracted declarations
 4. Filter and keep only used imports
 
 **Import Rewriting**:
@@ -261,7 +302,8 @@ class FileCopier {
 
 **Additional Features**:
 - **Excluded file import removal**: Automatically removes import/export statements referencing files in `FileGraph.excludedPaths`
-- **Decorator removal**: Removes `@PublicCommand`, `@PublicEvent` decorators and related imports when `removeDecorators: true`
+- **Decorator removal**: Removes configured message decorators (`@PublicCommand`, `@PublicEvent`, `@PublicQuery` by default) and related imports when `removeDecorators: true`
+- **Public contract output**: Includes comment-marked `class`, `interface`, `type`, and `enum` declarations in generated contracts output without adding them to `MessageRegistry`
 - **Transitive dependency tracking**: Includes dependencies of dependencies via FileGraph-based BFS, not just direct imports from entry files
 
 ---
@@ -322,6 +364,7 @@ interface ContractsConfig {
   readonly pathAliasRewrites?: Readonly<Record<string, string>>
   readonly externalDependencies?: Readonly<Record<string, string>>
   readonly decoratorNames: Required<DecoratorNames>
+  readonly contractMarkerNames: Required<ContractMarkerNames>
   readonly responseNamingConventions?: readonly ResponseNamingConvention[]
   readonly removeDecorators?: boolean
 }
@@ -347,12 +390,22 @@ class ConfigLoadError extends Error {
 Command-line interface and full pipeline orchestration.
 
 ```bash
-Usage: contracts-generator [options]
+Usage: generate-contracts [options]
 
 Options:
-  -c, --config <path>   Path to config file (default: application.config.ts)
-  -h, --help            Show this help message
+  -o, --output-dir <path>               Output directory for generated contracts
+  -c, --config <path>                   Path to config file (default: application.config.ts)
+  --include <all|messages|contracts>    Contract categories to generate (default: all)
+  --messages <event,command,query>      Message subtype filter (default: event,command,query)
+  -m, --message-types <types>           Legacy alias for --messages
+  --registry                            Generate MessageRegistry export
+  --generate-message-registry           Legacy verbose alias for --registry
+  --dry-run                             Print plan/summary without writing files
+  --check                               Verify generated output freshness for CI
+  -h, --help                            Show this help message
 ```
+
+The default scope is `--include all`, which extracts decorated public messages and comment-marked `PublicContract` declarations. `--include messages` extracts only decorated message contracts. `--include contracts` extracts only `PublicContract` declarations. The `--messages` filter applies only to message subtypes and does not filter general contracts. Registry generation includes decorated messages only.
 
 **Programmatic API**:
 ```typescript
@@ -361,8 +414,9 @@ async function run(args: string[]): Promise<void>
 
 **Processing Flow**:
 1. Load config
-2. Call processContext for each context
-3. Output results (events, commands, queries, files count)
+2. Resolve CLI generation scope from `--include` and `--messages`
+3. Call processContext for each context, or build an equivalent temporary output when `--check` is active
+4. Output results (events, commands, queries, public contracts, files count) or dry-run/check summary
 
 ---
 
@@ -373,11 +427,16 @@ CLI plugin definition for integration with the hexai CLI tool.
 ```typescript
 export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
   name: "generate-contracts",
-  description: "Extract domain events, commands, and queries from bounded contexts",
+  description: "Extract public messages and contracts from bounded contexts",
   options: [
     { flags: "-o, --output-dir <path>", description: "Output directory", required: true },
-    { flags: "-m, --message-types <types>", description: "Filter message types" },
-    { flags: "--generate-message-registry", description: "Generate message registry" },
+    { flags: "--include <scope>", description: "Generate all, messages, or contracts" },
+    { flags: "--messages <types>", description: "Filter message subtypes" },
+    { flags: "-m, --message-types <types>", description: "Legacy alias for --messages" },
+    { flags: "--registry", description: "Generate message registry" },
+    { flags: "--generate-message-registry", description: "Legacy verbose alias for --registry" },
+    { flags: "--dry-run", description: "Print plan without writing files" },
+    { flags: "--check", description: "Verify generated output freshness" },
   ],
   run: async (args, config) => { ... }
 }
@@ -386,8 +445,11 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
 **Usage**:
 ```bash
 pnpm hexai generate-contracts -o packages/contracts/src
-pnpm hexai generate-contracts -o packages/contracts/src -m event,command
-pnpm hexai generate-contracts -o packages/contracts/src --generate-message-registry
+pnpm hexai generate-contracts -o packages/contracts/src --dry-run
+pnpm hexai generate-contracts -o packages/contracts/src --registry
+pnpm hexai generate-contracts -o packages/contracts/src --include messages --messages event,command
+pnpm hexai generate-contracts -o packages/contracts/src --include contracts
+pnpm hexai generate-contracts -o packages/contracts/src --check
 ```
 
 ---
@@ -399,21 +461,26 @@ Provides the programmatic API.
 ```typescript
 interface ProcessContextOptions {
   contextName: string
-  sourceDir: string
+  path: string
+  sourceDir?: string
   outputDir: string
   pathAliasRewrites?: Map<string, string>
   tsconfigPath?: string
+  decoratorNames?: DecoratorNames
+  contractMarkerNames?: ContractMarkerNames
   fileSystem?: FileSystem           // File system abstraction (default: nodeFileSystem)
   logger?: Logger                   // Logger instance (default: noopLogger)
   messageTypes?: MessageType[]      // Message types to extract ('event' | 'command' | 'query')
-  removeDecorators?: boolean        // Remove @Public* decorators from output
-  responseNamingConventions?: string[]  // Patterns for matching response types
+  includePublicContracts?: boolean  // Include comment-marked general contracts
+  removeDecorators?: boolean        // Remove message decorators from output
+  responseNamingConventions?: readonly ResponseNamingConvention[]  // Patterns for matching response types
 }
 
 interface ProcessContextResult {
   events: DomainEvent[]
   commands: Command[]
   queries: Query[]
+  publicContracts: PublicContract[]
   copiedFiles: string[]
 }
 
@@ -487,7 +554,7 @@ const noopLogger: Logger
 |-------|-------|---------|
 | execute | info | Context processing start/complete |
 | scan | debug | Scan start, discovered file count |
-| parse | debug | Parse start, extracted events/commands count |
+| parse | debug | Parse start, extracted events, commands, queries, and public contracts count |
 | resolve | debug | Dependency resolution start, graph node count |
 | copy | debug | Copy start, copied file count |
 
@@ -512,12 +579,14 @@ interface PipelineOptions {
   readonly sourceDir: string
   readonly outputDir: string
   readonly pathAliasRewrites?: Map<string, string>
+  readonly removeDecorators?: boolean
 }
 
 interface PipelineResult {
   readonly events: DomainEvent[]
   readonly commands: Command[]
   readonly queries: Query[]
+  readonly publicContracts: PublicContract[]
   readonly copiedFiles: string[]
 }
 
@@ -525,15 +594,22 @@ interface ParsedMessages {
   readonly events: DomainEvent[]
   readonly commands: Command[]
   readonly queries: Query[]
+  readonly publicContracts: PublicContract[]
+  readonly typeDefinitions: TypeDefinition[]
 }
 
 class ContractsPipeline {
   // Factory method (auto-configure dependencies)
-  static async create(options?: {
-    tsconfigPath?: string
+  static create(options: {
+    contextConfig: ContextConfig
+    decoratorNames?: DecoratorNames
+    contractMarkerNames?: ContractMarkerNames
+    messageTypes?: MessageType[]
+    includePublicContracts?: boolean
+    responseNamingConventions?: readonly ResponseNamingConvention[]
     fileSystem?: FileSystem
     logger?: Logger
-  }): Promise<ContractsPipeline>
+  }): ContractsPipeline
 
   // Test factory (direct dependency injection)
   static fromDependencies(deps: PipelineDependencies): ContractsPipeline
@@ -645,7 +721,7 @@ const event = registry.dehydrate<LectureCreated>(header, body);
 
 ### 17. RegistryGenerator (`src/registry-generator.ts`)
 
-Automatically generates MessageRegistry registration code based on extracted Events/Commands.
+Automatically generates MessageRegistry registration code based on extracted message contracts. General `PublicContract` declarations are intentionally excluded from registry generation.
 
 ```typescript
 interface RegistryGeneratorOptions {
@@ -657,6 +733,7 @@ interface ContextMessages {
   readonly contextName: string
   readonly events: readonly DomainEvent[]
   readonly commands: readonly Command[]
+  readonly queries?: readonly Query[]
   readonly importPath?: string
 }
 
@@ -707,7 +784,7 @@ export const messageRegistry = new MessageRegistry()
 - `topic-generation` → `topicGeneration`
 
 **Purpose**:
-- Auto-generate MessageRegistry registration code for contracts package's `index.ts`
+- Auto-generate MessageRegistry registration code for decorated events, commands, and queries in the contracts package's `index.ts`
 - Enable message deserialization in frontend
 
 ---
@@ -777,7 +854,7 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 │  ConfigLoader                                                                  │
 │  ─────────────                                                                 │
 │  application.config.ts → ContractsConfig                                       │
-│  (contexts, pathAliasRewrites, decoratorNames, ...)                            │
+│  (contexts, pathAliasRewrites, decoratorNames, contractMarkerNames, ...)        │
 └───────────────────────────────────┬───────────────────────────────────────────┘
                                     │
                     ┌───────────────┴───────────────┐
@@ -794,7 +871,8 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 ┌────────────────────────────────────────────────────────────────────────────────┐
 │  1. SCAN (Scanner)                                                             │
 │  ──────────────────                                                            │
-│  @Public* decorator file discovery + messageTypes decorator filtering          │
+│  Message decorator discovery + PublicContract marker discovery                 │
+│  messageTypes filters only message decorators                                  │
 │  Output: string[] (entry files)                                                │
 └────────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -802,9 +880,9 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 ┌────────────────────────────────────────────────────────────────────────────────┐
 │  2. PARSE (Parser)                                                             │
 │  ─────────────────                                                             │
-│  Message class parsing + Response matching by naming convention                │
-│  Collect only symbols matching messageTypes                                    │
-│  Output: ParsedMessages (commands, events, queries, typeDefinitions)           │
+│  Message class parsing + PublicContract metadata extraction                    │
+│  Response matching by naming convention                                        │
+│  Output: ParsedMessages (commands, events, queries, publicContracts, types)    │
 └────────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -821,16 +899,17 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 │  ────────────────────────────────────────                                      │
 │                                                                                │
 │  Pass 1: Entry file processing                                                 │
-│   - Symbol extraction: Extract only @Public* classes                           │
-│   - Response type extraction (naming convention)                               │
-│   - BFS tracking of local type dependencies                                    │
+│   - Preserve unfiltered message files for runtime compatibility                │
+│   - Message symbol extraction when messageTypes filtering is active            │
+│   - PublicContract-only files extract marked declarations                      │
 │   - Path alias → relative path conversion, then import extraction              │
 │                                                                                │
 │  Pass 1.5: Transitive dependency expansion                                     │
 │   - Recursively expand usedLocalImports via FileGraph-based BFS               │
 │                                                                                │
 │  Pass 2: Dependency file processing                                            │
-│   - Copy only used dependencies as full modules                                │
+│   - Copy all dependencies for unfiltered message files                         │
+│   - Copy only used dependencies when messageTypes filtering is active          │
 │   - Common post-processing: decorator removal, path alias conversion           │
 │                                                                                │
 │  Output: copiedFiles[]                                                         │
@@ -915,7 +994,8 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 |---------|-------|
 | **Discriminated Union** | `kind` field in `TypeRef` for type discrimination |
 | **Type Guards** | `isPrimitiveType()`, `isDomainEvent()`, etc. |
-| **Decorator** | `@PublicEvent`, `@PublicCommand` |
+| **Decorator** | `@PublicEvent`, `@PublicCommand`, `@PublicQuery` message markers |
+| **Comment Marker** | Leading `@PublicContract()` comments for general contracts |
 | **Visitor** | AST node traversal (Parser) |
 | **Graph Traversal** | BFS for import dependency exploration |
 | **Facade** | `processContext()` encapsulates entire pipeline |
@@ -936,7 +1016,7 @@ TypeDefinition, TypeDefinitionKind, ClassDefinition, ClassImport
 EnumDefinition, EnumMember
 ExtractionResult, ExtractionError, ExtractionWarning, Config
 Dependency, DependencyKind, ImportSource
-MessageBase, MessageType
+MessageBase, MessageType, PublicContract, PublicContractDeclarationKind
 
 // Type Variants
 PrimitiveType, ArrayType, ObjectType, UnionType, IntersectionType
@@ -956,7 +1036,7 @@ PipelineDependencies, PipelineOptions, PipelineResult, ParsedMessages
 ProcessContextOptions, ProcessContextResult
 
 // Config Types
-ContractsConfig, ContextConfig
+ContractsConfig, ContextConfig, DecoratorNames, ContractMarkerNames
 ScannerOptions, ParseResult
 
 // Runtime Types
@@ -1001,18 +1081,28 @@ MessageParserError
 processContext(options: ProcessContextOptions): Promise<ProcessContextResult>
 ```
 
-### Decorators (in `@hexaijs/contracts/decorators`)
+### Message Decorators (in `@hexaijs/contracts/decorators`)
 ```typescript
 @PublicEvent(options?: PublicEventOptions)
 @PublicCommand(options?: PublicCommandOptions)
 @PublicQuery(options?: PublicQueryOptions)
 ```
 
+### Comment Markers
+```typescript
+// @PublicContract()
+/** @PublicContract() */
+```
+
+`PublicContract` is a comment marker name configured by `contractMarkerNames`, not a decorator export.
+
 ### CLI
 ```bash
 # Standalone CLI
-contracts-generator [--config <path>] [--help]
+generate-contracts -o <output-dir> [--config <path>] [--include all|messages|contracts] [--messages event,command,query] [--registry] [--dry-run] [--check]
 
 # hexai CLI plugin
-pnpm hexai generate-contracts -o <output-dir> [-m <message-types>] [--generate-message-registry]
+pnpm hexai generate-contracts -o <output-dir> [--include all|messages|contracts] [--messages event,command,query] [--registry] [--dry-run] [--check]
 ```
+
+Legacy aliases remain supported: `-m, --message-types` maps to `--messages`, and `--generate-message-registry` maps to `--registry`.

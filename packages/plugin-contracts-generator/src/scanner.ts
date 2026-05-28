@@ -2,8 +2,12 @@ import { glob } from "glob";
 
 import { FileReadError } from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
-import type { DecoratorNames, MessageType } from "./domain/index.js";
-import { mergeDecoratorNames } from "./domain/index.js";
+import type {
+    ContractMarkerNames,
+    DecoratorNames,
+    MessageType,
+} from "./domain/index.js";
+import { mergeContractMarkerNames, mergeDecoratorNames } from "./domain/index.js";
 
 const DEFAULT_EXCLUDE_PATTERNS = [
     "**/node_modules/**",
@@ -17,17 +21,20 @@ export interface ScannerOptions {
     exclude?: string[];
     fileSystem?: FileSystem;
     decoratorNames?: DecoratorNames;
+    contractMarkerNames?: ContractMarkerNames;
     /**
      * Filter which message types to scan for.
      * Defaults to all types: ['event', 'command', 'query']
      */
     messageTypes?: MessageType[];
+    /** Include files marked with comment-based public contract markers. */
+    includePublicContracts?: boolean;
 }
 
 export class Scanner {
     private readonly exclude: string[];
     private readonly fs: FileSystem;
-    private readonly decoratorPatterns: string[];
+    private readonly markerPatterns: RegExp[];
 
     constructor(options: ScannerOptions = {}) {
         this.exclude = options.exclude ?? DEFAULT_EXCLUDE_PATTERNS;
@@ -36,10 +43,23 @@ export class Scanner {
         const names = mergeDecoratorNames(options.decoratorNames);
         const messageTypes = options.messageTypes ?? ['event', 'command', 'query'];
 
-        this.decoratorPatterns = messageTypes.map((type) => {
+        this.markerPatterns = messageTypes.map((type) => {
             const decoratorName = names[type];
-            return `@${decoratorName}(`;
+            return new RegExp(`@${this.escapeRegex(decoratorName)}\\s*\\(`);
         });
+
+        const includePublicContracts =
+            options.includePublicContracts ?? options.messageTypes === undefined;
+        if (includePublicContracts) {
+            const contractNames = mergeContractMarkerNames(
+                options.contractMarkerNames
+            );
+            this.markerPatterns.push(
+                new RegExp(
+                    `@${this.escapeRegex(contractNames.contract)}(?:\\s*\\(\\s*\\))?(?![\\w$])`
+                )
+            );
+        }
     }
 
     async scan(sourceDir: string): Promise<string[]> {
@@ -65,6 +85,10 @@ export class Scanner {
     }
 
     private containsPublicDecorator(content: string): boolean {
-        return this.decoratorPatterns.some(pattern => content.includes(pattern));
+        return this.markerPatterns.some(pattern => pattern.test(content));
+    }
+
+    private escapeRegex(value: string): string {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
 }

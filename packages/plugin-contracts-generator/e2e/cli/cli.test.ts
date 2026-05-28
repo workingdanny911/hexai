@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -52,6 +52,31 @@ describe("CLI E2E", () => {
                 ],
             },
         };
+    }
+
+    function createMessagesAndPublicContractsConfig() {
+        return {
+            contracts: {
+                contexts: [
+                    {
+                        name: "lecture",
+                        path: join(fixturesDir, "lecture"),
+                    },
+                    {
+                        name: "public-contract",
+                        path: join(fixturesDir, "public-contract"),
+                    },
+                ],
+            },
+        };
+    }
+
+    async function expectNoGeneratedFiles(path: string): Promise<void> {
+        if (!existsSync(path)) {
+            return;
+        }
+
+        await expect(readdir(path)).resolves.toEqual([]);
     }
 
     describe("config file loading", () => {
@@ -467,6 +492,124 @@ describe("CLI E2E", () => {
         });
     });
 
+    describe("--include option", () => {
+        it("should generate messages and PublicContract-only files when --include all", async () => {
+            await createConfig(createMessagesAndPublicContractsConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--include",
+                "all",
+            ]);
+
+            expect(existsSync(join(contractsDir, "lecture", "events.ts"))).toBe(
+                true
+            );
+            expect(
+                existsSync(join(contractsDir, "lecture", "commands.ts"))
+            ).toBe(true);
+            expect(
+                existsSync(
+                    join(contractsDir, "public-contract", "contracts.ts")
+                )
+            ).toBe(true);
+        });
+
+        it("should exclude PublicContract-only files when --include messages", async () => {
+            await createConfig(createMessagesAndPublicContractsConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--include",
+                "messages",
+            ]);
+
+            expect(existsSync(join(contractsDir, "lecture", "events.ts"))).toBe(
+                true
+            );
+            expect(
+                existsSync(join(contractsDir, "lecture", "commands.ts"))
+            ).toBe(true);
+            expect(
+                existsSync(
+                    join(contractsDir, "public-contract", "contracts.ts")
+                )
+            ).toBe(false);
+        });
+
+        it("should generate PublicContract-only files without messages when --include contracts", async () => {
+            await createConfig(createMessagesAndPublicContractsConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--include",
+                "contracts",
+            ]);
+
+            expect(existsSync(join(contractsDir, "lecture", "events.ts"))).toBe(
+                false
+            );
+            expect(
+                existsSync(join(contractsDir, "lecture", "commands.ts"))
+            ).toBe(false);
+            expect(
+                existsSync(
+                    join(contractsDir, "public-contract", "contracts.ts")
+                )
+            ).toBe(true);
+        });
+    });
+
+    describe("--messages option", () => {
+        it("should extract only events when --messages=event", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--messages=event",
+            ]);
+
+            expect(existsSync(join(contractsDir, "lecture", "events.ts"))).toBe(
+                true
+            );
+            expect(
+                existsSync(join(contractsDir, "lecture", "commands.ts"))
+            ).toBe(false);
+        });
+
+        it("should extract only commands when --messages command", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--messages",
+                "command",
+            ]);
+
+            expect(
+                existsSync(join(contractsDir, "lecture", "commands.ts"))
+            ).toBe(true);
+            expect(existsSync(join(contractsDir, "lecture", "events.ts"))).toBe(
+                false
+            );
+        });
+    });
+
     describe("--generate-message-registry option", () => {
         it("should not generate index.ts by default", async () => {
             await createConfig(createLectureConfig());
@@ -537,6 +680,74 @@ describe("CLI E2E", () => {
             expect(
                 existsSync(join(contractsDir, "lecture", "commands.ts"))
             ).toBe(false);
+        });
+    });
+
+    describe("--registry option", () => {
+        it("should generate index.ts when --registry alias is provided", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--registry",
+            ]);
+
+            expect(existsSync(join(contractsDir, "index.ts"))).toBe(true);
+        });
+    });
+
+    describe("--dry-run option", () => {
+        it("should not create files in outputDir", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "dry-run-contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--dry-run",
+            ]);
+
+            await expectNoGeneratedFiles(contractsDir);
+        });
+    });
+
+    describe("--check option", () => {
+        it("should pass when outputDir is up to date", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run(["--config", configPath, "-o", contractsDir]);
+
+            await expect(
+                run(["--config", configPath, "-o", contractsDir, "--check"])
+            ).resolves.toBeUndefined();
+        });
+
+        it("should fail when outputDir is empty", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await mkdir(contractsDir, { recursive: true });
+
+            await expect(
+                run(["--config", configPath, "-o", contractsDir, "--check"])
+            ).rejects.toThrow();
+        });
+
+        it("should fail when outputDir is stale", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run(["--config", configPath, "-o", contractsDir]);
+            await writeFile(
+                join(contractsDir, "lecture", "events.ts"),
+                "export const stale = true;\n"
+            );
+
+            await expect(
+                run(["--config", configPath, "-o", contractsDir, "--check"])
+            ).rejects.toThrow();
         });
     });
 });

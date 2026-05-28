@@ -10,6 +10,7 @@ import type {
     IntersectionType,
     ObjectType,
     PrimitiveType,
+    PublicContract,
     Query,
     ReferenceType,
     SourceFile,
@@ -193,6 +194,85 @@ describe("Parser", () => {
             expect(creditsField.name).toBe("credits");
             expect((creditsField.type as PrimitiveType).kind).toBe("primitive");
             expect((creditsField.type as PrimitiveType).name).toBe("number");
+        });
+    });
+
+    describe("parsing @PublicContract comment markers", () => {
+        it("should extract line comment markers from type, interface, and class declarations", () => {
+            const sourceCode = `
+        // @PublicContract()
+        export type UserId = string;
+
+        // @PublicContract()
+        export interface UserSnapshot {
+          id: UserId;
+          email: string;
+        }
+
+        // @PublicContract()
+        export class UserProjection {
+          constructor(readonly id: UserId) {}
+        }
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.events).toHaveLength(0);
+            expect(result.commands).toHaveLength(0);
+            expect(result.queries).toHaveLength(0);
+            expect(result.publicContracts).toHaveLength(3);
+
+            const contractsByName = new Map(
+                result.publicContracts.map((contract) => [
+                    contract.name,
+                    contract as PublicContract,
+                ])
+            );
+            expect(contractsByName.get("UserId")).toMatchObject({
+                contractType: "contract",
+                declarationKind: "type",
+                exported: true,
+                sourceFile: testSourceFile,
+            });
+            expect(contractsByName.get("UserSnapshot")).toMatchObject({
+                contractType: "contract",
+                declarationKind: "interface",
+                exported: true,
+                sourceFile: testSourceFile,
+            });
+            expect(contractsByName.get("UserProjection")).toMatchObject({
+                contractType: "contract",
+                declarationKind: "class",
+                exported: true,
+                sourceFile: testSourceFile,
+            });
+        });
+
+        it("should extract JSDoc markers from public contract declarations", () => {
+            const sourceCode = `
+        /**
+         * Shared status values for clients.
+         *
+         * @PublicContract()
+         */
+        export enum UserStatus {
+          Active = "active",
+          Disabled = "disabled",
+        }
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.publicContracts).toHaveLength(1);
+            expect(result.publicContracts[0]).toMatchObject({
+                name: "UserStatus",
+                contractType: "contract",
+                declarationKind: "enum",
+                exported: true,
+                sourceFile: testSourceFile,
+            });
         });
     });
 

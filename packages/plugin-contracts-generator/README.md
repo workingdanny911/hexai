@@ -1,18 +1,18 @@
 # @hexaijs/plugin-contracts-generator
 
-> Extract Domain Events, Commands, and Queries from backend source code to generate frontend-compatible contract types
+> Extract public message contracts and general TypeScript contracts from backend source code to generate frontend-compatible types
 
 ## Overview
 
-`@hexaijs/plugin-contracts-generator` solves the problem of keeping frontend and backend type definitions in sync. In a hexagonal architecture, your backend defines domain events, commands, and queries - but your frontend also needs type-safe access to these message types for API calls, event handling, and validation.
+`@hexaijs/plugin-contracts-generator` solves the problem of keeping frontend and backend type definitions in sync. In a hexagonal architecture, your backend defines domain events, commands, queries, and shared public contracts - but your frontend also needs type-safe access to these message types and general contract declarations for API calls, event handling, and validation.
 
-Instead of manually duplicating type definitions (which inevitably drift out of sync), this plugin scans your backend source code for specially decorated classes and extracts them into a standalone contracts package. The generated package contains only the public API surface - the message types and their payloads - without any backend implementation details.
+Instead of manually duplicating type definitions (which inevitably drift out of sync), this plugin scans your backend source code for public message decorators and comment-based public contract markers, then extracts the matching declarations into a standalone contracts package. The generated package contains only the public API surface - message types, their payloads, response types, and explicitly marked general contracts - without backend implementation details.
 
 The plugin works at build time by:
 
-1. Scanning TypeScript files for classes decorated with `@PublicEvent()`, `@PublicCommand()`, or `@PublicQuery()`
-2. Resolving all type dependencies (including response types and shared value objects)
-3. Generating a clean contracts package with namespace exports and a MessageRegistry for deserialization
+1. Scanning TypeScript files for message classes decorated with `@PublicEvent()`, `@PublicCommand()`, or `@PublicQuery()`, plus declarations with a leading `@PublicContract()` comment marker
+2. Resolving all type dependencies (including response types, shared value objects, and general contract declarations)
+3. Generating a clean contracts package with namespace exports and, when requested, a MessageRegistry for decorated messages only
 
 ## Installation
 
@@ -25,9 +25,9 @@ npm install @hexaijs/plugin-contracts-generator
 
 ## Core Concepts
 
-### Decorators
+### Message Decorators
 
-The package provides three decorators that mark messages for extraction. These decorators have **no runtime overhead** - they simply tag classes for discovery during the build process.
+The package provides three decorators that mark messages for extraction. These decorators have **no runtime overhead** - they simply tag classes for discovery during the build process. Decorated messages are the only generated contracts registered in `MessageRegistry`.
 
 ```typescript
 import { PublicEvent, PublicCommand, PublicQuery } from "@hexaijs/contracts/decorators";
@@ -89,6 +89,34 @@ Each decorator accepts optional configuration:
 - `version` - Specify a version number for versioned events
 - `response` - Explicitly name the response type (for commands/queries)
 
+### PublicContract Comment Marker
+
+General contracts that are not messages use a TypeScript leading comment marker instead of a decorator. The marker can be a line comment or a JSDoc block placed immediately before a `class`, `interface`, `type`, or `enum` declaration. If the marked declaration is not exported in the source file, the generator adds `export` in the generated contracts output.
+
+```typescript
+// @PublicContract()
+interface OrderSnapshot {
+    orderId: string;
+    status: OrderStatus;
+    totalAmount: number;
+}
+
+/** @PublicContract() */
+type OrderStatus = "draft" | "placed" | "cancelled";
+```
+
+`@PublicContract()` is a comment marker, not a runtime decorator. Do not write it as decorator syntax:
+
+```typescript
+// Unsupported: TypeScript decorators cannot be applied to interfaces or type aliases.
+@PublicContract()
+export interface OrderSnapshot {
+    orderId: string;
+}
+```
+
+Comment-marked public contracts are included in the generated contracts output, but they are not message contracts and are never registered in `MessageRegistry`.
+
 ### Configuration
 
 Create an `application.config.ts` file in your monorepo root:
@@ -133,6 +161,11 @@ export default {
             event: "PublicEvent",
             command: "PublicCommand",
             query: "PublicQuery",
+        },
+
+        // Custom comment marker names for general contracts (optional, defaults shown)
+        contractMarkerNames: {
+            contract: "PublicContract",
         },
 
         // Strip decorators from generated output (optional, default: true)
@@ -195,11 +228,12 @@ Response types must be in the same file as the command/query. Both `type` aliase
 
 The generator handles two types of files differently:
 
-**Entry files** (files with `@Public*` decorators) undergo symbol extraction:
-- Only decorated classes matching the specified message types are extracted
-- Handler classes are excluded
+**Entry files** (files with message decorators or `@PublicContract()` comment markers) are contract entry points:
+- Default message generation preserves message entry files and their runtime dependencies
+- Message filters (`--messages`, `--message-types`) extract only matching decorated message classes
+- PublicContract-only files extract comment-marked `class`, `interface`, `type`, and `enum` declarations
+- Handler classes and unused imports are excluded in extraction modes
 - Response types are included based on naming conventions
-- Unused imports are removed
 
 **Dependency files** (imported by entry files) are copied entirely:
 - Supports barrel files (`export * from './module'`)
@@ -214,18 +248,43 @@ Run the generator from your monorepo root:
 
 ```bash
 # Required: --output-dir (-o) specifies where contracts are generated
-npx contracts-generator --output-dir packages/contracts/src
+npx generate-contracts --output-dir packages/contracts/src
 
 # Specify config file path (default: application.config.ts)
-npx contracts-generator -o packages/contracts/src --config ./app.config.ts
+npx generate-contracts -o packages/contracts/src --config ./app.config.ts
+```
 
-# Filter by message types
-npx contracts-generator -o packages/contracts/src -m event           # Extract only events
-npx contracts-generator -o packages/contracts/src -m command         # Extract only commands
-npx contracts-generator -o packages/contracts/src -m event,command   # Extract events and commands
+By default, the CLI uses `--include all` and `--messages event,command,query`. This generates decorated `@PublicEvent()`, `@PublicCommand()`, and `@PublicQuery()` message contracts plus comment-marked `@PublicContract()` declarations.
 
-# Generate with message registry (index.ts)
-npx contracts-generator -o packages/contracts/src --generate-message-registry
+| Option | Description |
+|--------|-------------|
+| `-o, --output-dir <path>` | Required output directory for the generated contracts package |
+| `-c, --config <path>` | Config file path (default: `application.config.ts`) |
+| `--include <scope>` | Select generated contract categories: `all`, `messages`, or `contracts` |
+| `--messages <types>` | Recommended message subtype filter. Accepts comma-separated `event`, `command`, and `query` values |
+| `-m, --message-types <types>` | Legacy alias for `--messages`; kept for backwards compatibility |
+| `--registry` | Generate the root `MessageRegistry` export |
+| `--generate-message-registry` | Legacy verbose alias for `--registry` |
+| `--dry-run` | Print the planned context extraction and file summary without writing files |
+| `--check` | Verify generated output freshness for CI and exit non-zero when changes are required |
+
+`--include contracts` generates only `@PublicContract()` declarations. `--include messages` generates only decorated messages. `--messages` filters only the message subtypes and does not exclude `@PublicContract()` declarations when `--include all` is used. The generated `MessageRegistry` registers messages only; general public contracts are never registered.
+
+Common workflows:
+
+```bash
+# Preview the plan, then generate contracts with a MessageRegistry
+npx generate-contracts -o packages/contracts/src --dry-run
+npx generate-contracts -o packages/contracts/src --registry
+
+# Generate messages only
+npx generate-contracts -o packages/contracts/src --include messages --messages event,command
+
+# Generate general public contracts only
+npx generate-contracts -o packages/contracts/src --include contracts
+
+# CI freshness check
+npx generate-contracts -o packages/contracts/src --check
 ```
 
 ### Programmatic API
@@ -237,17 +296,24 @@ import { processContext, ConsoleLogger } from "@hexaijs/plugin-contracts-generat
 
 const result = await processContext({
     contextName: "order",
-    sourceDir: "packages/order/src",
+    path: "packages/order",
+    sourceDir: "src",
     outputDir: "packages/contracts/src",
     pathAliasRewrites: new Map([["@myorg/", "@/"]]),
+    contractMarkerNames: { contract: "PublicContract" },
     messageTypes: ["event", "command"],
+    includePublicContracts: true,
     responseNamingConventions: [
         { messageSuffix: "Command", responseSuffix: "CommandResult" },
     ],
     logger: new ConsoleLogger({ level: "info" }),
 });
 
-console.log(`Extracted ${result.events.length} events, ${result.commands.length} commands`);
+console.log(
+    `Extracted ${result.events.length} events, ` +
+        `${result.commands.length} commands, ` +
+        `${result.publicContracts.length} public contracts`
+);
 ```
 
 For fine-grained control, use the `ContractsPipeline` class which provides step-by-step execution: `scan()`, `parse()`, `resolve()`, `copy()`, and `exportBarrel()`.
@@ -265,7 +331,7 @@ contracts/
 │   │   ├── queries.ts
 │   │   ├── types.ts       # Dependent types + Response types
 │   │   └── index.ts       # Barrel exports
-│   └── index.ts           # Namespace exports + MessageRegistry
+│   └── index.ts           # Namespace exports + MessageRegistry for messages
 ├── package.json
 └── tsconfig.json
 ```
@@ -283,6 +349,8 @@ export const messageRegistry = new MessageRegistry()
     .register(order.OrderPlaced)
     .register(inventory.StockUpdated);
 ```
+
+Only decorated events, commands, and queries are registered. General contracts marked with `@PublicContract()` comments are exported through the generated package but are not registered.
 
 Use namespace exports in your frontend:
 
@@ -335,10 +403,13 @@ try {
 |--------|-------------|
 | `processContext(options)` | Main API for extracting and copying contracts |
 | `ContractsPipeline` | Fine-grained control over extraction process |
-| `PublicEvent` | Decorator to mark events for extraction |
-| `PublicCommand` | Decorator to mark commands for extraction |
-| `PublicQuery` | Decorator to mark queries for extraction |
-| `MessageRegistry` | Runtime registry for message deserialization |
+| `PublicEvent` | Decorator to mark event messages for extraction and registry generation |
+| `PublicCommand` | Decorator to mark command messages for extraction and registry generation |
+| `PublicQuery` | Decorator to mark query messages for extraction and registry generation |
+| `PublicContract` marker | Comment marker (`// @PublicContract()` or JSDoc) for general contracts; not a decorator export |
+| `PublicContract` type | Domain model for comment-marked `class`, `interface`, `type`, and `enum` declarations |
+| `ContractMarkerNames` | Configuration shape for customizing public contract comment marker names |
+| `MessageRegistry` | Runtime registry for decorated message deserialization |
 | `ConsoleLogger` | Configurable logger for build output |
 | Error types | `ConfigLoadError`, `FileReadError`, `MessageParserError`, etc. |
 

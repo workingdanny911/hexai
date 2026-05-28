@@ -3,6 +3,7 @@ import ts from "typescript";
 import type {
     ClassImport,
     Command,
+    ContractMarkerNames,
     DecoratorNames,
     DomainEvent,
     Field,
@@ -10,6 +11,8 @@ import type {
     Message,
     MessageType,
     ObjectType,
+    PublicContract,
+    PublicContractDeclarationKind,
     Query,
     ResponseNamingConvention,
     SourceFile,
@@ -17,7 +20,7 @@ import type {
     TypeDefinitionKind,
     TypeRef,
 } from "./domain/index.js";
-import { mergeDecoratorNames } from "./domain/index.js";
+import { mergeContractMarkerNames, mergeDecoratorNames } from "./domain/index.js";
 import { extractFieldsFromMembers, parseTypeNode } from "./ast-utils.js";
 import {
     extractClassSourceText,
@@ -25,6 +28,7 @@ import {
     getDecoratorOptions,
     hasDecorator,
     hasExportModifier,
+    hasLeadingCommentMarker,
 } from "./class-analyzer.js";
 import { extractImports } from "./import-analyzer.js";
 
@@ -36,13 +40,16 @@ export interface ParseResult {
     readonly events: readonly DomainEvent[];
     readonly commands: readonly Command[];
     readonly queries: readonly Query[];
+    readonly publicContracts: readonly PublicContract[];
     readonly typeDefinitions: readonly TypeDefinition[];
 }
 
 export interface ParserOptions {
     decoratorNames?: DecoratorNames;
+    contractMarkerNames?: ContractMarkerNames;
     responseNamingConventions?: readonly ResponseNamingConvention[];
     messageTypes?: readonly MessageType[];
+    includePublicContracts?: boolean;
 }
 
 interface ExtractedPayload {
@@ -79,14 +86,20 @@ function extractTypeParameterNames(
 
 export class Parser {
     private readonly decoratorMappings: DecoratorMapping[];
+    private readonly contractMarkerName: string;
     private readonly responseNamingConventions: readonly ResponseNamingConvention[];
     private readonly messageTypes: readonly MessageType[] | undefined;
+    private readonly includePublicContracts: boolean;
 
     constructor(options: ParserOptions = {}) {
         const names = mergeDecoratorNames(options.decoratorNames);
+        const contractNames = mergeContractMarkerNames(options.contractMarkerNames);
         this.decoratorMappings = buildDecoratorMappings(names);
+        this.contractMarkerName = contractNames.contract;
         this.responseNamingConventions = options.responseNamingConventions ?? [];
         this.messageTypes = options.messageTypes;
+        this.includePublicContracts =
+            options.includePublicContracts ?? options.messageTypes === undefined;
     }
 
     parse(sourceCode: string, sourceFileInfo: SourceFile): ParseResult {
@@ -100,6 +113,7 @@ export class Parser {
         const events: DomainEvent[] = [];
         const commands: Command[] = [];
         const queries: Query[] = [];
+        const publicContracts: PublicContract[] = [];
         const typeDefinitions: TypeDefinition[] = [];
 
         const messageCollectors: Record<MessageType, (message: Message) => void> = {
@@ -111,14 +125,45 @@ export class Parser {
         const visit = (node: ts.Node): void => {
             if (ts.isClassDeclaration(node) && node.name) {
                 this.collectMessagesFromClass(node, sourceCode, tsSourceFile, sourceFileInfo, messageCollectors);
+                this.collectPublicContract(
+                    node,
+                    "class",
+                    sourceCode,
+                    sourceFileInfo,
+                    publicContracts
+                );
             }
 
             if (ts.isTypeAliasDeclaration(node) && node.name) {
                 typeDefinitions.push(this.extractTypeDefinition(node, sourceFileInfo));
+                this.collectPublicContract(
+                    node,
+                    "type",
+                    sourceCode,
+                    sourceFileInfo,
+                    publicContracts
+                );
             }
 
             if (ts.isInterfaceDeclaration(node) && node.name) {
                 typeDefinitions.push(this.extractInterfaceDefinition(node, sourceFileInfo));
+                this.collectPublicContract(
+                    node,
+                    "interface",
+                    sourceCode,
+                    sourceFileInfo,
+                    publicContracts
+                );
+            }
+
+            if (ts.isEnumDeclaration(node) && node.name) {
+                this.collectPublicContract(
+                    node,
+                    "enum",
+                    sourceCode,
+                    sourceFileInfo,
+                    publicContracts
+                );
             }
 
             ts.forEachChild(node, visit);
@@ -129,7 +174,39 @@ export class Parser {
         this.applyNamingConventionMatching(commands, typeDefinitions);
         this.applyNamingConventionMatching(queries, typeDefinitions);
 
-        return { events, commands, queries, typeDefinitions };
+        return {
+            events,
+            commands,
+            queries,
+            publicContracts,
+            typeDefinitions,
+        };
+    }
+
+    private collectPublicContract(
+        node:
+            | ts.ClassDeclaration
+            | ts.TypeAliasDeclaration
+            | ts.InterfaceDeclaration
+            | ts.EnumDeclaration,
+        declarationKind: PublicContractDeclarationKind,
+        sourceCode: string,
+        sourceFileInfo: SourceFile,
+        publicContracts: PublicContract[]
+    ): void {
+        if (!this.includePublicContracts) return;
+        if (!node.name) return;
+        if (!hasLeadingCommentMarker(node, sourceCode, this.contractMarkerName)) {
+            return;
+        }
+
+        publicContracts.push({
+            name: node.name.text,
+            contractType: "contract",
+            declarationKind,
+            sourceFile: sourceFileInfo,
+            exported: hasExportModifier(node),
+        });
     }
 
     private collectMessagesFromClass(
