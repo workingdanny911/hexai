@@ -1,12 +1,14 @@
 import type { HexaiCliPlugin, CliOption } from "@hexaijs/cli";
 import {
     runWithConfig,
-    ContractsPluginConfig,
-    RunWithConfigOptions,
+    type ContractsPluginConfig,
+    type IncludeMode,
+    type RunWithConfigOptions,
 } from "./cli.js";
 import type { MessageType } from "./domain/types.js";
 
 const VALID_MESSAGE_TYPES: MessageType[] = ["event", "command", "query"];
+const VALID_INCLUDE_MODES: IncludeMode[] = ["all", "messages", "contracts"];
 
 /**
  * Parses comma-separated message types string into MessageType array.
@@ -25,6 +27,23 @@ function parseMessageTypes(value: string): MessageType[] {
     }
 
     return types as MessageType[];
+}
+
+function parseIncludeMode(value: string): IncludeMode {
+    const mode = value.trim().toLowerCase();
+    if (!VALID_INCLUDE_MODES.includes(mode as IncludeMode)) {
+        throw new Error(
+            `Invalid include mode: ${value}. ` +
+                `Valid modes are: ${VALID_INCLUDE_MODES.join(", ")}`
+        );
+    }
+
+    return mode as IncludeMode;
+}
+
+function readMessageTypes(args: Record<string, unknown>): MessageType[] | undefined {
+    const value = args.messages ?? args.messageTypes;
+    return value ? parseMessageTypes(String(value)) : undefined;
 }
 
 /**
@@ -50,13 +69,33 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
             required: true,
         },
         {
-            flags: "-m, --message-types <types>",
+            flags: "--include <mode>",
+            description: "Include scope: all, messages, contracts",
+        },
+        {
+            flags: "--messages <types>",
             description:
                 "Filter message types (comma-separated: event,command,query)",
         },
         {
-            flags: "--generate-message-registry",
+            flags: "-m, --message-types <types>",
+            description: "Alias for --messages",
+        },
+        {
+            flags: "--registry",
             description: "Generate message registry index.ts file",
+        },
+        {
+            flags: "--generate-message-registry",
+            description: "Alias for --registry",
+        },
+        {
+            flags: "--dry-run",
+            description: "Generate into a temporary directory and print counts",
+        },
+        {
+            flags: "--check",
+            description: "Compare generated output against output directory",
         },
     ] satisfies CliOption[],
     run: async (
@@ -65,10 +104,15 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
     ): Promise<void> => {
         const options: RunWithConfigOptions = {
             outputDir: String(args.outputDir),
-            messageTypes: args.messageTypes
-                ? parseMessageTypes(String(args.messageTypes))
+            include: args.include
+                ? parseIncludeMode(String(args.include))
                 : undefined,
-            generateMessageRegistry: args.generateMessageRegistry === true,
+            messageTypes: readMessageTypes(args),
+            generateMessageRegistry:
+                args.registry === true ||
+                args.generateMessageRegistry === true,
+            dryRun: args.dryRun === true,
+            check: args.check === true,
         };
 
         await runWithConfig(options, config);

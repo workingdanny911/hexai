@@ -3,8 +3,15 @@ import ts from "typescript";
 
 import { ConfigLoadError } from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
-import type { DecoratorNames, ResponseNamingConvention } from "./domain/index.js";
-import { mergeDecoratorNames } from "./domain/index.js";
+import type {
+    ContractMarkerNames,
+    DecoratorNames,
+    ResponseNamingConvention,
+} from "./domain/index.js";
+import {
+    mergeContractMarkerNames,
+    mergeDecoratorNames,
+} from "./domain/index.js";
 import { ContextConfig, type InputContextConfig } from "./context-config.js";
 
 const SUPPORTED_GLOB_PARTS_COUNT = 2;
@@ -14,6 +21,7 @@ export interface ContractsConfig {
     readonly pathAliasRewrites?: Readonly<Record<string, string>>;
     readonly externalDependencies?: Readonly<Record<string, string>>;
     readonly decoratorNames: Required<DecoratorNames>;
+    readonly contractMarkerNames: Required<ContractMarkerNames>;
     readonly responseNamingConventions?: readonly ResponseNamingConvention[];
     readonly removeDecorators?: boolean;
 }
@@ -24,6 +32,7 @@ interface ApplicationConfig {
         pathAliasRewrites?: Record<string, string>;
         externalDependencies?: Record<string, string>;
         decoratorNames?: DecoratorNames;
+        contractMarkerNames?: ContractMarkerNames;
         responseNamingConventions?: ResponseNamingConvention[];
         removeDecorators?: boolean;
     };
@@ -211,12 +220,16 @@ export class ConfigLoader {
         }
 
         const decoratorNames = mergeDecoratorNames(contracts.decoratorNames);
+        const contractMarkerNames = mergeContractMarkerNames(
+            contracts.contractMarkerNames
+        );
 
         return {
             contexts,
             pathAliasRewrites: contracts.pathAliasRewrites,
             externalDependencies: contracts.externalDependencies,
             decoratorNames,
+            contractMarkerNames,
             responseNamingConventions: contracts.responseNamingConventions,
             removeDecorators: contracts.removeDecorators ?? true,
         };

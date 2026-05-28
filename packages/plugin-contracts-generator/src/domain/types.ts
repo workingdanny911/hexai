@@ -125,6 +125,16 @@ export interface ClassDefinition {
   readonly exported: boolean;
 }
 
+export type PublicContractDeclarationKind = 'class' | 'interface' | 'type' | 'enum';
+
+export interface PublicContract {
+  readonly name: string;
+  readonly contractType: 'contract';
+  readonly declarationKind: PublicContractDeclarationKind;
+  readonly sourceFile: SourceFile;
+  readonly exported: boolean;
+}
+
 export interface MessageBase {
   readonly name: string;
   readonly sourceFile: SourceFile;
@@ -186,6 +196,8 @@ export type ExtractionWarning = SourceLocation;
 export interface ExtractionResult {
   readonly events: readonly DomainEvent[];
   readonly commands: readonly Command[];
+  readonly queries: readonly Query[];
+  readonly publicContracts: readonly PublicContract[];
   readonly types: readonly TypeDefinition[];
   readonly dependencies: readonly Dependency[];
   readonly errors: readonly ExtractionError[];
@@ -209,6 +221,25 @@ export const DEFAULT_DECORATOR_NAMES: Required<DecoratorNames> = {
 export function mergeDecoratorNames(partial?: DecoratorNames): Required<DecoratorNames> {
   return {
     ...DEFAULT_DECORATOR_NAMES,
+    ...partial,
+  };
+}
+
+/** Customizes comment marker names used to identify public non-message contracts. */
+export interface ContractMarkerNames {
+  contract?: string;
+}
+
+export const DEFAULT_CONTRACT_MARKER_NAMES: Required<ContractMarkerNames> = {
+  contract: "PublicContract",
+};
+
+/** Merges partial contract marker names with defaults for backward compatibility. */
+export function mergeContractMarkerNames(
+  partial?: ContractMarkerNames
+): Required<ContractMarkerNames> {
+  return {
+    ...DEFAULT_CONTRACT_MARKER_NAMES,
     ...partial,
   };
 }

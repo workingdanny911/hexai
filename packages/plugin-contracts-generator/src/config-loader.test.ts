@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "path";
 
 import { ConfigLoader, ConfigLoadError } from "./config-loader.js";
-import type { DecoratorNames } from "./domain/index.js";
+import type { ContractMarkerNames, DecoratorNames } from "./domain/index.js";
 
 describe("ConfigLoader", () => {
     describe("object context format", () => {
@@ -197,6 +197,33 @@ describe("ConfigLoader", () => {
                 event: "CustomEvent",
                 command: "PublicCommand",
                 query: "PublicQuery",
+            });
+        });
+    });
+
+    describe("ContractMarkerNames configuration", () => {
+        it("should use default contract marker names when contractMarkerNames is not specified", async () => {
+            const configLoader = new ConfigLoader();
+            const configPath =
+                "test/fixtures/config/valid-config/application.config.ts";
+
+            const result = await configLoader.load(configPath);
+
+            const expectedDefaults: ContractMarkerNames = {
+                contract: "PublicContract",
+            };
+            expect(result.contractMarkerNames).toEqual(expectedDefaults);
+        });
+
+        it("should accept custom contract marker names in config", async () => {
+            const configLoader = new ConfigLoader();
+            const configPath =
+                "test/fixtures/config/custom-contract-marker/application.config.ts";
+
+            const result = await configLoader.load(configPath);
+
+            expect(result.contractMarkerNames).toEqual({
+                contract: "SharedContract",
             });
         });
     });

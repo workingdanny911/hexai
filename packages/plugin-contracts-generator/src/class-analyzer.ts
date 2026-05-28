@@ -2,6 +2,10 @@ import * as ts from "typescript";
 
 import { isPrimitiveTypeName } from "./ast-utils.js";
 
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function hasDecorator(
     node: ts.ClassDeclaration,
     decoratorName: string
@@ -17,6 +21,23 @@ export function hasDecorator(
             }
         }
         return false;
+    });
+}
+
+export function hasLeadingCommentMarker(
+    node: ts.Node,
+    sourceCode: string,
+    markerName: string
+): boolean {
+    const commentRanges =
+        ts.getLeadingCommentRanges(sourceCode, node.getFullStart()) ?? [];
+    const markerPattern = new RegExp(
+        `@${escapeRegExp(markerName)}(?:\\s*\\(\\s*\\))?(?![\\w$])`
+    );
+
+    return commentRanges.some((range) => {
+        const comment = sourceCode.slice(range.pos, range.end);
+        return markerPattern.test(comment);
     });
 }
 

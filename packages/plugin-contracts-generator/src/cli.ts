@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolve, dirname, join, relative } from "node:path";
 import { ConfigLoader, type ContractsConfig, resolveContextEntries } from "./config-loader.js";
@@ -8,26 +10,50 @@ import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } fr
 import { RegistryGenerator, ContextMessages } from "./registry-generator.js";
 import { ReexportGenerator } from "./reexport-generator.js";
 import { nodeFileSystem } from "./file-system.js";
-import type { MessageType, DecoratorNames, ResponseNamingConvention } from "./domain/types.js";
-import { mergeDecoratorNames } from "./domain/index.js";
+import type {
+    ContractMarkerNames,
+    DecoratorNames,
+    MessageType,
+    ResponseNamingConvention,
+} from "./domain/types.js";
+import {
+    mergeContractMarkerNames,
+    mergeDecoratorNames,
+} from "./domain/index.js";
 
 const DEFAULT_CONFIG_PATH = "application.config.ts";
 const EXIT_CODE_ERROR = 1;
-const VALID_MESSAGE_TYPES: MessageType[] = ["event", "command", "query"];
+const VALID_MESSAGE_TYPES: readonly MessageType[] = ["event", "command", "query"];
+const VALID_INCLUDE_MODES: readonly IncludeMode[] = [
+    "all",
+    "messages",
+    "contracts",
+];
+const CHECK_DIFF_LIST_LIMIT = 20;
+
+export type IncludeMode = "all" | "messages" | "contracts";
 
 const CLI_OPTIONS = {
     config: { short: "-c", long: "--config", requiresValue: true },
     outputDir: { short: "-o", long: "--output-dir", requiresValue: true },
+    include: { short: null, long: "--include", requiresValue: true },
+    messages: { short: null, long: "--messages", requiresValue: true },
     messageTypes: { short: "-m", long: "--message-types", requiresValue: true },
+    registry: { short: null, long: "--registry", requiresValue: false },
     generateMessageRegistry: { short: null, long: "--generate-message-registry", requiresValue: false },
+    dryRun: { short: null, long: "--dry-run", requiresValue: false },
+    check: { short: null, long: "--check", requiresValue: false },
     help: { short: "-h", long: "--help", requiresValue: false },
 } as const;
 
 interface CliOptions {
     config: string;
     outputDir: string;
+    include?: IncludeMode;
     messageTypes?: MessageType[];
     generateMessageRegistry?: boolean;
+    dryRun?: boolean;
+    check?: boolean;
 }
 
 /**
@@ -35,8 +61,11 @@ interface CliOptions {
  */
 export interface RunWithConfigOptions {
     outputDir: string;
+    include?: IncludeMode;
     messageTypes?: MessageType[];
     generateMessageRegistry?: boolean;
+    dryRun?: boolean;
+    check?: boolean;
 }
 
 /**
@@ -48,6 +77,7 @@ export interface ContractsPluginConfig {
     pathAliasRewrites?: Record<string, string>;
     externalDependencies?: Record<string, string>;
     decoratorNames?: DecoratorNames;
+    contractMarkerNames?: ContractMarkerNames;
     responseNamingConventions?: ResponseNamingConvention[];
     removeDecorators?: boolean;
 }
@@ -56,6 +86,11 @@ interface ContextProcessingResult {
     name: string;
     result: PipelineResult;
     outputDir: string;
+}
+
+interface GenerationScope {
+    messageTypes?: MessageType[];
+    includePublicContracts: boolean;
 }
 
 function parseMessageTypes(value: string): MessageType[] {
@@ -70,6 +105,44 @@ function parseMessageTypes(value: string): MessageType[] {
     }
 
     return types as MessageType[];
+}
+
+function parseIncludeMode(value: string): IncludeMode {
+    const mode = value.trim().toLowerCase();
+    if (!VALID_INCLUDE_MODES.includes(mode as IncludeMode)) {
+        throw new Error(
+            `Invalid include mode: ${value}. ` +
+            `Valid modes are: ${VALID_INCLUDE_MODES.join(", ")}`
+        );
+    }
+
+    return mode as IncludeMode;
+}
+
+function resolveGenerationScope(options: {
+    include?: IncludeMode;
+    messageTypes?: MessageType[];
+}): GenerationScope {
+    const include = options.include ?? "all";
+
+    if (include === "contracts") {
+        return {
+            messageTypes: [],
+            includePublicContracts: true,
+        };
+    }
+
+    if (include === "messages") {
+        return {
+            messageTypes: options.messageTypes ?? [...VALID_MESSAGE_TYPES],
+            includePublicContracts: false,
+        };
+    }
+
+    return {
+        messageTypes: options.messageTypes,
+        includePublicContracts: true,
+    };
 }
 
 function extractOptionValue(args: string[], currentIndex: number, optionName: string): { value: string; nextIndex: number } {
@@ -116,12 +189,27 @@ function parseArgs(args: string[]): CliOptions {
             const { value, nextIndex } = extractOptionValue(args, i, "--output-dir");
             options.outputDir = value;
             i = nextIndex;
+        } else if (matchesOption(arg, CLI_OPTIONS.include)) {
+            const { value, nextIndex } = extractOptionValue(args, i, "--include");
+            options.include = parseIncludeMode(value);
+            i = nextIndex;
+        } else if (matchesOption(arg, CLI_OPTIONS.messages)) {
+            const { value, nextIndex } = extractOptionValue(args, i, "--messages");
+            options.messageTypes = parseMessageTypes(value);
+            i = nextIndex;
         } else if (matchesOption(arg, CLI_OPTIONS.messageTypes)) {
             const { value, nextIndex } = extractOptionValue(args, i, "--message-types");
             options.messageTypes = parseMessageTypes(value);
             i = nextIndex;
-        } else if (matchesOption(arg, CLI_OPTIONS.generateMessageRegistry)) {
+        } else if (
+            matchesOption(arg, CLI_OPTIONS.registry) ||
+            matchesOption(arg, CLI_OPTIONS.generateMessageRegistry)
+        ) {
             options.generateMessageRegistry = true;
+        } else if (matchesOption(arg, CLI_OPTIONS.dryRun)) {
+            options.dryRun = true;
+        } else if (matchesOption(arg, CLI_OPTIONS.check)) {
+            options.check = true;
         } else if (matchesOption(arg, CLI_OPTIONS.help)) {
             printHelp();
             process.exit(0);
@@ -137,21 +225,27 @@ function parseArgs(args: string[]): CliOptions {
 
 function printHelp(): void {
     console.log(`
-contracts-generator - Extract domain events and commands from TypeScript source
+generate-contracts - Extract public message and general contracts from TypeScript source
 
 Usage:
-  contracts-generator --output-dir <path> [options]
+  generate-contracts --output-dir <path> [options]
 
 Required:
   -o, --output-dir <path>       Output directory for generated contracts
 
 Options:
   -c, --config <path>           Path to config file (default: ${DEFAULT_CONFIG_PATH})
-  -m, --message-types <types>   Filter message types to extract (comma-separated)
+  --include <mode>              Include scope: all, messages, contracts
+                                Default: all
+  --messages <types>            Filter message types to extract (comma-separated)
                                 Valid types: ${VALID_MESSAGE_TYPES.join(", ")}
                                 Default: all types
-  --generate-message-registry   Generate message registry index.ts file
+  -m, --message-types <types>   Alias for --messages
+  --registry                    Generate message registry index.ts file
+  --generate-message-registry   Alias for --registry
                                 Default: not generated
+  --dry-run                     Generate into a temporary directory and print counts
+  --check                       Compare generated output against output directory
   -h, --help                    Show this help message
 
 Config file format:
@@ -174,25 +268,30 @@ Config file format:
 
 Examples:
   # Extract all message types
-  contracts-generator --output-dir packages/contracts/src
+  generate-contracts --output-dir packages/contracts/src
 
   # Extract only commands and queries
-  contracts-generator -o packages/contracts/requests -m command,query
+  generate-contracts -o packages/contracts/requests --messages command,query
 
   # Extract only events
-  contracts-generator -o packages/contracts/events --message-types event
+  generate-contracts -o packages/contracts/events --message-types event
+
+  # Extract only PublicContract markers
+  generate-contracts -o packages/contracts/public --include contracts
 
   # Generate with message registry (index.ts)
-  contracts-generator -o packages/contracts/src --generate-message-registry
+  generate-contracts -o packages/contracts/src --registry
 
   # Use with custom config
-  contracts-generator -c app.config.ts -o packages/contracts/src
+  generate-contracts -c app.config.ts -o packages/contracts/src
 `);
 }
 
 interface SummaryTotals {
     events: number;
     commands: number;
+    queries: number;
+    publicContracts: number;
     files: number;
 }
 
@@ -201,41 +300,194 @@ function calculateSummaryTotals(results: ContextProcessingResult[]): SummaryTota
         (totals, contextResult) => ({
             events: totals.events + contextResult.result.events.length,
             commands: totals.commands + contextResult.result.commands.length,
+            queries: totals.queries + contextResult.result.queries.length,
+            publicContracts:
+                totals.publicContracts +
+                contextResult.result.publicContracts.length,
             files: totals.files + contextResult.result.copiedFiles.length,
         }),
-        { events: 0, commands: 0, files: 0 }
+        { events: 0, commands: 0, queries: 0, publicContracts: 0, files: 0 }
     );
 }
 
 function countTotalMessages(totals: SummaryTotals): number {
-    return totals.events + totals.commands;
+    return totals.events + totals.commands + totals.queries;
 }
 
 function logSummary(logger: Logger, totals: SummaryTotals): void {
     logger.info("\n--- Summary ---");
     logger.info(`Total events: ${totals.events}`);
     logger.info(`Total commands: ${totals.commands}`);
+    logger.info(`Total queries: ${totals.queries}`);
+    logger.info(`Total public contracts: ${totals.publicContracts}`);
     logger.info(`Total files copied: ${totals.files}`);
 }
 
-export async function run(args: string[]): Promise<void> {
-    const options = parseArgs(args);
-    const configPath = resolve(options.config);
-    const configDir = dirname(configPath);
-    const outputDir = resolve(configDir, options.outputDir);
-    const logger = new ConsoleLogger({ level: "info" });
-
-    logger.info(`Loading config from: ${configPath}`);
-
-    const configLoader = new ConfigLoader();
-    const config = await configLoader.load(configPath);
-
-    logger.info(`Found ${config.contexts.length} context(s) to process`);
-    logger.info(`Output directory: ${outputDir}`);
-    if (options.messageTypes) {
-        logger.info(`Message types filter: ${options.messageTypes.join(", ")}`);
+function formatMessageTypesForLog(messageTypes: readonly MessageType[] | undefined): string {
+    if (messageTypes === undefined) {
+        return "all";
     }
 
+    if (messageTypes.length === 0) {
+        return "none";
+    }
+
+    return messageTypes.join(", ");
+}
+
+function logGenerationSettings(
+    logger: Logger,
+    config: ContractsConfig,
+    outputDir: string,
+    options: RunWithConfigOptions,
+    scope: GenerationScope
+): void {
+    logger.info(`Found ${config.contexts.length} context(s) to process`);
+    logger.info(`Output directory: ${outputDir}`);
+    logger.info(`Include mode: ${options.include ?? "all"}`);
+    logger.info(`Message types filter: ${formatMessageTypesForLog(scope.messageTypes)}`);
+    logger.info(
+        `Public contracts: ${scope.includePublicContracts ? "included" : "excluded"}`
+    );
+
+    if (options.dryRun) {
+        logger.info("Dry run: enabled (target output directory will not be written)");
+    }
+
+    if (options.check) {
+        logger.info("Check mode: enabled (generated output will be compared only)");
+    }
+}
+
+function logDryRunDetails(
+    logger: Logger,
+    results: ContextProcessingResult[]
+): void {
+    logger.info("\n--- Dry run details ---");
+
+    for (const contextResult of results) {
+        const { result } = contextResult;
+        logger.info(
+            `Context ${contextResult.name}: ` +
+                `${result.events.length} event(s), ` +
+                `${result.commands.length} command(s), ` +
+                `${result.queries.length} query(s), ` +
+                `${result.publicContracts.length} public contract(s), ` +
+                `${result.copiedFiles.length} copy target(s)`
+        );
+
+        for (const file of result.copiedFiles) {
+            logger.info(`  - ${relative(contextResult.outputDir, file).replace(/\\/g, "/")}`);
+        }
+    }
+}
+
+async function collectFileContents(
+    rootDir: string,
+    currentDir = rootDir
+): Promise<Map<string, string>> {
+    const files = new Map<string, string>();
+    const entries = await readdir(currentDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+        const entryPath = join(currentDir, entry.name);
+
+        if (entry.isDirectory()) {
+            const nestedFiles = await collectFileContents(rootDir, entryPath);
+            for (const [filePath, content] of nestedFiles) {
+                files.set(filePath, content);
+            }
+            continue;
+        }
+
+        if (!entry.isFile()) {
+            continue;
+        }
+
+        const relativePath = relative(rootDir, entryPath).replace(/\\/g, "/");
+        files.set(relativePath, await readFile(entryPath, "utf-8"));
+    }
+
+    return files;
+}
+
+function listOnlyIn(
+    left: ReadonlyMap<string, string>,
+    right: ReadonlyMap<string, string>
+): string[] {
+    return [...left.keys()].filter((filePath) => !right.has(filePath)).sort();
+}
+
+function listChangedFiles(
+    expected: ReadonlyMap<string, string>,
+    actual: ReadonlyMap<string, string>
+): string[] {
+    return [...expected.keys()]
+        .filter((filePath) => actual.has(filePath))
+        .filter((filePath) => expected.get(filePath) !== actual.get(filePath))
+        .sort();
+}
+
+function formatCheckDiffSection(title: string, files: readonly string[]): string | undefined {
+    if (files.length === 0) {
+        return undefined;
+    }
+
+    const visibleFiles = files.slice(0, CHECK_DIFF_LIST_LIMIT);
+    const lines = visibleFiles.map((filePath) => `  - ${filePath}`);
+    const hiddenCount = files.length - visibleFiles.length;
+
+    if (hiddenCount > 0) {
+        lines.push(`  ... and ${hiddenCount} more`);
+    }
+
+    return `${title} (${files.length}):\n${lines.join("\n")}`;
+}
+
+async function assertOutputMatchesGenerated(
+    generatedOutputDir: string,
+    outputDir: string,
+    logger: Logger
+): Promise<void> {
+    if (!(await nodeFileSystem.exists(outputDir))) {
+        throw new Error(`Check failed: output directory does not exist: ${outputDir}`);
+    }
+
+    const [generatedFiles, outputFiles] = await Promise.all([
+        collectFileContents(generatedOutputDir),
+        collectFileContents(outputDir),
+    ]);
+
+    const missingFiles = listOnlyIn(generatedFiles, outputFiles);
+    const extraFiles = listOnlyIn(outputFiles, generatedFiles);
+    const changedFiles = listChangedFiles(generatedFiles, outputFiles);
+
+    if (
+        missingFiles.length === 0 &&
+        extraFiles.length === 0 &&
+        changedFiles.length === 0
+    ) {
+        logger.info("Check passed: output directory matches generated contracts");
+        return;
+    }
+
+    const details = [
+        `Check failed: output directory differs from generated contracts: ${outputDir}`,
+        formatCheckDiffSection("Missing files", missingFiles),
+        formatCheckDiffSection("Extra files", extraFiles),
+        formatCheckDiffSection("Changed files", changedFiles),
+    ].filter((line): line is string => Boolean(line));
+
+    throw new Error(details.join("\n"));
+}
+
+async function generateContracts(
+    config: ContractsConfig,
+    outputDir: string,
+    options: RunWithConfigOptions,
+    scope: GenerationScope,
+    logger: Logger
+): Promise<ContextProcessingResult[]> {
     const pathAliasRewrites = config.pathAliasRewrites
         ? new Map(Object.entries(config.pathAliasRewrites))
         : undefined;
@@ -245,7 +497,11 @@ export async function run(args: string[]): Promise<void> {
     for (const contextConfig of config.contexts) {
         const pipeline = ContractsPipeline.create({
             contextConfig,
-            messageTypes: options.messageTypes,
+            responseNamingConventions: config.responseNamingConventions,
+            decoratorNames: config.decoratorNames,
+            contractMarkerNames: config.contractMarkerNames,
+            messageTypes: scope.messageTypes,
+            includePublicContracts: scope.includePublicContracts,
             logger,
         });
 
@@ -270,6 +526,69 @@ export async function run(args: string[]): Promise<void> {
     if (config.pathAliasRewrites) {
         await generateReexports(config, outputDir, results, logger);
     }
+
+    return results;
+}
+
+async function runGeneration(
+    config: ContractsConfig,
+    outputDir: string,
+    options: RunWithConfigOptions,
+    logger: Logger
+): Promise<void> {
+    const scope = resolveGenerationScope(options);
+    logGenerationSettings(logger, config, outputDir, options, scope);
+
+    const shouldUseTemporaryOutput = options.dryRun || options.check;
+    const temporaryOutputDir = shouldUseTemporaryOutput
+        ? await mkdtemp(join(tmpdir(), "contracts-generator-"))
+        : undefined;
+    const generationOutputDir = temporaryOutputDir ?? outputDir;
+
+    if (temporaryOutputDir) {
+        logger.info(`Temporary output directory: ${temporaryOutputDir}`);
+    }
+
+    try {
+        const results = await generateContracts(
+            config,
+            generationOutputDir,
+            options,
+            scope,
+            logger
+        );
+
+        if (options.dryRun) {
+            logDryRunDetails(logger, results);
+        }
+
+        if (options.check) {
+            await assertOutputMatchesGenerated(
+                generationOutputDir,
+                outputDir,
+                logger
+            );
+        }
+    } finally {
+        if (temporaryOutputDir) {
+            await rm(temporaryOutputDir, { recursive: true, force: true });
+        }
+    }
+}
+
+export async function run(args: string[]): Promise<void> {
+    const options = parseArgs(args);
+    const configPath = resolve(options.config);
+    const configDir = dirname(configPath);
+    const outputDir = resolve(configDir, options.outputDir);
+    const logger = new ConsoleLogger({ level: "info" });
+
+    logger.info(`Loading config from: ${configPath}`);
+
+    const configLoader = new ConfigLoader();
+    const config = await configLoader.load(configPath);
+
+    await runGeneration(config, outputDir, options, logger);
 }
 
 /**
@@ -287,6 +606,9 @@ async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<C
         pathAliasRewrites: pluginConfig.pathAliasRewrites,
         externalDependencies: pluginConfig.externalDependencies,
         decoratorNames: mergeDecoratorNames(pluginConfig.decoratorNames),
+        contractMarkerNames: mergeContractMarkerNames(
+            pluginConfig.contractMarkerNames
+        ),
         responseNamingConventions: pluginConfig.responseNamingConventions,
         removeDecorators: pluginConfig.removeDecorators ?? true,
     };
@@ -307,46 +629,7 @@ export async function runWithConfig(
     const logger = new ConsoleLogger({ level: "info" });
     const config = await toContractsConfig(pluginConfig);
 
-    logger.info(`Found ${config.contexts.length} context(s) to process`);
-    logger.info(`Output directory: ${outputDir}`);
-    if (options.messageTypes) {
-        logger.info(`Message types filter: ${options.messageTypes.join(", ")}`);
-    }
-
-    const pathAliasRewrites = config.pathAliasRewrites
-        ? new Map(Object.entries(config.pathAliasRewrites))
-        : undefined;
-
-    const results: ContextProcessingResult[] = [];
-
-    for (const contextConfig of config.contexts) {
-        const pipeline = ContractsPipeline.create({
-            contextConfig,
-            messageTypes: options.messageTypes,
-            logger,
-        });
-
-        const result = await pipeline.execute({
-            contextName: contextConfig.name,
-            sourceDir: contextConfig.sourceDir,
-            outputDir,
-            pathAliasRewrites,
-            removeDecorators: config.removeDecorators,
-        });
-
-        results.push({ name: contextConfig.name, result, outputDir });
-    }
-
-    const totals = calculateSummaryTotals(results);
-    logSummary(logger, totals);
-
-    if (options.generateMessageRegistry) {
-        await generateRegistry(outputDir, results, totals, logger);
-    }
-
-    if (config.pathAliasRewrites) {
-        await generateReexports(config, outputDir, results, logger);
-    }
+    await runGeneration(config, outputDir, options, logger);
 }
 
 async function generateRegistry(

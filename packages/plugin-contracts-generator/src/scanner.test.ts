@@ -42,6 +42,78 @@ describe("Scanner", () => {
         expect(files.some((f) => f.includes("event-file.ts"))).toBe(true);
     });
 
+    it("should find files containing @PublicContract comment markers", async () => {
+        const tempDir = await mkdtemp(join(tmpdir(), "scanner-contract-"));
+
+        try {
+            await writeFile(
+                join(tempDir, "line-contract.ts"),
+                `
+// @PublicContract()
+export interface PublicProfile {
+    id: string;
+}
+`
+            );
+            await writeFile(
+                join(tempDir, "jsdoc-contract.ts"),
+                `
+/**
+ * @PublicContract()
+ */
+export type PublicSettings = {
+    theme: string;
+};
+`
+            );
+            await writeFile(
+                join(tempDir, "internal.ts"),
+                `
+export interface InternalProfile {
+    id: string;
+}
+`
+            );
+
+            const scanner = new Scanner();
+            const files = await scanner.scan(tempDir);
+
+            expect(files).toHaveLength(2);
+            expect(files.some((f) => f.includes("line-contract.ts"))).toBe(
+                true
+            );
+            expect(files.some((f) => f.includes("jsdoc-contract.ts"))).toBe(
+                true
+            );
+            expect(files.some((f) => f.includes("internal.ts"))).toBe(false);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it("should not match longer identifiers that start with PublicContract", async () => {
+        const tempDir = await mkdtemp(join(tmpdir(), "scanner-contract-"));
+
+        try {
+            await writeFile(
+                join(tempDir, "false-positive.ts"),
+                `
+// @PublicContractual()
+export interface InternalProfile {
+    id: string;
+}
+`
+            );
+
+            const scanner = new Scanner();
+            const files = await scanner.scan(tempDir);
+
+            expect(files).toHaveLength(0);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
     describe("custom decorator patterns", () => {
         // Tests for configurable decorator names in scanner
         // When decoratorNames is provided, the scanner should look for those
@@ -210,6 +282,39 @@ export class PlaceOrder {}
                 // Should find only event file
                 expect(files).toHaveLength(1);
                 expect(files[0]).toContain("order-events.ts");
+            } finally {
+                await rm(tempDir, { recursive: true, force: true });
+            }
+        });
+
+        it("should not include PublicContract-only files when messageTypes is ['event']", async () => {
+            const tempDir = await mkdtemp(
+                join(tmpdir(), "scanner-message-types-")
+            );
+
+            try {
+                await writeFile(
+                    join(tempDir, "contracts.ts"),
+                    `
+// @PublicContract()
+export type PublicUserId = string;
+`
+                );
+                await writeFile(
+                    join(tempDir, "events.ts"),
+                    `
+@PublicEvent()
+export class UserRegistered {}
+`
+                );
+
+                const scanner = new Scanner({
+                    messageTypes: ["event"],
+                });
+                const files = await scanner.scan(tempDir);
+
+                expect(files).toHaveLength(1);
+                expect(files[0]).toContain("events.ts");
             } finally {
                 await rm(tempDir, { recursive: true, force: true });
             }

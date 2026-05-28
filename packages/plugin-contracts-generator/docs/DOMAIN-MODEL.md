@@ -4,9 +4,9 @@ Defines the core domain model for the Contracts Generator.
 
 ## Core Concepts
 
-### 1. Message (Extraction Target)
+### 1. Message (Message Contract Target)
 
-Message is a data structure used for inter-system communication.
+Message is a data structure used for inter-system communication. Messages are marked by class decorators (`@PublicEvent()`, `@PublicCommand()`, `@PublicQuery()`), extracted as classes, and registered in `MessageRegistry` when registry generation is enabled.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -40,7 +40,40 @@ isCommand(msg: Message): msg is Command          // messageType === 'command'
 isQuery(msg: Message): msg is Query              // messageType === 'query'
 ```
 
-### 2. Field
+### 2. PublicContract (General Contract Target)
+
+PublicContract is a general TypeScript declaration explicitly exposed to the generated contracts package. It is marked by a leading TypeScript comment, not by decorator syntax.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    PublicContract                           │
+├─────────────────────────────────────────────────────────────┤
+│ - name: string              // Declaration name             │
+│ - contractType: 'contract'  // Discriminator                │
+│ - declarationKind:          // class/interface/type/enum    │
+│     'class' | 'interface' | 'type' | 'enum'                 │
+│ - sourceFile: SourceFile    // Original file info           │
+│ - exported: boolean         // Export flag                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Supported markers:
+
+```typescript
+// @PublicContract()
+interface OrderSnapshot {
+  orderId: string;
+}
+
+/** @PublicContract() */
+type OrderStatus = "draft" | "placed";
+```
+
+`PublicContract` is separate from the `Message` union. It has no `messageType`, payload, response type, or registry behavior. Comment-marked contracts are included in generated contracts output, but they are never registered in `MessageRegistry`. If a marked declaration is not exported in source, the copier adds `export` in the generated output.
+
+`@PublicContract()` decorator syntax is not supported. TypeScript decorators cannot be applied to `interface` or `type` declarations, so the generator treats `PublicContract` only as a leading comment marker for `class`, `interface`, `type`, and `enum`.
+
+### 3. Field
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -53,7 +86,7 @@ isQuery(msg: Message): msg is Query              // messageType === 'query'
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 3. TypeRef (Type Reference)
+### 4. TypeRef (Type Reference)
 
 TypeRef is the core of the type system. All types are represented in a unified way.
 
@@ -83,7 +116,7 @@ symbol
                   A & B     'foo'|42   [A,B,C]  (a:T)=>R
 ```
 
-#### 3.1 PrimitiveType
+#### 4.1 PrimitiveType
 
 ```typescript
 interface PrimitiveType {
@@ -93,7 +126,7 @@ interface PrimitiveType {
 }
 ```
 
-#### 3.2 ArrayType
+#### 4.2 ArrayType
 
 ```typescript
 interface ArrayType {
@@ -102,7 +135,7 @@ interface ArrayType {
 }
 ```
 
-#### 3.3 ObjectType
+#### 4.3 ObjectType
 
 ```typescript
 interface ObjectType {
@@ -111,7 +144,7 @@ interface ObjectType {
 }
 ```
 
-#### 3.4 UnionType
+#### 4.4 UnionType
 
 ```typescript
 interface UnionType {
@@ -120,7 +153,7 @@ interface UnionType {
 }
 ```
 
-#### 3.5 IntersectionType
+#### 4.5 IntersectionType
 
 ```typescript
 interface IntersectionType {
@@ -129,7 +162,7 @@ interface IntersectionType {
 }
 ```
 
-#### 3.6 ReferenceType
+#### 4.6 ReferenceType
 
 ```typescript
 interface ReferenceType {
@@ -139,7 +172,7 @@ interface ReferenceType {
 }
 ```
 
-#### 3.7 LiteralType
+#### 4.7 LiteralType
 
 ```typescript
 interface LiteralType {
@@ -148,7 +181,7 @@ interface LiteralType {
 }
 ```
 
-#### 3.8 TupleType
+#### 4.8 TupleType
 
 ```typescript
 interface TupleType {
@@ -157,7 +190,7 @@ interface TupleType {
 }
 ```
 
-#### 3.9 FunctionType
+#### 4.9 FunctionType
 
 ```typescript
 interface FunctionType {
@@ -173,7 +206,7 @@ interface FunctionParameter {
 }
 ```
 
-### 4. TypeDefinition
+### 5. TypeDefinition
 
 Represents the complete structure of an externally defined type.
 
@@ -190,7 +223,7 @@ Represents the complete structure of an externally defined type.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 4.1 EnumDefinition
+### 5.1 EnumDefinition
 
 ```typescript
 interface EnumMember {
@@ -204,9 +237,9 @@ interface EnumDefinition extends Omit<TypeDefinition, 'kind' | 'body'> {
 }
 ```
 
-### 4.2 ClassDefinition
+### 5.2 ClassDefinition
 
-Information about classes referenced by Events/Commands. Unlike types, source text is preserved as-is.
+Information about classes referenced by messages or public contracts. Unlike types, source text is preserved as-is.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -223,7 +256,7 @@ Information about classes referenced by Events/Commands. Unlike types, source te
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 4.3 ClassImport
+### 5.3 ClassImport
 
 Import information used by a class.
 
@@ -252,7 +285,7 @@ Import information used by a class.
 
 **Note:** Importing a Class with `import type` will break `instanceof` at runtime
 
-### 5. SourceFile
+### 6. SourceFile
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -264,9 +297,9 @@ Import information used by a class.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 6. Dependency
+### 7. Dependency
 
-Information about external types/values referenced by a Message.
+Information about external types/values referenced by a message or public contract declaration.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -285,9 +318,9 @@ ImportSource =
 DependencyKind = 'type' | 'value' | 'class'
 ```
 
-### 7. DecoratorNames
+### 8. DecoratorNames
 
-Customizes decorator names used to identify public messages.
+Customizes decorator names used to identify public messages. These names apply only to message class decorators and do not configure general public contract comments.
 
 ```typescript
 interface DecoratorNames {
@@ -303,7 +336,23 @@ const DEFAULT_DECORATOR_NAMES: Required<DecoratorNames> = {
 };
 ```
 
-### 8. ResponseNamingConvention
+### 9. ContractMarkerNames
+
+Customizes comment marker names used to identify general public contracts.
+
+```typescript
+interface ContractMarkerNames {
+  contract?: string; // Default: "PublicContract"
+}
+
+const DEFAULT_CONTRACT_MARKER_NAMES: Required<ContractMarkerNames> = {
+  contract: "PublicContract",
+};
+```
+
+The marker is searched in leading comments before `class`, `interface`, `type`, and `enum` declarations.
+
+### 10. ResponseNamingConvention
 
 Defines naming patterns for matching response types to messages.
 
@@ -313,10 +362,10 @@ interface ResponseNamingConvention {
   responseSuffix: string;  // e.g., "Response"
 }
 
-// Example: CreateUserRequest → CreateUserResponse
+// Example: CreateUserRequest -> CreateUserResponse
 ```
 
-### 9. ExtractionResult
+### 11. ExtractionResult
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -324,6 +373,8 @@ interface ResponseNamingConvention {
 ├─────────────────────────────────────────────────────────────┤
 │ - events: DomainEvent[]                                     │
 │ - commands: Command[]                                       │
+│ - queries: Query[]                                          │
+│ - publicContracts: PublicContract[]                         │
 │ - types: TypeDefinition[]   // Extracted dependent types    │
 │ - dependencies: Dependency[] // Dependency info             │
 │ - errors: ExtractionError[]                                 │
@@ -331,7 +382,7 @@ interface ResponseNamingConvention {
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 10. ProcessContextResult
+### 12. ProcessContextResult
 
 Actual result type returned by `processContext()`.
 
@@ -342,6 +393,7 @@ Actual result type returned by `processContext()`.
 │ - events: DomainEvent[]      // Extracted events            │
 │ - commands: Command[]        // Extracted commands          │
 │ - queries: Query[]           // Extracted queries           │
+│ - publicContracts: PublicContract[] // General contracts    │
 │ - copiedFiles: string[]      // Copied file paths           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -407,6 +459,15 @@ export class LectureCreated extends Message {
 export type UserId = string & Brand<'UserId'>;
 ```
 
+```typescript
+// packages/lecture/src/contracts/lecture-summary.ts
+// @PublicContract()
+interface LectureSummary {
+  lectureId: string;
+  title: string;
+}
+```
+
 ### Domain Model (Internal)
 
 ```typescript
@@ -438,6 +499,18 @@ const userIdType: TypeDefinition = {
       { kind: 'reference', name: 'Brand', typeArguments: [{ kind: 'literal', value: 'UserId' }] },
     ],
   },
+  exported: false,
+};
+
+const lectureSummaryContract: PublicContract = {
+  name: 'LectureSummary',
+  contractType: 'contract',
+  declarationKind: 'interface',
+  sourceFile: {
+    absolutePath: '/project/packages/lecture/src/contracts/lecture-summary.ts',
+    relativePath: 'packages/lecture/src/contracts/lecture-summary.ts',
+    packageName: 'lecture',
+  },
   exported: true,
 };
 ```
@@ -465,4 +538,13 @@ export class LectureCreated extends Message {
 import type { Brand } from '@hexaijs/core';
 
 export type UserId = string & Brand<'UserId'>;
+```
+
+```typescript
+// contracts/src/contracts/lecture-summary.ts
+// @PublicContract()
+export interface LectureSummary {
+  lectureId: string;
+  title: string;
+}
 ```

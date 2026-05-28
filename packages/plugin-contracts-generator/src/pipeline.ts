@@ -4,7 +4,17 @@ import { Parser } from "./parser.js";
 import { FileGraphResolver, type FileGraph } from "./file-graph-resolver.js";
 import { FileCopier } from "./file-copier.js";
 import { ContextConfig } from "./context-config.js";
-import type { DomainEvent, Command, Query, TypeDefinition, ResponseNamingConvention, MessageType } from "./domain/types.js";
+import type {
+    Command,
+    ContractMarkerNames,
+    DecoratorNames,
+    DomainEvent,
+    MessageType,
+    PublicContract,
+    Query,
+    ResponseNamingConvention,
+    TypeDefinition,
+} from "./domain/types.js";
 import { type FileSystem, nodeFileSystem } from "./file-system.js";
 import { type Logger, noopLogger } from "./logger.js";
 
@@ -25,6 +35,18 @@ export interface PipelineDependencies {
     readonly logger: Logger;
 }
 
+interface PipelineCreateOptions {
+    contextConfig: ContextConfig;
+    responseNamingConventions?: readonly ResponseNamingConvention[];
+    fileSystem?: FileSystem;
+    logger?: Logger;
+    excludeDependencies?: string[];
+    decoratorNames?: DecoratorNames;
+    contractMarkerNames?: ContractMarkerNames;
+    messageTypes?: MessageType[];
+    includePublicContracts?: boolean;
+}
+
 export interface PipelineOptions {
     readonly contextName: string;
     readonly sourceDir: string;
@@ -37,6 +59,7 @@ export interface PipelineResult {
     readonly events: readonly DomainEvent[];
     readonly commands: readonly Command[];
     readonly queries: readonly Query[];
+    readonly publicContracts: readonly PublicContract[];
     readonly copiedFiles: string[];
 }
 
@@ -44,34 +67,48 @@ export interface ParsedMessages {
     readonly events: readonly DomainEvent[];
     readonly commands: readonly Command[];
     readonly queries: readonly Query[];
+    readonly publicContracts: readonly PublicContract[];
     readonly typeDefinitions: readonly TypeDefinition[];
 }
 
 export class ContractsPipeline {
     private readonly messageTypes?: readonly MessageType[];
+    private readonly decoratorNames?: DecoratorNames;
+    private readonly contractMarkerNames?: ContractMarkerNames;
+    private readonly includePublicContracts?: boolean;
 
     private constructor(
         private readonly deps: PipelineDependencies,
-        messageTypes?: readonly MessageType[]
+        messageTypes?: readonly MessageType[],
+        decoratorNames?: DecoratorNames,
+        contractMarkerNames?: ContractMarkerNames,
+        includePublicContracts?: boolean
     ) {
         this.messageTypes = messageTypes;
+        this.decoratorNames = decoratorNames;
+        this.contractMarkerNames = contractMarkerNames;
+        this.includePublicContracts = includePublicContracts;
     }
 
-    static create(options: {
-        contextConfig: ContextConfig;
-        responseNamingConventions?: readonly ResponseNamingConvention[];
-        fileSystem?: FileSystem;
-        logger?: Logger;
-        excludeDependencies?: string[];
-        messageTypes?: MessageType[];
-    }): ContractsPipeline {
+    static create(options: PipelineCreateOptions): ContractsPipeline {
         const fileSystem = options.fileSystem ?? nodeFileSystem;
         const logger = options.logger ?? noopLogger;
         const excludeDependencies = options.excludeDependencies ?? DEFAULT_EXCLUDE_DEPENDENCIES;
-        const scanner = new Scanner({ fileSystem, messageTypes: options.messageTypes });
+        const includePublicContracts =
+            options.includePublicContracts ?? options.messageTypes === undefined;
+        const scanner = new Scanner({
+            fileSystem,
+            decoratorNames: options.decoratorNames,
+            contractMarkerNames: options.contractMarkerNames,
+            messageTypes: options.messageTypes,
+            includePublicContracts,
+        });
         const parser = new Parser({
+            decoratorNames: options.decoratorNames,
+            contractMarkerNames: options.contractMarkerNames,
             responseNamingConventions: options.responseNamingConventions ?? options.contextConfig.responseNamingConventions,
             messageTypes: options.messageTypes,
+            includePublicContracts,
         });
         const fileGraphResolver = FileGraphResolver.create({
             contextConfig: options.contextConfig,
@@ -89,7 +126,10 @@ export class ContractsPipeline {
                 fileSystem,
                 logger,
             },
-            options.messageTypes
+            options.messageTypes,
+            options.decoratorNames,
+            options.contractMarkerNames,
+            includePublicContracts
         );
     }
 
@@ -105,19 +145,22 @@ export class ContractsPipeline {
         this.deps.logger.debug(`  Source: ${sourceDir}`);
         this.deps.logger.debug(`  Output: ${contextOutputDir}`);
 
-        const decoratedFiles = await this.scan(sourceDir);
-        const messages = await this.parse(decoratedFiles, sourceDir);
-        const fileGraph = await this.resolve(decoratedFiles, sourceDir);
+        const candidateFiles = await this.scan(sourceDir);
+        const messages = await this.parse(candidateFiles, sourceDir);
+        const entryPoints = this.collectEntryPoints(messages);
+        const fileGraph = await this.resolve(entryPoints, sourceDir);
         const responseTypesToExport = this.collectResponseTypesToExport(messages);
-        const copiedFiles = await this.copy(fileGraph, sourceDir, contextOutputDir, pathAliasRewrites, responseTypesToExport, removeDecorators, this.messageTypes);
+        const publicContractsToExport = this.collectPublicContractsToExport(messages);
+        const copiedFiles = await this.copy(fileGraph, sourceDir, contextOutputDir, pathAliasRewrites, responseTypesToExport, publicContractsToExport, removeDecorators, this.messageTypes);
         await this.exportBarrel(copiedFiles, contextOutputDir);
 
-        this.deps.logger.info(`Completed context: ${contextName} (${messages.events.length} events, ${messages.commands.length} commands, ${messages.queries.length} queries, ${copiedFiles.length} files)`);
+        this.deps.logger.info(`Completed context: ${contextName} (${messages.events.length} events, ${messages.commands.length} commands, ${messages.queries.length} queries, ${messages.publicContracts.length} public contracts, ${copiedFiles.length} files)`);
 
         return {
             events: messages.events,
             commands: messages.commands,
             queries: messages.queries,
+            publicContracts: messages.publicContracts,
             copiedFiles,
         };
     }
@@ -156,6 +199,45 @@ export class ContractsPipeline {
         return result;
     }
 
+    private collectPublicContractsToExport(messages: ParsedMessages): Map<string, string[]> {
+        const result = new Map<string, string[]>();
+
+        for (const contract of messages.publicContracts) {
+            if (contract.exported) continue;
+
+            const sourceFile = contract.sourceFile.absolutePath;
+            const existing = result.get(sourceFile) ?? [];
+            if (!existing.includes(contract.name)) {
+                existing.push(contract.name);
+                result.set(sourceFile, existing);
+            }
+        }
+
+        if (result.size > 0) {
+            this.deps.logger.debug(`Found ${result.size} file(s) with unexported public contracts`);
+        }
+
+        return result;
+    }
+
+    private collectEntryPoints(messages: ParsedMessages): string[] {
+        const entryPoints = new Set<string>();
+
+        for (const message of [
+            ...messages.events,
+            ...messages.commands,
+            ...messages.queries,
+        ]) {
+            entryPoints.add(message.sourceFile.absolutePath);
+        }
+
+        for (const contract of messages.publicContracts) {
+            entryPoints.add(contract.sourceFile.absolutePath);
+        }
+
+        return [...entryPoints];
+    }
+
     async scan(sourceDir: string): Promise<string[]> {
         this.deps.logger.debug(`Scanning for decorated files in ${sourceDir}`);
         const files = await this.deps.scanner.scan(sourceDir);
@@ -168,6 +250,7 @@ export class ContractsPipeline {
         const events: DomainEvent[] = [];
         const commands: Command[] = [];
         const queries: Query[] = [];
+        const publicContracts: PublicContract[] = [];
         const typeDefinitions: TypeDefinition[] = [];
 
         for (const file of files) {
@@ -180,11 +263,18 @@ export class ContractsPipeline {
             events.push(...result.events);
             commands.push(...result.commands);
             queries.push(...result.queries);
+            publicContracts.push(...result.publicContracts);
             typeDefinitions.push(...result.typeDefinitions);
         }
 
-        this.deps.logger.debug(`Parsed ${events.length} event(s), ${commands.length} command(s), ${queries.length} query(s), ${typeDefinitions.length} type(s)`);
-        return { events, commands, queries, typeDefinitions };
+        this.deps.logger.debug(`Parsed ${events.length} event(s), ${commands.length} command(s), ${queries.length} query(s), ${publicContracts.length} public contract(s), ${typeDefinitions.length} type(s)`);
+        return {
+            events,
+            commands,
+            queries,
+            publicContracts,
+            typeDefinitions,
+        };
     }
 
     async resolve(entryPoints: string[], sourceRoot: string): Promise<FileGraph> {
@@ -200,6 +290,7 @@ export class ContractsPipeline {
         outputDir: string,
         pathAliasRewrites?: Map<string, string>,
         responseTypesToExport?: Map<string, string[]>,
+        publicContractsToExport?: Map<string, string[]>,
         removeDecorators?: boolean,
         messageTypes?: readonly MessageType[]
     ): Promise<string[]> {
@@ -212,8 +303,12 @@ export class ContractsPipeline {
             fileGraph,
             pathAliasRewrites,
             responseTypesToExport,
+            publicContractsToExport,
             removeDecorators,
             messageTypes,
+            decoratorNames: this.decoratorNames,
+            contractMarkerNames: this.contractMarkerNames,
+            includePublicContracts: this.includePublicContracts,
         });
 
         this.deps.logger.debug(`Copied ${result.copiedFiles.length} file(s)`);

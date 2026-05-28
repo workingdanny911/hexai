@@ -1,18 +1,19 @@
 /**
  * Contracts Generator
  *
- * Extract Domain Events and Commands from TypeScript source code using decorators.
+ * Extract public message contracts and general TypeScript contracts from source code.
  *
  * @example
  * ```typescript
- * import { extract } from '@hexaijs/plugin-contracts-generator';
+ * import { processContext } from '@hexaijs/plugin-contracts-generator';
  *
- * const result = await extract({
- *   sourceDir: 'packages',
+ * const result = await processContext({
+ *   contextName: 'orders',
+ *   path: 'packages/orders',
  *   outputDir: 'packages/contracts',
  * });
  *
- * console.log(`Extracted ${result.events.length} events and ${result.commands.length} commands`);
+ * console.log(`Extracted ${result.events.length} events and ${result.publicContracts.length} contracts`);
  * ```
  */
 
@@ -36,10 +37,13 @@ export type {
     EnumDefinition,
     ClassDefinition,
     ClassImport,
+    PublicContract,
+    PublicContractDeclarationKind,
     Message,
     MessageBase,
     DomainEvent,
     Command,
+    Query,
     Dependency,
     DependencyKind,
     ImportSource,
@@ -47,6 +51,7 @@ export type {
     ExtractionError,
     ExtractionWarning,
     Config,
+    ContractMarkerNames,
 } from "./domain/types.js";
 
 export {
@@ -61,6 +66,7 @@ export {
     isFunctionType,
     isDomainEvent,
     isCommand,
+    isQuery,
 } from "./domain/types.js";
 
 export {
@@ -128,7 +134,12 @@ export {
 export { ContextConfig, type InputContextConfig } from "./context-config.js";
 
 import { ContextConfig } from "./context-config.js";
-import type { ResponseNamingConvention, MessageType } from "./domain/types.js";
+import type {
+    ContractMarkerNames,
+    DecoratorNames,
+    MessageType,
+    ResponseNamingConvention,
+} from "./domain/types.js";
 
 export interface ProcessContextOptions {
     contextName: string;
@@ -138,8 +149,11 @@ export interface ProcessContextOptions {
     pathAliasRewrites?: Map<string, string>;
     tsconfigPath?: string;
     responseNamingConventions?: readonly ResponseNamingConvention[];
+    decoratorNames?: DecoratorNames;
+    contractMarkerNames?: ContractMarkerNames;
     removeDecorators?: boolean;
     messageTypes?: MessageType[];
+    includePublicContracts?: boolean;
     fileSystem?: FileSystem;
     logger?: Logger;
 }
@@ -148,6 +162,7 @@ export interface ProcessContextResult {
     events: readonly import("./domain/types.js").DomainEvent[];
     commands: readonly import("./domain/types.js").Command[];
     queries: readonly import("./domain/types.js").Query[];
+    publicContracts: readonly import("./domain/types.js").PublicContract[];
     copiedFiles: string[];
 }
 
@@ -162,8 +177,11 @@ export async function processContext(
         pathAliasRewrites,
         tsconfigPath,
         responseNamingConventions,
+        decoratorNames,
+        contractMarkerNames,
         removeDecorators,
         messageTypes,
+        includePublicContracts,
         fileSystem = nodeFileSystem,
         logger = noopLogger,
     } = options;
@@ -183,7 +201,10 @@ export async function processContext(
     return ContractsPipeline.create({
         contextConfig,
         responseNamingConventions,
+        decoratorNames,
+        contractMarkerNames,
         messageTypes,
+        includePublicContracts,
         fileSystem,
         logger,
     }).execute({
