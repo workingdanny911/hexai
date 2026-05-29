@@ -21,7 +21,7 @@ npm install @hexaijs/plugin-contracts-generator
 ```
 
 **Peer dependencies:**
-- `typescript ^5.0.0`
+- `typescript ^5.0.0 || ^6.0.0`
 
 ## Core Concepts
 

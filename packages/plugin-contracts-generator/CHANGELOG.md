@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1] - 2026-05-29
+
+### Changed
+
+- Widened the TypeScript peer dependency to support both TypeScript 5 and 6.
+
 ## [0.4.0] - 2026-05-28
 
 ### Added
