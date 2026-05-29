@@ -306,6 +306,101 @@ const eventStore = new PostgresEventStore(unitOfWork, {
 });
 ```
 
+### Projections
+
+`@hexaijs/postgres/projection` provides a PostgreSQL projection engine for building read models from the `PostgresEventStore` event stream. Projection APIs live in a subpath so the root `@hexaijs/postgres` surface stays focused on transaction, event-store, and migration primitives.
+
+Run the projection checkpoint migration before starting projection workers:
+
+```typescript
+import { runProjectionMigrations } from "@hexaijs/postgres/projection";
+
+await runProjectionMigrations("postgres://user:pass@localhost:5432/mydb");
+```
+
+Define a read model with selectors:
+
+```typescript
+import {
+    SelectorBasedReadModel,
+    When,
+    eventTypeMatches,
+} from "@hexaijs/postgres/projection";
+
+import type { StoredEvent } from "@hexaijs/core";
+import type { ClientBase } from "pg";
+
+class OrderSummaryReadModel extends SelectorBasedReadModel {
+    readonly name = "order-summary";
+    readonly version = 1;
+
+    @When(eventTypeMatches("order.placed"))
+    async onOrderPlaced(
+        storedEvent: StoredEvent,
+        client: ClientBase
+    ): Promise<void> {
+        const { orderId } = storedEvent.event.getPayload();
+        await client.query(
+            "INSERT INTO read_order_summary (order_id, position) VALUES ($1, $2)",
+            [orderId, storedEvent.position]
+        );
+    }
+
+    async reset(client: ClientBase): Promise<void> {
+        await client.query("TRUNCATE read_order_summary");
+    }
+}
+```
+
+Start the engine with the event store and unit of work:
+
+```typescript
+import * as pg from "pg";
+import {
+    PostgresEventStore,
+    createPostgresUnitOfWork,
+} from "@hexaijs/postgres";
+import { ProjectionEngine } from "@hexaijs/postgres/projection";
+
+const pool = new pg.Pool({ connectionString: "postgres://..." });
+const unitOfWork = createPostgresUnitOfWork(pool);
+const eventStore = new PostgresEventStore(unitOfWork);
+
+const logger = {
+    pollError: console.error,
+    runnerIsolated: console.error,
+    runnerRetrying: console.warn,
+    rebuildStarted: console.info,
+    rebuildProgress: console.info,
+    rebuildComplete: console.info,
+    rebuildError: console.error,
+    coordinatorStarted: console.info,
+    coordinatorComplete: console.info,
+    rebuildRetrying: console.warn,
+    singleFallbackStarted: console.warn,
+};
+
+const engine = new ProjectionEngine(eventStore, unitOfWork, logger);
+engine.register(new OrderSummaryReadModel());
+
+await engine.start();
+
+const wakeQueue = engine.createWakeQueue();
+
+await unitOfWork.scope(async () => {
+    // Store domain changes and events here.
+    unitOfWork.afterCommit(() => wakeQueue.wake());
+});
+```
+
+When a read model version changes, the engine resets that projection and rebuilds it from the event stream. Failed live events act as an ordering barrier: the runner does not advance to later events until the failed position succeeds or the projection is isolated.
+
+**Read model `apply()` must be idempotent.** The engine commits the read model write and the projection checkpoint in a single transaction, so a crash before commit replays the event rather than skipping it. Delivery is therefore at-least-once: a retry after a transient failure, or a commit that succeeds server-side but reports a client error, can re-apply the same event. Prefer upserts / `ON CONFLICT` over blind inserts.
+
+**Scope and ownership.** This engine targets single-process, single-owner execution: exactly one process owns projection workers for a given database. Registering the same read model name twice on one engine fails fast. Multi-process ownership (lease, fencing, checkpoint compare-and-swap) is not yet provided. The engine runs each apply/checkpoint in its own transaction (`Propagation.NEW`), so it is safe to trigger `poll()` from an `afterCommit` hook without entangling projection writes with your command transaction.
+
+See [`docs/projection.md`](./docs/projection.md) for the projection architecture, delivery semantics, failure handling, and rebuild behavior.
+
 ## Usage
 
 ### Running Migrations
