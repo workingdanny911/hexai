@@ -3,7 +3,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.8.6",
+  "version": "0.9.0",
   "type": "module",
   "description": "PostgreSQL support for hexai",
   "license": "MIT",
@@ -33,12 +33,21 @@
   "files": [
     "dist",
     "migrations",
+    "projection-migrations",
     "LICENSE"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./projection": {
+      "types": "./dist/projection/index.d.ts",
+      "import": "./dist/projection/index.js"
+    },
+    "./projection/migrations": {
+      "types": "./dist/projection/migrations.d.ts",
+      "import": "./dist/projection/migrations.js"
     },
     "./test": {
       "types": "./dist/test.d.ts",

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.0] - 2026-05-29
+
+### Added
+
+- Projection engine under `@hexaijs/postgres/projection` for building read models from the `PostgresEventStore` stream:
+  - `ProjectionEngine` with live polling, startup/version rebuilds, retry barrier, and isolation.
+  - `IPostgresReadModel` plus `SelectorBasedReadModel`, `When`, and `eventTypeMatches` for selector-based read models.
+  - `ProjectionWakeQueue` to coalesce "new events" signals into polls.
+  - `runProjectionMigrations()` and the `projection__checkpoints` migration.
+- New subpath exports: `@hexaijs/postgres/projection` and `@hexaijs/postgres/projection/migrations`.
+- Real Postgres integration suite covering apply+checkpoint atomicity, startup rebuild, isolation persistence, version-mismatch rebuild, and ambient-transaction independence.
+
+### Changed
+
+- Read model `canHandle` / `apply` receive the full `StoredEvent` (including the global `position`).
+- Projection apply + checkpoint writes run in their own transaction (`Propagation.NEW`) so they never join — and cannot be rolled back by — an ambient caller transaction.
+
 ## [0.8.6] - 2026-03-25
 
 ### Changed
