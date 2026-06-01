@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.5.0] - 2026-06-01
+
+### Added
+
+- Documented the canonical `ContractEvent`, `ContractCommand`, `ContractQuery`, and generic `Contract({ kind })` API.
+- Documented `visibility`, `tags`, `kind`, and `contracts.outputs[]` output selection for public/internal contract generation.
+- Documented source-aware decorator matching, named import aliases, import-free comment markers, and current namespace import limitations.
+- Documented fail-fast `BoundaryViolationError` behavior for strict output selectors.
+
+### Changed
+
+- Marked `Public*` decorators and markers as deprecated compatibility aliases in the public docs.
+- Documented TypeScript printer diff churn when `removeDecorators: true` rewrites generated files.
+- Documented that trusted decorator-only local barrels are skipped from generated output when `removeDecorators: true`.
+- Updated the `@hexaijs/contracts` dependency to `^0.3.0`.
+
+### Fixed
+
+- Aligned `tags.include` filtering with documented OR semantics: contracts now match when they have at least one included tag.
+- Strict output selectors now fail fast with `BoundaryViolationError` instead of silently copying marked declarations outside the selected public/internal boundary.
+- Trusted decorator-only local barrels are skipped from generated output when `removeDecorators: true`.
+
+### Known Follow-up
+
+- Generation failures are not fully atomic yet and may leave partial selected output after `BoundaryViolationError`.
+
 ## [0.4.1] - 2026-05-29
 
 ### Changed

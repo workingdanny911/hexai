@@ -4,13 +4,19 @@ import ts from "typescript";
 import { ConfigLoadError } from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
 import type {
+    ContractOutputConfig,
+    ContractOutputInclude,
+    ContractOutputSelect,
+    ContractVisibility,
     ContractMarkerNames,
     DecoratorNames,
     EntryStrategy,
     ResponseNamingConvention,
+    TrustedDecoratorSources,
 } from "./domain/index.js";
 import {
     isEntryStrategy,
+    isMessageContractKind,
     mergeContractMarkerNames,
     mergeDecoratorNames,
 } from "./domain/index.js";
@@ -19,11 +25,14 @@ import { ContextConfig, type InputContextConfig } from "./context-config.js";
 const SUPPORTED_GLOB_PARTS_COUNT = 2;
 
 export interface ContractsConfig {
+    readonly configDir: string;
     readonly contexts: readonly ContextConfig[];
+    readonly outputs?: readonly ContractOutputConfig[];
     readonly pathAliasRewrites?: Readonly<Record<string, string>>;
     readonly externalDependencies?: Readonly<Record<string, string>>;
     readonly decoratorNames: Required<DecoratorNames>;
     readonly contractMarkerNames: Required<ContractMarkerNames>;
+    readonly trustedDecoratorSources?: TrustedDecoratorSources;
     readonly entryStrategy?: EntryStrategy;
     readonly responseNamingConventions?: readonly ResponseNamingConvention[];
     readonly removeDecorators?: boolean;
@@ -32,10 +41,12 @@ export interface ContractsConfig {
 interface ApplicationConfig {
     contracts?: {
         contexts?: readonly (string | InputContextConfig)[];
+        outputs?: readonly ContractOutputConfig[];
         pathAliasRewrites?: Record<string, string>;
         externalDependencies?: Record<string, string>;
         decoratorNames?: DecoratorNames;
         contractMarkerNames?: ContractMarkerNames;
+        trustedDecoratorSources?: TrustedDecoratorSources;
         entryStrategy?: EntryStrategy;
         responseNamingConventions?: ResponseNamingConvention[];
         removeDecorators?: boolean;
@@ -44,6 +55,92 @@ interface ApplicationConfig {
 
 export interface ConfigLoaderOptions {
     fileSystem?: FileSystem;
+}
+
+export function validateEntryStrategy(
+    entryStrategy: EntryStrategy | undefined
+): EntryStrategy | undefined {
+    if (entryStrategy === undefined) {
+        return undefined;
+    }
+
+    if (isEntryStrategy(entryStrategy)) {
+        return entryStrategy;
+    }
+
+    throw new ConfigLoadError(
+        `Invalid contracts.entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
+    );
+}
+
+export function validateContractOutputs(
+    outputs: readonly ContractOutputConfig[] | undefined
+): readonly ContractOutputConfig[] | undefined {
+    if (outputs === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(outputs)) {
+        throw new ConfigLoadError("Invalid contracts.outputs: expected an array");
+    }
+
+    if (outputs.length === 0) {
+        throw new ConfigLoadError("Invalid contracts.outputs: expected at least one output");
+    }
+
+    const names = new Set<string>();
+    return outputs.map((output, index) => {
+        if (!output.name || typeof output.name !== "string") {
+            throw new ConfigLoadError(
+                `Invalid contracts.outputs[${index}]: missing 'name'`
+            );
+        }
+
+        if (names.has(output.name)) {
+            throw new ConfigLoadError(
+                `Invalid contracts.outputs[${index}]: duplicate name "${output.name}"`
+            );
+        }
+        names.add(output.name);
+
+        if (!output.path || typeof output.path !== "string") {
+            throw new ConfigLoadError(
+                `Invalid contracts.outputs[${index}]: missing 'path'`
+            );
+        }
+
+        if (
+            output.registry !== undefined &&
+            typeof output.registry !== "boolean"
+        ) {
+            throw new ConfigLoadError(
+                `Invalid contracts.outputs[${index}].registry: expected boolean`
+            );
+        }
+
+        return {
+            name: output.name,
+            path: output.path,
+            select: validateOutputSelect(output.select, index),
+            registry: output.registry,
+        };
+    });
+}
+
+export function validateTrustedDecoratorSources(
+    sources: TrustedDecoratorSources | undefined
+): TrustedDecoratorSources | undefined {
+    if (sources === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(sources) || sources.some((source) => typeof source !== "string")) {
+        throw new ConfigLoadError(
+            "Invalid contracts.trustedDecoratorSources: expected string array"
+        );
+    }
+
+    return sources;
 }
 
 export async function resolveContextEntries(
@@ -227,37 +324,136 @@ export class ConfigLoader {
         const contractMarkerNames = mergeContractMarkerNames(
             contracts.contractMarkerNames
         );
-        const entryStrategy = this.validateEntryStrategy(
+        const entryStrategy = validateEntryStrategy(
             contracts.entryStrategy
         );
 
         return {
+            configDir,
             contexts,
+            outputs: validateContractOutputs(contracts.outputs),
             pathAliasRewrites: contracts.pathAliasRewrites,
             externalDependencies: contracts.externalDependencies,
             decoratorNames,
             contractMarkerNames,
+            trustedDecoratorSources: validateTrustedDecoratorSources(
+                contracts.trustedDecoratorSources
+            ),
             entryStrategy,
             responseNamingConventions: contracts.responseNamingConventions,
             removeDecorators: contracts.removeDecorators ?? true,
         };
     }
-
-    private validateEntryStrategy(
-        entryStrategy: EntryStrategy | undefined
-    ): EntryStrategy | undefined {
-        if (entryStrategy === undefined) {
-            return undefined;
-        }
-
-        if (isEntryStrategy(entryStrategy)) {
-            return entryStrategy;
-        }
-
-        throw new ConfigLoadError(
-            `Invalid contracts.entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
-        );
-    }
 }
 
 export { ConfigLoadError } from "./errors.js";
+
+function isContractVisibility(value: string): value is ContractVisibility {
+    return value === "public" || value === "internal";
+}
+
+function validateOutputSelect(
+    select: ContractOutputSelect | undefined,
+    outputIndex: number
+): ContractOutputSelect | undefined {
+    if (select === undefined) {
+        return undefined;
+    }
+
+    if (typeof select !== "object" || select === null || Array.isArray(select)) {
+        throw new ConfigLoadError(
+            `Invalid contracts.outputs[${outputIndex}].select: expected object`
+        );
+    }
+
+    return {
+        visibility: validateStringArray(
+            select.visibility,
+            `contracts.outputs[${outputIndex}].select.visibility`,
+            isContractVisibility,
+            '"public" or "internal"'
+        ),
+        kinds: validateStringArray(
+            select.kinds,
+            `contracts.outputs[${outputIndex}].select.kinds`
+        ),
+        messageKinds: validateStringArray(
+            select.messageKinds,
+            `contracts.outputs[${outputIndex}].select.messageKinds`,
+            isMessageContractKind,
+            '"command", "query", or "event"'
+        ),
+        include: validateOutputInclude(select.include, outputIndex),
+        tags: validateTagsSelect(select.tags, outputIndex),
+    };
+}
+
+function validateOutputInclude(
+    include: ContractOutputInclude | undefined,
+    outputIndex: number
+): ContractOutputInclude | undefined {
+    if (include === undefined) {
+        return undefined;
+    }
+
+    if (include === "all" || include === "messages" || include === "contracts") {
+        return include;
+    }
+
+    throw new ConfigLoadError(
+        `Invalid contracts.outputs[${outputIndex}].select.include: "${String(include)}". Expected "all", "messages", or "contracts".`
+    );
+}
+
+function validateTagsSelect(
+    tags: ContractOutputSelect["tags"] | undefined,
+    outputIndex: number
+): ContractOutputSelect["tags"] | undefined {
+    if (tags === undefined) {
+        return undefined;
+    }
+
+    if (typeof tags !== "object" || tags === null || Array.isArray(tags)) {
+        throw new ConfigLoadError(
+            `Invalid contracts.outputs[${outputIndex}].select.tags: expected object`
+        );
+    }
+
+    return {
+        include: validateStringArray(
+            tags.include,
+            `contracts.outputs[${outputIndex}].select.tags.include`
+        ),
+        exclude: validateStringArray(
+            tags.exclude,
+            `contracts.outputs[${outputIndex}].select.tags.exclude`
+        ),
+    };
+}
+
+function validateStringArray<T extends string>(
+    value: readonly string[] | undefined,
+    path: string,
+    guard?: (value: string) => value is T,
+    expected?: string
+): readonly T[] | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+        throw new ConfigLoadError(`Invalid ${path}: expected string array`);
+    }
+
+    const invalid = guard
+        ? value.filter((item) => !guard(item))
+        : [];
+
+    if (invalid.length > 0) {
+        throw new ConfigLoadError(
+            `Invalid ${path}: ${invalid.map((item) => `"${item}"`).join(", ")}. Expected ${expected}.`
+        );
+    }
+
+    return value as readonly T[];
+}

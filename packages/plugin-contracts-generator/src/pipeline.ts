@@ -4,9 +4,14 @@ import { Parser } from "./parser.js";
 import { FileGraphResolver, type FileGraph } from "./file-graph-resolver.js";
 import { FileCopier } from "./file-copier.js";
 import { ContextConfig } from "./context-config.js";
+import {
+    hasStrictOutputSelection,
+    isContractSelected,
+} from "./contract-selector.js";
 import type {
     Command,
     ContractMarkerNames,
+    ContractOutputSelect,
     DecoratorNames,
     DomainEvent,
     EntryStrategy,
@@ -14,6 +19,7 @@ import type {
     PublicContract,
     Query,
     ResponseNamingConvention,
+    TrustedDecoratorSources,
     TypeDefinition,
 } from "./domain/types.js";
 import { isEntryStrategy } from "./domain/types.js";
@@ -46,6 +52,7 @@ interface PipelineCreateOptions {
     excludeDependencies?: string[];
     decoratorNames?: DecoratorNames;
     contractMarkerNames?: ContractMarkerNames;
+    trustedDecoratorSources?: TrustedDecoratorSources;
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
@@ -56,6 +63,7 @@ export interface PipelineOptions {
     readonly sourceDir: string;
     readonly outputDir: string;
     readonly pathAliasRewrites?: Map<string, string>;
+    readonly select?: ContractOutputSelect;
     readonly removeDecorators?: boolean;
 }
 
@@ -79,6 +87,7 @@ export class ContractsPipeline {
     private readonly messageTypes?: readonly MessageType[];
     private readonly decoratorNames?: DecoratorNames;
     private readonly contractMarkerNames?: ContractMarkerNames;
+    private readonly trustedDecoratorSources?: TrustedDecoratorSources;
     private readonly includePublicContracts?: boolean;
     private readonly entryStrategy: EntryStrategy;
 
@@ -87,12 +96,14 @@ export class ContractsPipeline {
         messageTypes?: readonly MessageType[],
         decoratorNames?: DecoratorNames,
         contractMarkerNames?: ContractMarkerNames,
+        trustedDecoratorSources?: TrustedDecoratorSources,
         includePublicContracts?: boolean,
         entryStrategy: EntryStrategy = "symbols"
     ) {
         this.messageTypes = messageTypes;
         this.decoratorNames = decoratorNames;
         this.contractMarkerNames = contractMarkerNames;
+        this.trustedDecoratorSources = trustedDecoratorSources;
         this.includePublicContracts = includePublicContracts;
         this.entryStrategy = entryStrategy;
     }
@@ -107,12 +118,14 @@ export class ContractsPipeline {
             fileSystem,
             decoratorNames: options.decoratorNames,
             contractMarkerNames: options.contractMarkerNames,
+            trustedDecoratorSources: options.trustedDecoratorSources,
             messageTypes: options.messageTypes,
             includePublicContracts,
         });
         const parser = new Parser({
             decoratorNames: options.decoratorNames,
             contractMarkerNames: options.contractMarkerNames,
+            trustedDecoratorSources: options.trustedDecoratorSources,
             responseNamingConventions: options.responseNamingConventions ?? options.contextConfig.responseNamingConventions,
             messageTypes: options.messageTypes,
             includePublicContracts,
@@ -136,6 +149,7 @@ export class ContractsPipeline {
             options.messageTypes,
             options.decoratorNames,
             options.contractMarkerNames,
+            options.trustedDecoratorSources,
             includePublicContracts,
             entryStrategy
         );
@@ -146,7 +160,7 @@ export class ContractsPipeline {
     }
 
     async execute(options: PipelineOptions): Promise<PipelineResult> {
-        const { contextName, sourceDir, outputDir, pathAliasRewrites, removeDecorators } = options;
+        const { contextName, sourceDir, outputDir, pathAliasRewrites, select, removeDecorators } = options;
         const contextOutputDir = join(outputDir, contextName);
 
         this.deps.logger.info(`Processing context: ${contextName}`);
@@ -161,9 +175,15 @@ export class ContractsPipeline {
                 "Message type filters limit graph root selection only when entryStrategy is 'graph'; entire selected entry files and dependencies may still be copied. Use entryStrategy 'symbols' to extract selected declarations only."
             );
         }
+        if (this.entryStrategy === "graph" && hasStrictOutputSelection(select)) {
+            this.deps.logger.warn(
+                "Output selection with entryStrategy 'graph' limits graph root selection only; full selected files and dependency files may still expose unselected declarations. Use entryStrategy 'symbols' for strict public/internal output splits."
+            );
+        }
 
         const candidateFiles = await this.scan(sourceDir);
-        const messages = await this.parse(candidateFiles, sourceDir);
+        const parsedMessages = await this.parse(candidateFiles, sourceDir);
+        const messages = this.selectMessages(parsedMessages, select);
         const entryPoints = this.collectEntryPoints(messages);
         const fileGraph = await this.resolve(entryPoints, sourceDir);
         const responseTypesToInclude = this.collectResponseTypesToInclude(messages);
@@ -179,7 +199,8 @@ export class ContractsPipeline {
             responseTypesToInclude,
             removeDecorators,
             this.messageTypes,
-            this.entryStrategy
+            this.entryStrategy,
+            select
         );
         await this.exportBarrel(copiedFiles, contextOutputDir);
 
@@ -191,6 +212,37 @@ export class ContractsPipeline {
             queries: messages.queries,
             publicContracts: messages.publicContracts,
             copiedFiles,
+        };
+    }
+
+    private selectMessages(
+        messages: ParsedMessages,
+        select: ContractOutputSelect | undefined
+    ): ParsedMessages {
+        if (!select) {
+            return messages;
+        }
+
+        return {
+            events: messages.events.filter((event) =>
+                isContractSelected(event, select)
+            ),
+            commands: messages.commands.filter((command) =>
+                isContractSelected(command, select)
+            ),
+            queries: messages.queries.filter((query) =>
+                isContractSelected(query, select)
+            ),
+            publicContracts: messages.publicContracts.filter((contract) =>
+                isContractSelected(
+                    {
+                        ...contract,
+                        contractType: "contract",
+                    },
+                    select
+                )
+            ),
+            typeDefinitions: messages.typeDefinitions,
         };
     }
 
@@ -350,7 +402,8 @@ export class ContractsPipeline {
         responseTypesToInclude?: Map<string, string[]>,
         removeDecorators?: boolean,
         messageTypes?: readonly MessageType[],
-        entryStrategy: EntryStrategy = "symbols"
+        entryStrategy: EntryStrategy = "symbols",
+        select?: ContractOutputSelect
     ): Promise<string[]> {
         this.deps.logger.debug(`Copying files to ${outputDir}`);
         await this.deps.fileSystem.mkdir(outputDir, { recursive: true });
@@ -367,8 +420,10 @@ export class ContractsPipeline {
             messageTypes,
             decoratorNames: this.decoratorNames,
             contractMarkerNames: this.contractMarkerNames,
+            trustedDecoratorSources: this.trustedDecoratorSources,
             includePublicContracts: this.includePublicContracts,
             entryStrategy,
+            select,
         });
 
         this.deps.logger.debug(`Copied ${result.copiedFiles.length} file(s)`);

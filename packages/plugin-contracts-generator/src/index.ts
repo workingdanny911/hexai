@@ -37,9 +37,16 @@ export type {
     EnumDefinition,
     ClassDefinition,
     ClassImport,
+    ContractDeclaration,
+    DecoratorNames,
     PublicContractDeclarationKind,
+    ContractOutputConfig,
+    ContractOutputInclude,
+    ContractOutputSelect,
+    ContractOutputTagSelect,
     EntryStrategy,
     Message,
+    MessageType,
     MessageBase,
     DomainEvent,
     Command,
@@ -52,6 +59,7 @@ export type {
     ExtractionWarning,
     Config,
     ContractMarkerNames,
+    TrustedDecoratorSources,
 } from "./domain/types.js";
 
 export type PublicContract = import("./domain/types.js").PublicContract;
@@ -72,17 +80,28 @@ export {
 } from "./domain/types.js";
 
 export {
+    Contract,
+    ContractEvent,
+    ContractCommand,
+    ContractQuery,
+    PublicContract,
     PublicEvent,
     PublicCommand,
     PublicQuery,
+    type BuiltInContractKind,
+    type ContractBaseOptions,
+    type ContractEventOptions,
+    type ContractCommandOptions,
+    type ContractKind,
+    type ContractOptions,
+    type ContractQueryOptions,
+    type ContractVisibility,
+    type MessageContractKind,
+    type PublicContractOptions,
     type PublicEventOptions,
     type PublicCommandOptions,
     type PublicQueryOptions,
 } from "@hexaijs/contracts/decorators";
-
-export function PublicContract(): ClassDecorator {
-    return (target) => target;
-}
 
 export { Scanner, type ScannerOptions } from "./scanner.js";
 export { Parser, type ParseResult } from "./parser.js";
@@ -92,6 +111,7 @@ export { ConfigLoader, resolveContextEntries, type ContractsConfig } from "./con
 
 export {
     MessageParserError,
+    BoundaryViolationError,
     ConfigurationError,
     ConfigLoadError,
     FileSystemError,
@@ -146,6 +166,7 @@ import type {
     EntryStrategy,
     MessageType,
     ResponseNamingConvention,
+    TrustedDecoratorSources,
 } from "./domain/types.js";
 
 export interface ProcessContextOptions {
@@ -158,6 +179,7 @@ export interface ProcessContextOptions {
     responseNamingConventions?: readonly ResponseNamingConvention[];
     decoratorNames?: DecoratorNames;
     contractMarkerNames?: ContractMarkerNames;
+    trustedDecoratorSources?: TrustedDecoratorSources;
     removeDecorators?: boolean;
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
@@ -187,6 +209,7 @@ export async function processContext(
         responseNamingConventions,
         decoratorNames,
         contractMarkerNames,
+        trustedDecoratorSources,
         removeDecorators,
         messageTypes,
         includePublicContracts,
@@ -212,6 +235,7 @@ export async function processContext(
         responseNamingConventions,
         decoratorNames,
         contractMarkerNames,
+        trustedDecoratorSources,
         messageTypes,
         includePublicContracts,
         entryStrategy,
