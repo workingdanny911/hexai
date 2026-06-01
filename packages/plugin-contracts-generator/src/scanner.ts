@@ -1,4 +1,5 @@
 import { glob } from "glob";
+import ts from "typescript";
 
 import { FileReadError } from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
@@ -6,8 +7,18 @@ import type {
     ContractMarkerNames,
     DecoratorNames,
     MessageType,
+    TrustedDecoratorSources,
 } from "./domain/index.js";
-import { mergeContractMarkerNames, mergeDecoratorNames } from "./domain/index.js";
+import {
+    isMessageContractKind,
+    mergeContractMarkerNames,
+    mergeDecoratorNames,
+} from "./domain/index.js";
+import {
+    CONTRACT_DECORATOR_SOURCES,
+    CONTRACT_DECORATOR_NAMES,
+    ContractDecoratorMatcher,
+} from "./contract-decorator-matcher.js";
 
 const DEFAULT_EXCLUDE_PATTERNS = [
     "**/node_modules/**",
@@ -29,12 +40,17 @@ export interface ScannerOptions {
     messageTypes?: MessageType[];
     /** Include files marked with comment-based public contract markers. */
     includePublicContracts?: boolean;
+    trustedDecoratorSources?: TrustedDecoratorSources;
 }
 
 export class Scanner {
     private readonly exclude: string[];
     private readonly fs: FileSystem;
     private readonly markerPatterns: RegExp[];
+    private readonly matcher: ContractDecoratorMatcher;
+    private readonly trustedDecoratorSources: readonly string[];
+    private readonly messageTypes: readonly MessageType[];
+    private readonly includePublicContracts: boolean;
 
     constructor(options: ScannerOptions = {}) {
         this.exclude = options.exclude ?? DEFAULT_EXCLUDE_PATTERNS;
@@ -42,24 +58,45 @@ export class Scanner {
 
         const names = mergeDecoratorNames(options.decoratorNames);
         const messageTypes = options.messageTypes ?? ['event', 'command', 'query'];
+        const contractNames = mergeContractMarkerNames(options.contractMarkerNames);
 
-        this.markerPatterns = messageTypes.map((type) => {
-            const decoratorName = names[type];
-            return new RegExp(`@${this.escapeRegex(decoratorName)}\\s*\\(`);
+        this.messageTypes = messageTypes;
+        this.trustedDecoratorSources = [
+            ...CONTRACT_DECORATOR_SOURCES,
+            ...(options.trustedDecoratorSources ?? []),
+        ];
+        this.includePublicContracts =
+            options.includePublicContracts ?? options.messageTypes === undefined;
+        this.matcher = new ContractDecoratorMatcher({
+            decoratorNames: options.decoratorNames,
+            contractMarkerName: contractNames.contract,
+            trustedDecoratorSources: options.trustedDecoratorSources,
         });
 
-        const includePublicContracts =
-            options.includePublicContracts ?? options.messageTypes === undefined;
-        if (includePublicContracts) {
-            const contractNames = mergeContractMarkerNames(
-                options.contractMarkerNames
-            );
-            this.markerPatterns.push(
-                new RegExp(
-                    `@${this.escapeRegex(contractNames.contract)}(?:\\s*\\(\\s*\\))?(?![\\w$])`
-                )
-            );
+        const decoratorMarkerNames = new Set<string>();
+        const commentMarkerNames = new Set<string>();
+        for (const type of messageTypes) {
+            decoratorMarkerNames.add(names[type]);
         }
+
+        if (this.includePublicContracts) {
+            decoratorMarkerNames.add(contractNames.contract);
+            commentMarkerNames.add(contractNames.contract);
+            commentMarkerNames.add(CONTRACT_DECORATOR_NAMES.generic);
+        }
+
+        this.markerPatterns = [
+            ...[...decoratorMarkerNames].map(
+                (markerName) => new RegExp(
+                    `(?:^|[\\r\\n])\\s*@${this.escapeRegex(markerName)}(?![\\w$])`
+                )
+            ),
+            ...[...commentMarkerNames].map(
+                (markerName) => new RegExp(
+                    `(?:^|[\\r\\n])\\s*(?:(?://)|(?:/\\*\\*?)|\\*)\\s*@${this.escapeRegex(markerName)}(?![\\w$])\\s*\\(`
+                )
+            ),
+        ];
     }
 
     async scan(sourceDir: string): Promise<string[]> {
@@ -85,10 +122,104 @@ export class Scanner {
     }
 
     private containsPublicDecorator(content: string): boolean {
-        return this.markerPatterns.some(pattern => pattern.test(content));
+        if (this.markerPatterns.some(pattern => pattern.test(content))) {
+            return true;
+        }
+
+        if (!this.shouldUseMatcher(content)) {
+            return false;
+        }
+
+        return this.containsMatcherContract(content);
+    }
+
+    private shouldUseMatcher(content: string): boolean {
+        return (
+            content.includes("@") &&
+            this.trustedDecoratorSources.some((source) => content.includes(source))
+        );
+    }
+
+    private containsMatcherContract(content: string): boolean {
+        const sourceFile = ts.createSourceFile(
+            "scanner-input.ts",
+            content,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.TS
+        );
+        const importBindings = this.matcher.buildImportBindingIndex(sourceFile);
+        let found = false;
+
+        const visit = (node: ts.Node): void => {
+            if (found) return;
+
+            if (ts.isClassDeclaration(node)) {
+                const decorators = ts.getDecorators(node);
+                if (decorators) {
+                    for (const decorator of decorators) {
+                        const match = this.matcher.matchDecorator(
+                            decorator,
+                            importBindings
+                        );
+                        if (!match) continue;
+
+                        if (
+                            isMessageContractKind(match.marker.kind) &&
+                            this.messageTypes.includes(match.marker.kind)
+                        ) {
+                            found = true;
+                            return;
+                        }
+
+                        if (
+                            this.includePublicContracts &&
+                            !isMessageContractKind(match.marker.kind)
+                        ) {
+                            found = true;
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if (
+                this.includePublicContracts &&
+                isPublicContractDeclarationNode(node)
+            ) {
+                const match = this.matcher.matchLeadingCommentMarker(
+                    node,
+                    sourceFile
+                );
+                if (match && !isMessageContractKind(match.marker.kind)) {
+                    found = true;
+                    return;
+                }
+            }
+
+            ts.forEachChild(node, visit);
+        };
+
+        visit(sourceFile);
+        return found;
     }
 
     private escapeRegex(value: string): string {
         return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
+}
+
+function isPublicContractDeclarationNode(
+    node: ts.Node
+): node is
+    | ts.ClassDeclaration
+    | ts.TypeAliasDeclaration
+    | ts.InterfaceDeclaration
+    | ts.EnumDeclaration {
+    return (
+        ts.isClassDeclaration(node) ||
+        ts.isTypeAliasDeclaration(node) ||
+        ts.isInterfaceDeclaration(node) ||
+        ts.isEnumDeclaration(node)
+    );
 }

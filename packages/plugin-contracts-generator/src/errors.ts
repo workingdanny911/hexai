@@ -20,6 +20,16 @@ export class ConfigurationError extends MessageParserError {
 }
 
 /**
+ * Error thrown when a selected output would cross a contract visibility boundary.
+ */
+export class BoundaryViolationError extends MessageParserError {
+    constructor(message: string, options?: ErrorOptions) {
+        super(message, options);
+        this.name = "BoundaryViolationError";
+    }
+}
+
+/**
  * Error thrown when loading application.config.ts fails.
  */
 export class ConfigLoadError extends ConfigurationError {

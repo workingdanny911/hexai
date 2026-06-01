@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0] - 2026-06-01
+
+### Added
+
+- Added `ContractEvent`, `ContractCommand`, `ContractQuery`, and generic `Contract({ kind })` marker decorators.
+- Added contract marker options for `visibility`, `tags`, command/query `response`, and event `version`.
+
+### Changed
+
+- Kept `PublicEvent`, `PublicCommand`, `PublicQuery`, and `PublicContract` as JSDoc-deprecated compatibility aliases.
+
 ## [0.2.0] - 2026-05-28
 
 ### Added

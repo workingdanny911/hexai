@@ -3,8 +3,15 @@
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { resolve, dirname, join, relative } from "node:path";
-import { ConfigLoader, type ContractsConfig, resolveContextEntries } from "./config-loader.js";
+import { resolve, join, relative } from "node:path";
+import {
+    ConfigLoader,
+    type ContractsConfig,
+    resolveContextEntries,
+    validateContractOutputs,
+    validateEntryStrategy,
+    validateTrustedDecoratorSources,
+} from "./config-loader.js";
 import type { InputContextConfig } from "./context-config.js";
 import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } from "./index.js";
 import { RegistryGenerator, ContextMessages } from "./registry-generator.js";
@@ -12,10 +19,13 @@ import { ReexportGenerator } from "./reexport-generator.js";
 import { nodeFileSystem } from "./file-system.js";
 import type {
     ContractMarkerNames,
+    ContractOutputConfig,
+    ContractOutputSelect,
     DecoratorNames,
     EntryStrategy,
     MessageType,
     ResponseNamingConvention,
+    TrustedDecoratorSources,
 } from "./domain/types.js";
 import {
     mergeContractMarkerNames,
@@ -55,7 +65,7 @@ const CLI_OPTIONS = {
 
 interface CliOptions {
     config: string;
-    outputDir: string;
+    outputDir?: string;
     include?: IncludeMode;
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
@@ -68,7 +78,7 @@ interface CliOptions {
  * Options for runWithConfig when config is provided directly.
  */
 export interface RunWithConfigOptions {
-    outputDir: string;
+    outputDir?: string;
     include?: IncludeMode;
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
@@ -83,10 +93,12 @@ export interface RunWithConfigOptions {
  */
 export interface ContractsPluginConfig {
     contexts: Array<string | InputContextConfig>;
+    outputs?: readonly ContractOutputConfig[];
     pathAliasRewrites?: Record<string, string>;
     externalDependencies?: Record<string, string>;
     decoratorNames?: DecoratorNames;
     contractMarkerNames?: ContractMarkerNames;
+    trustedDecoratorSources?: TrustedDecoratorSources;
     entryStrategy?: EntryStrategy;
     responseNamingConventions?: ResponseNamingConvention[];
     removeDecorators?: boolean;
@@ -96,6 +108,13 @@ interface ContextProcessingResult {
     name: string;
     result: PipelineResult;
     outputDir: string;
+}
+
+interface OutputPlan {
+    name: string;
+    outputDir: string;
+    select?: ContractOutputSelect;
+    generateMessageRegistry: boolean;
 }
 
 interface GenerationScope {
@@ -242,10 +261,6 @@ function parseArgs(args: string[]): CliOptions {
         }
     }
 
-    if (!options.outputDir) {
-        throw new Error("Missing required option: --output-dir");
-    }
-
     return options as CliOptions;
 }
 
@@ -255,9 +270,11 @@ generate-contracts - Extract public message and general contracts from TypeScrip
 
 Usage:
   generate-contracts --output-dir <path> [options]
+  generate-contracts --config <path-with-contracts.outputs> [options]
 
 Required:
   -o, --output-dir <path>       Output directory for generated contracts
+                                Required unless contracts.outputs is configured
 
 Options:
   -c, --config <path>           Path to config file (default: ${DEFAULT_CONFIG_PATH})
@@ -366,12 +383,19 @@ function formatMessageTypesForLog(messageTypes: readonly MessageType[] | undefin
 function logGenerationSettings(
     logger: Logger,
     config: ContractsConfig,
-    outputDir: string,
+    outputPlans: readonly OutputPlan[],
     options: RunWithConfigOptions,
     scope: GenerationScope
 ): void {
     logger.info(`Found ${config.contexts.length} context(s) to process`);
-    logger.info(`Output directory: ${outputDir}`);
+    if (outputPlans.length === 1 && outputPlans[0].name === "default") {
+        logger.info(`Output directory: ${outputPlans[0].outputDir}`);
+    } else {
+        logger.info(`Outputs: ${outputPlans.length}`);
+        for (const output of outputPlans) {
+            logger.info(`  - ${output.name}: ${output.outputDir}`);
+        }
+    }
     logger.info(`Include mode: ${options.include ?? "all"}`);
     logger.info(
         `Entry strategy: ${options.entryStrategy ?? config.entryStrategy ?? "symbols"}`
@@ -514,11 +538,12 @@ async function assertOutputMatchesGenerated(
 
 async function generateContracts(
     config: ContractsConfig,
-    outputDir: string,
+    outputPlan: OutputPlan,
     options: RunWithConfigOptions,
     scope: GenerationScope,
     logger: Logger
 ): Promise<ContextProcessingResult[]> {
+    const outputDir = outputPlan.outputDir;
     const pathAliasRewrites = config.pathAliasRewrites
         ? new Map(Object.entries(config.pathAliasRewrites))
         : undefined;
@@ -531,6 +556,7 @@ async function generateContracts(
             responseNamingConventions: config.responseNamingConventions,
             decoratorNames: config.decoratorNames,
             contractMarkerNames: config.contractMarkerNames,
+            trustedDecoratorSources: config.trustedDecoratorSources,
             messageTypes: scope.messageTypes,
             includePublicContracts: scope.includePublicContracts,
             entryStrategy: options.entryStrategy ?? config.entryStrategy,
@@ -542,6 +568,7 @@ async function generateContracts(
             sourceDir: contextConfig.sourceDir,
             outputDir,
             pathAliasRewrites,
+            select: outputPlan.select,
             removeDecorators: config.removeDecorators,
         });
 
@@ -551,7 +578,7 @@ async function generateContracts(
     const totals = calculateSummaryTotals(results);
     logSummary(logger, totals);
 
-    if (options.generateMessageRegistry) {
+    if (outputPlan.generateMessageRegistry) {
         await generateRegistry(outputDir, results, totals, logger);
     }
 
@@ -562,44 +589,109 @@ async function generateContracts(
     return results;
 }
 
+function createOutputPlans(
+    config: ContractsConfig,
+    options: RunWithConfigOptions
+): OutputPlan[] {
+    if (config.outputs && config.outputs.length > 0) {
+        if (options.outputDir) {
+            throw new Error(
+                "Cannot use --output-dir when contracts.outputs is configured. Remove --output-dir or remove contracts.outputs."
+            );
+        }
+
+        return config.outputs.map((output) => ({
+            name: output.name,
+            outputDir: resolve(config.configDir, output.path),
+            select: output.select,
+            generateMessageRegistry:
+                options.generateMessageRegistry === true || output.registry === true,
+        }));
+    }
+
+    if (!options.outputDir) {
+        throw new Error("Missing required option: --output-dir");
+    }
+
+    return [
+        {
+            name: "default",
+            outputDir: resolve(config.configDir, options.outputDir),
+            generateMessageRegistry: options.generateMessageRegistry === true,
+        },
+    ];
+}
+
+function createTemporaryOutputPlans(
+    outputPlans: readonly OutputPlan[],
+    temporaryOutputDir: string | undefined
+): OutputPlan[] {
+    if (!temporaryOutputDir) {
+        return [...outputPlans];
+    }
+
+    return outputPlans.map((output) => ({
+        ...output,
+        outputDir: join(temporaryOutputDir, output.name),
+    }));
+}
+
 async function runGeneration(
     config: ContractsConfig,
-    outputDir: string,
     options: RunWithConfigOptions,
     logger: Logger
 ): Promise<void> {
     const scope = resolveGenerationScope(options);
-    logGenerationSettings(logger, config, outputDir, options, scope);
+    const outputPlans = createOutputPlans(config, options);
+    logGenerationSettings(logger, config, outputPlans, options, scope);
 
     const shouldUseTemporaryOutput = options.dryRun || options.check;
     const temporaryOutputDir = shouldUseTemporaryOutput
         ? await mkdtemp(join(tmpdir(), "contracts-generator-"))
         : undefined;
-    const generationOutputDir = temporaryOutputDir ?? outputDir;
-
     if (temporaryOutputDir) {
         logger.info(`Temporary output directory: ${temporaryOutputDir}`);
     }
 
     try {
-        const results = await generateContracts(
-            config,
-            generationOutputDir,
-            options,
-            scope,
-            logger
+        const generationPlans = createTemporaryOutputPlans(
+            outputPlans,
+            temporaryOutputDir
         );
+        const allResults: ContextProcessingResult[] = [];
+
+        for (const outputPlan of generationPlans) {
+            if (generationPlans.length > 1) {
+                logger.info(`\n--- Output: ${outputPlan.name} ---`);
+            }
+
+            const results = await generateContracts(
+                config,
+                outputPlan,
+                options,
+                scope,
+                logger
+            );
+            allResults.push(...results);
+        }
 
         if (options.dryRun) {
-            logDryRunDetails(logger, results);
+            logDryRunDetails(logger, allResults);
         }
 
         if (options.check) {
-            await assertOutputMatchesGenerated(
-                generationOutputDir,
-                outputDir,
-                logger
+            const generationPlansByName = new Map(
+                generationPlans.map((plan) => [plan.name, plan])
             );
+
+            for (const outputPlan of outputPlans) {
+                const generatedPlan = generationPlansByName.get(outputPlan.name)!;
+                await assertOutputMatchesGenerated(
+                    generatedPlan.outputDir,
+                    outputPlan.outputDir,
+                    logger
+                );
+            }
         }
     } finally {
         if (temporaryOutputDir) {
@@ -611,8 +703,6 @@ async function runGeneration(
 export async function run(args: string[]): Promise<void> {
     const options = parseArgs(args);
     const configPath = resolve(options.config);
-    const configDir = dirname(configPath);
-    const outputDir = resolve(configDir, options.outputDir);
     const logger = new ConsoleLogger({ level: "info" });
 
     logger.info(`Loading config from: ${configPath}`);
@@ -620,7 +710,7 @@ export async function run(args: string[]): Promise<void> {
     const configLoader = new ConfigLoader();
     const config = await configLoader.load(configPath);
 
-    await runGeneration(config, outputDir, options, logger);
+    await runGeneration(config, options, logger);
 }
 
 /**
@@ -634,14 +724,19 @@ async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<C
     );
 
     return {
+        configDir: process.cwd(),
         contexts,
+        outputs: validateContractOutputs(pluginConfig.outputs),
         pathAliasRewrites: pluginConfig.pathAliasRewrites,
         externalDependencies: pluginConfig.externalDependencies,
         decoratorNames: mergeDecoratorNames(pluginConfig.decoratorNames),
         contractMarkerNames: mergeContractMarkerNames(
             pluginConfig.contractMarkerNames
         ),
-        entryStrategy: pluginConfig.entryStrategy,
+        trustedDecoratorSources: validateTrustedDecoratorSources(
+            pluginConfig.trustedDecoratorSources
+        ),
+        entryStrategy: validateEntryStrategy(pluginConfig.entryStrategy),
         responseNamingConventions: pluginConfig.responseNamingConventions,
         removeDecorators: pluginConfig.removeDecorators ?? true,
     };
@@ -658,11 +753,10 @@ export async function runWithConfig(
     options: RunWithConfigOptions,
     pluginConfig: ContractsPluginConfig
 ): Promise<void> {
-    const outputDir = resolve(options.outputDir);
     const logger = new ConsoleLogger({ level: "info" });
     const config = await toContractsConfig(pluginConfig);
 
-    await runGeneration(config, outputDir, options, logger);
+    await runGeneration(config, options, logger);
 }
 
 async function generateRegistry(

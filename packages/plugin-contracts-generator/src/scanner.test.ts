@@ -138,6 +138,31 @@ export interface InternalProfile {
         }
     });
 
+    it("should not scan prose comments that mention marker-shaped Contract calls", async () => {
+        const tempDir = await mkdtemp(join(tmpdir(), "scanner-contract-"));
+
+        try {
+            await writeFile(
+                join(tempDir, "prose.ts"),
+                `
+/**
+ * This is documentation prose mentioning @Contract({ kind: "read-model" }).
+ */
+export interface InternalProfile {
+    id: string;
+}
+`
+            );
+
+            const scanner = new Scanner();
+            const files = await scanner.scan(tempDir);
+
+            expect(files).toHaveLength(0);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
     describe("custom decorator patterns", () => {
         // Tests for configurable decorator names in scanner
         // When decoratorNames is provided, the scanner should look for those
@@ -182,11 +207,10 @@ export class OrderPlaced extends Message<{
             expect(filesWithCustomDecorators).toHaveLength(1);
             expect(filesWithCustomDecorators[0]).toContain("order-events.ts");
 
-            // Act: Scanner with default decoratorNames should NOT find the file
+            // Act: Default canonical Contract* decorators require a trusted import binding.
             const scannerWithDefaults = new Scanner();
             const filesWithDefaults = await scannerWithDefaults.scan(tempDir);
 
-            // Assert: Default decorator scanner should not find the file
             expect(filesWithDefaults).toHaveLength(0);
         });
 
@@ -221,6 +245,133 @@ export class CommandB extends Request<{ id: string }> {}
             expect(files.some((f) => f.includes("default-command.ts"))).toBe(
                 true
             );
+        });
+    });
+
+    describe("Contract API scanner integration", () => {
+        it("should find canonical, generic, alias, comment marker, and legacy contract files", async () => {
+            const tempDir = await mkdtemp(join(tmpdir(), "scanner-contract-api-"));
+
+            try {
+                await writeFile(
+                    join(tempDir, "canonical-command.ts"),
+                    `
+import { ContractCommand } from "@hexaijs/contracts";
+
+@ContractCommand()
+export class CreateUser {}
+`
+                );
+                await writeFile(
+                    join(tempDir, "canonical-query.ts"),
+                    `
+import { ContractQuery } from "@hexaijs/contracts";
+
+@ContractQuery()
+export class GetUser {}
+`
+                );
+                await writeFile(
+                    join(tempDir, "canonical-event.ts"),
+                    `
+import { ContractEvent } from "@hexaijs/contracts";
+
+@ContractEvent()
+export class UserCreated {}
+`
+                );
+                await writeFile(
+                    join(tempDir, "generic-message.ts"),
+                    `
+import { Contract } from "@hexaijs/contracts";
+
+@Contract({ kind: "command" })
+export class RebuildUser {}
+`
+                );
+                await writeFile(
+                    join(tempDir, "generic-contract.ts"),
+                    `
+import { Contract } from "@hexaijs/contracts";
+
+@Contract({ kind: "read-model" })
+export class UserReadModel {}
+`
+                );
+                await writeFile(
+                    join(tempDir, "alias-command.ts"),
+                    `
+import { ContractCommand as InternalCommand } from "@hexaijs/contracts";
+
+@InternalCommand()
+export class CreateAdmin {}
+`
+                );
+                await writeFile(
+                    join(tempDir, "comment-contract.ts"),
+                    `
+// @Contract({ kind: "read-model", visibility: "internal", tags: ["admin"] })
+export interface AdminReadModel {
+    id: string;
+}
+`
+                );
+                await writeFile(
+                    join(tempDir, "legacy-event.ts"),
+                    `
+@PublicEvent()
+export class LegacyUserCreated {}
+`
+                );
+                await writeFile(
+                    join(tempDir, "internal.ts"),
+                    `
+export class InternalHelper {}
+`
+                );
+
+                const scanner = new Scanner();
+                const files = await scanner.scan(tempDir);
+
+                expect(files).toHaveLength(8);
+                expect(files.some((f) => f.includes("canonical-command.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("canonical-query.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("canonical-event.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("generic-message.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("generic-contract.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("alias-command.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("comment-contract.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("legacy-event.ts"))).toBe(true);
+                expect(files.some((f) => f.includes("internal.ts"))).toBe(false);
+            } finally {
+                await rm(tempDir, { recursive: true, force: true });
+            }
+        });
+
+        it("should find canonical decorators from configured trusted sources", async () => {
+            const tempDir = await mkdtemp(join(tmpdir(), "scanner-contract-api-"));
+
+            try {
+                await writeFile(
+                    join(tempDir, "trusted-command.ts"),
+                    `
+import { ContractCommand } from "@app/contracts";
+
+@ContractCommand()
+export class CreateUser {}
+`
+                );
+
+                const scanner = new Scanner({
+                    trustedDecoratorSources: ["@app/contracts"],
+                });
+                const files = await scanner.scan(tempDir);
+
+                expect(files).toHaveLength(1);
+                expect(files[0]).toContain("trusted-command.ts");
+            } finally {
+                await rm(tempDir, { recursive: true, force: true });
+            }
         });
     });
 

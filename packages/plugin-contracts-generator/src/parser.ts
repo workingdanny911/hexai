@@ -3,6 +3,7 @@ import ts from "typescript";
 import type {
     ClassImport,
     Command,
+    ContractDeclaration,
     ContractMarkerNames,
     DecoratorNames,
     DomainEvent,
@@ -19,18 +20,22 @@ import type {
     TypeDefinition,
     TypeDefinitionKind,
     TypeRef,
+    TrustedDecoratorSources,
 } from "./domain/index.js";
-import { mergeContractMarkerNames, mergeDecoratorNames } from "./domain/index.js";
+import {
+    isMessageContractKind,
+    mergeContractMarkerNames,
+    toMessageType,
+} from "./domain/index.js";
 import { extractFieldsFromMembers, parseTypeNode } from "./ast-utils.js";
 import {
     extractClassSourceText,
     getBaseClassName,
-    getDecoratorOptions,
-    hasDecorator,
     hasExportModifier,
-    hasLeadingCommentMarker,
 } from "./class-analyzer.js";
+import { ContractDecoratorMatcher } from "./contract-decorator-matcher.js";
 import { extractImports } from "./import-analyzer.js";
+import type { ImportBinding } from "./import-analyzer.js";
 
 export type { MessageType };
 
@@ -41,6 +46,7 @@ export interface ParseResult {
     readonly commands: readonly Command[];
     readonly queries: readonly Query[];
     readonly publicContracts: readonly PublicContract[];
+    readonly contractDeclarations: readonly ContractDeclaration[];
     readonly typeDefinitions: readonly TypeDefinition[];
 }
 
@@ -50,6 +56,7 @@ export interface ParserOptions {
     responseNamingConventions?: readonly ResponseNamingConvention[];
     messageTypes?: readonly MessageType[];
     includePublicContracts?: boolean;
+    trustedDecoratorSources?: TrustedDecoratorSources;
 }
 
 interface ExtractedPayload {
@@ -63,20 +70,6 @@ interface ExtractedMessage extends ExtractedPayload {
     baseClass?: string;
 }
 
-interface DecoratorMapping {
-    decorator: string;
-    messageType: MessageType;
-}
-
-function buildDecoratorMappings(decoratorNames: Required<DecoratorNames>): DecoratorMapping[] {
-    return [
-        { decorator: decoratorNames.event, messageType: "event" },
-        { decorator: decoratorNames.command, messageType: "command" },
-        { decorator: decoratorNames.query, messageType: "query" },
-    ];
-}
-
-
 function extractTypeParameterNames(
     typeParameters: ts.NodeArray<ts.TypeParameterDeclaration> | undefined
 ): string[] | undefined {
@@ -84,18 +77,35 @@ function extractTypeParameterNames(
     return typeParameters.map(tp => tp.name.text);
 }
 
+function getStringOption(
+    options: Readonly<Record<string, unknown>> | undefined,
+    name: string
+): string | undefined {
+    const value = options?.[name];
+    return typeof value === "string" ? value : undefined;
+}
+
+function getNumberOption(
+    options: Readonly<Record<string, unknown>> | undefined,
+    name: string
+): number | undefined {
+    const value = options?.[name];
+    return typeof value === "number" ? value : undefined;
+}
+
 export class Parser {
-    private readonly decoratorMappings: DecoratorMapping[];
-    private readonly contractMarkerName: string;
+    private readonly matcher: ContractDecoratorMatcher;
     private readonly responseNamingConventions: readonly ResponseNamingConvention[];
     private readonly messageTypes: readonly MessageType[] | undefined;
     private readonly includePublicContracts: boolean;
 
     constructor(options: ParserOptions = {}) {
-        const names = mergeDecoratorNames(options.decoratorNames);
         const contractNames = mergeContractMarkerNames(options.contractMarkerNames);
-        this.decoratorMappings = buildDecoratorMappings(names);
-        this.contractMarkerName = contractNames.contract;
+        this.matcher = new ContractDecoratorMatcher({
+            decoratorNames: options.decoratorNames,
+            contractMarkerName: contractNames.contract,
+            trustedDecoratorSources: options.trustedDecoratorSources,
+        });
         this.responseNamingConventions = options.responseNamingConventions ?? [];
         this.messageTypes = options.messageTypes;
         this.includePublicContracts =
@@ -114,7 +124,9 @@ export class Parser {
         const commands: Command[] = [];
         const queries: Query[] = [];
         const publicContracts: PublicContract[] = [];
+        const contractDeclarations: ContractDeclaration[] = [];
         const typeDefinitions: TypeDefinition[] = [];
+        const importBindings = this.matcher.buildImportBindingIndex(tsSourceFile);
 
         const messageCollectors: Record<MessageType, (message: Message) => void> = {
             event: (m) => events.push(m as DomainEvent),
@@ -124,13 +136,23 @@ export class Parser {
 
         const visit = (node: ts.Node): void => {
             if (ts.isClassDeclaration(node) && node.name) {
-                this.collectMessagesFromClass(node, sourceCode, tsSourceFile, sourceFileInfo, messageCollectors);
+                this.collectMessagesFromClass(
+                    node,
+                    sourceCode,
+                    tsSourceFile,
+                    sourceFileInfo,
+                    importBindings,
+                    messageCollectors,
+                    contractDeclarations
+                );
                 this.collectPublicContract(
                     node,
                     "class",
-                    sourceCode,
+                    tsSourceFile,
                     sourceFileInfo,
-                    publicContracts
+                    importBindings,
+                    publicContracts,
+                    contractDeclarations
                 );
             }
 
@@ -139,9 +161,11 @@ export class Parser {
                 this.collectPublicContract(
                     node,
                     "type",
-                    sourceCode,
+                    tsSourceFile,
                     sourceFileInfo,
-                    publicContracts
+                    importBindings,
+                    publicContracts,
+                    contractDeclarations
                 );
             }
 
@@ -150,9 +174,11 @@ export class Parser {
                 this.collectPublicContract(
                     node,
                     "interface",
-                    sourceCode,
+                    tsSourceFile,
                     sourceFileInfo,
-                    publicContracts
+                    importBindings,
+                    publicContracts,
+                    contractDeclarations
                 );
             }
 
@@ -160,9 +186,11 @@ export class Parser {
                 this.collectPublicContract(
                     node,
                     "enum",
-                    sourceCode,
+                    tsSourceFile,
                     sourceFileInfo,
-                    publicContracts
+                    importBindings,
+                    publicContracts,
+                    contractDeclarations
                 );
             }
 
@@ -179,6 +207,7 @@ export class Parser {
             commands,
             queries,
             publicContracts,
+            contractDeclarations,
             typeDefinitions,
         };
     }
@@ -190,32 +219,46 @@ export class Parser {
             | ts.InterfaceDeclaration
             | ts.EnumDeclaration,
         declarationKind: PublicContractDeclarationKind,
-        sourceCode: string,
+        tsSourceFile: ts.SourceFile,
         sourceFileInfo: SourceFile,
-        publicContracts: PublicContract[]
+        importBindings: ReadonlyMap<string, ImportBinding>,
+        publicContracts: PublicContract[],
+        contractDeclarations: ContractDeclaration[]
     ): void {
         if (!this.includePublicContracts) return;
         if (!node.name) return;
-        const isClassDecorator =
-            declarationKind === "class" &&
-            hasDecorator(node as ts.ClassDeclaration, this.contractMarkerName);
-        const isCommentMarker = hasLeadingCommentMarker(
-            node,
-            sourceCode,
-            this.contractMarkerName
-        );
 
-        if (!isClassDecorator && !isCommentMarker) {
+        const decoratorMatch =
+            declarationKind === "class"
+                ? this.findGeneralContractDecorator(
+                    node as ts.ClassDeclaration,
+                    importBindings
+                )
+                : undefined;
+        const commentMatch = this.matcher.matchLeadingCommentMarker(
+            node,
+            tsSourceFile
+        );
+        const marker = decoratorMatch?.marker ?? commentMatch?.marker;
+
+        if (!marker || isMessageContractKind(marker.kind)) {
             return;
         }
 
-        publicContracts.push({
+        const declaration = {
             name: node.name.text,
             contractType: "contract",
+            kind: marker.kind ?? "contract",
+            visibility: marker.visibility,
+            tags: marker.tags,
+            marker,
             declarationKind,
             sourceFile: sourceFileInfo,
             exported: hasExportModifier(node),
-        });
+        } satisfies ContractDeclaration & PublicContract;
+
+        publicContracts.push(declaration);
+        contractDeclarations.push(declaration);
     }
 
     private collectMessagesFromClass(
@@ -223,15 +266,57 @@ export class Parser {
         sourceCode: string,
         tsSourceFile: ts.SourceFile,
         sourceFileInfo: SourceFile,
-        collectors: Record<MessageType, (message: Message) => void>
+        importBindings: ReadonlyMap<string, ImportBinding>,
+        collectors: Record<MessageType, (message: Message) => void>,
+        contractDeclarations: ContractDeclaration[]
     ): void {
-        for (const { decorator, messageType } of this.decoratorMappings) {
-            if (!hasDecorator(node, decorator)) continue;
+        const decorators = ts.getDecorators(node);
+        if (!decorators) return;
+
+        for (const decorator of decorators) {
+            const match = this.matcher.matchDecorator(decorator, importBindings);
+            if (!match) continue;
+
+            const messageType = toMessageType(match.marker.kind);
+            if (!messageType) continue;
             if (this.messageTypes && !this.messageTypes.includes(messageType)) continue;
 
-            const message = this.buildMessage(node, sourceCode, tsSourceFile, sourceFileInfo, messageType, decorator);
-            collectors[messageType](message);
+            const message = this.buildMessage(
+                node,
+                sourceCode,
+                tsSourceFile,
+                sourceFileInfo,
+                messageType,
+                match.marker
+            );
+            const declaration = {
+                ...message,
+                contractType: "message",
+                kind: messageType,
+                visibility: match.marker.visibility,
+                tags: match.marker.tags,
+                marker: match.marker,
+            } as ContractDeclaration & Message;
+
+            collectors[messageType](declaration);
+            contractDeclarations.push(declaration);
         }
+    }
+
+    private findGeneralContractDecorator(
+        node: ts.ClassDeclaration,
+        importBindings: ReadonlyMap<string, ImportBinding>
+    ) {
+        const decorators = ts.getDecorators(node);
+        if (!decorators) return undefined;
+
+        for (const decorator of decorators) {
+            const match = this.matcher.matchDecorator(decorator, importBindings);
+            if (!match) continue;
+            if (!isMessageContractKind(match.marker.kind)) return match;
+        }
+
+        return undefined;
     }
 
     private applyNamingConventionMatching(
@@ -275,10 +360,11 @@ export class Parser {
         tsSourceFile: ts.SourceFile,
         sourceFileInfo: SourceFile,
         messageType: MessageType,
-        decoratorName: string
+        marker: ContractDeclaration["marker"]
     ): Message {
         const extracted = this.extractMessageDetails(node, sourceCode, tsSourceFile);
-        const decoratorOptions = getDecoratorOptions(node, decoratorName);
+        const explicitContext = getStringOption(marker.options, "context");
+        const explicitVersion = getNumberOption(marker.options, "version");
 
         const baseMessage = {
             name: node.name!.text,
@@ -289,9 +375,17 @@ export class Parser {
             sourceText: extracted.sourceText,
             imports: extracted.imports,
             baseClass: extracted.baseClass,
-        };
+            kind: messageType,
+            visibility: marker.visibility,
+            tags: marker.tags,
+            marker,
+            context: explicitContext,
+            ...(messageType === "event" && explicitVersion !== undefined
+                ? { version: explicitVersion }
+                : {}),
+        } as Message;
 
-        const explicitResponseName = decoratorOptions?.response;
+        const explicitResponseName = getStringOption(marker.options, "response");
         const supportsResultType = messageType === "command" || messageType === "query";
         if (!supportsResultType || !explicitResponseName) {
             return baseMessage;
@@ -303,7 +397,7 @@ export class Parser {
                 kind: "reference" as const,
                 name: explicitResponseName,
             },
-        };
+        } as Message;
     }
 
     private extractMessageDetails(

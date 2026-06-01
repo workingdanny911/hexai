@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { run, runWithConfig } from "../../src/cli.js";
+import { cliPlugin } from "../../src/hexai-plugin.js";
 
 /**
  * CLI E2E Tests
@@ -78,6 +79,55 @@ describe("CLI E2E", () => {
                     {
                         name: "symbol-extraction",
                         path: join(fixturesDir, "symbol-extraction"),
+                    },
+                ],
+            },
+        };
+    }
+
+    async function createOutputSelectionConfig() {
+        const projectDir = join(outputDir, "output-selection-project");
+        const sourceDir = join(projectDir, "src");
+        await mkdir(sourceDir, { recursive: true });
+        await writeFile(
+            join(sourceDir, "messages.ts"),
+            `
+import { ContractCommand, ContractEvent, ContractQuery } from "@hexaijs/contracts/decorators";
+
+@ContractQuery()
+export class GetPublicCatalogQuery {}
+
+@ContractEvent()
+export class PublicCatalogChanged {}
+
+@ContractCommand({ visibility: "internal", tags: ["bus"] })
+export class RebuildInternalIndexCommand {}
+`
+        );
+
+        return {
+            contracts: {
+                contexts: [
+                    {
+                        name: "catalog",
+                        path: projectDir,
+                    },
+                ],
+                outputs: [
+                    {
+                        name: "public",
+                        path: "public-contracts",
+                        select: { visibility: ["public"] },
+                    },
+                    {
+                        name: "internal",
+                        path: "internal-contracts",
+                        registry: true,
+                        select: {
+                            visibility: ["internal"],
+                            messageKinds: ["command"],
+                            tags: { include: ["bus"] },
+                        },
                     },
                 ],
             },
@@ -189,6 +239,51 @@ describe("CLI E2E", () => {
 
             await expect(run(["--config", configPath])).rejects.toThrow(
                 "Missing required option: --output-dir"
+            );
+        });
+
+        it("should use contracts.outputs without --output-dir", async () => {
+            await createConfig(await createOutputSelectionConfig());
+
+            await run(["--config", configPath]);
+
+            const publicFile = join(
+                outputDir,
+                "public-contracts",
+                "catalog",
+                "messages.ts"
+            );
+            const internalFile = join(
+                outputDir,
+                "internal-contracts",
+                "catalog",
+                "messages.ts"
+            );
+
+            expect(existsSync(publicFile)).toBe(true);
+            expect(existsSync(internalFile)).toBe(true);
+
+            const publicContent = readFileSync(publicFile, "utf-8");
+            const internalContent = readFileSync(internalFile, "utf-8");
+
+            expect(publicContent).toContain("GetPublicCatalogQuery");
+            expect(publicContent).toContain("PublicCatalogChanged");
+            expect(publicContent).not.toContain("RebuildInternalIndexCommand");
+            expect(internalContent).toContain("RebuildInternalIndexCommand");
+            expect(internalContent).not.toContain("GetPublicCatalogQuery");
+            expect(internalContent).not.toContain("PublicCatalogChanged");
+            expect(existsSync(join(outputDir, "internal-contracts", "index.ts"))).toBe(
+                true
+            );
+        });
+
+        it("should reject --output-dir when contracts.outputs is configured", async () => {
+            await createConfig(await createOutputSelectionConfig());
+
+            await expect(
+                run(["--config", configPath, "--output-dir", join(outputDir, "contracts")])
+            ).rejects.toThrow(
+                "Cannot use --output-dir when contracts.outputs is configured"
             );
         });
     });
@@ -952,6 +1047,145 @@ describe("runWithConfig E2E", () => {
             const content = readFileSync(outputFile, "utf-8");
             expect(content).toContain("@PublicCommand()");
             expect(content).toContain("@hexaijs/plugin-contracts-generator");
+        });
+    });
+
+    describe("Hexai plugin outputs config", () => {
+        async function expectInvalidPluginConfig(
+            override: Record<string, unknown>,
+            expectedMessage: string
+        ): Promise<void> {
+            const projectDir = join(outputDir, "invalid-plugin-config-project");
+            await mkdir(join(projectDir, "src"), { recursive: true });
+
+            await expect(
+                cliPlugin.run(
+                    {},
+                    {
+                        contexts: [{ name: "app", path: projectDir }],
+                        outputs: [
+                            {
+                                name: "public",
+                                path: join(outputDir, "plugin-public-contracts"),
+                            },
+                        ],
+                        ...override,
+                    } as unknown as Parameters<typeof cliPlugin.run>[1]
+                )
+            ).rejects.toThrow(expectedMessage);
+        }
+
+        it("should run with contracts.outputs and no outputDir argument", async () => {
+            const projectDir = join(outputDir, "plugin-output-project");
+            const sourceDir = join(projectDir, "src");
+            await mkdir(sourceDir, { recursive: true });
+            await writeFile(
+                join(sourceDir, "messages.ts"),
+                `
+import { ContractCommand } from "@hexaijs/contracts";
+
+@ContractCommand()
+export class CreateUserCommand {}
+`
+            );
+
+            await cliPlugin.run(
+                {},
+                {
+                    contexts: [{ name: "app", path: projectDir }],
+                    outputs: [
+                        {
+                            name: "public",
+                            path: join(outputDir, "plugin-public-contracts"),
+                            select: { visibility: ["public"] },
+                        },
+                    ],
+                }
+            );
+
+            expect(
+                existsSync(
+                    join(
+                        outputDir,
+                        "plugin-public-contracts",
+                        "app",
+                        "messages.ts"
+                    )
+                )
+            ).toBe(true);
+        });
+
+        it("should reject empty plugin outputs", async () => {
+            await expectInvalidPluginConfig(
+                { outputs: [] },
+                "Invalid contracts.outputs: expected at least one output"
+            );
+        });
+
+        it("should reject plugin output missing name", async () => {
+            await expectInvalidPluginConfig(
+                { outputs: [{ path: join(outputDir, "contracts") }] },
+                "Invalid contracts.outputs[0]: missing 'name'"
+            );
+        });
+
+        it("should reject plugin output missing path", async () => {
+            await expectInvalidPluginConfig(
+                { outputs: [{ name: "public" }] },
+                "Invalid contracts.outputs[0]: missing 'path'"
+            );
+        });
+
+        it("should reject duplicate plugin output names", async () => {
+            await expectInvalidPluginConfig(
+                {
+                    outputs: [
+                        { name: "public", path: join(outputDir, "contracts") },
+                        {
+                            name: "public",
+                            path: join(outputDir, "contracts-copy"),
+                        },
+                    ],
+                },
+                'Invalid contracts.outputs[1]: duplicate name "public"'
+            );
+        });
+
+        it("should reject invalid plugin trusted decorator sources", async () => {
+            await expectInvalidPluginConfig(
+                { trustedDecoratorSources: ["@app/contracts", 42] },
+                "Invalid contracts.trustedDecoratorSources: expected string array"
+            );
+        });
+
+        it("should reject invalid plugin output visibility", async () => {
+            await expectInvalidPluginConfig(
+                {
+                    outputs: [
+                        {
+                            name: "public",
+                            path: join(outputDir, "contracts"),
+                            select: { visibility: ["private"] },
+                        },
+                    ],
+                },
+                'Invalid contracts.outputs[0].select.visibility: "private"'
+            );
+        });
+
+        it("should reject invalid plugin output registry type", async () => {
+            await expectInvalidPluginConfig(
+                {
+                    outputs: [
+                        {
+                            name: "public",
+                            path: join(outputDir, "contracts"),
+                            registry: "yes",
+                        },
+                    ],
+                },
+                "Invalid contracts.outputs[0].registry: expected boolean"
+            );
         });
     });
 });

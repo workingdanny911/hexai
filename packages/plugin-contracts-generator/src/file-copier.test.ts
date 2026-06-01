@@ -7,8 +7,37 @@ import { FileCopier } from "./file-copier.js";
 import { FileGraphResolver } from "./file-graph-resolver.js";
 import { ContextConfig } from "./context-config.js";
 
+import type { CopyOptions } from "./file-copier.js";
+
 function createTestContextConfig(sourceDir: string): ContextConfig {
     return ContextConfig.createSync("test-context", sourceDir);
+}
+
+async function copySingleEntry(
+    sourceFile: string,
+    sourceRoot: string,
+    outputDir: string,
+    options: Partial<
+        Omit<CopyOptions, "sourceRoot" | "outputDir" | "fileGraph">
+    > = {}
+): Promise<string> {
+    const resolver = FileGraphResolver.create({
+        contextConfig: createTestContextConfig(sourceRoot),
+    });
+    const fileGraph = await resolver.buildGraph([sourceFile], sourceRoot);
+    const copier = new FileCopier();
+
+    await copier.copyFiles({
+        sourceRoot,
+        outputDir,
+        fileGraph,
+        ...options,
+    });
+
+    return fs.readFileSync(
+        path.join(outputDir, path.relative(sourceRoot, sourceFile)),
+        "utf-8"
+    );
 }
 
 describe("FileCopier", () => {
@@ -460,6 +489,343 @@ export class CreateUserCommand {}
             expect(copiedContent).toContain(
                 "@hexaijs/contracts"
             );
+        });
+
+        it("should remove direct ContractCommand decorator and import", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "command.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractCommand } from "@hexaijs/contracts";
+
+@ContractCommand()
+export class CreateUserCommand {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).not.toContain("@ContractCommand");
+            expect(copiedContent).not.toContain("ContractCommand");
+            expect(copiedContent).not.toContain("@hexaijs/contracts");
+            expect(copiedContent).toContain("export class CreateUserCommand");
+        });
+
+        it("should remove named alias decorator imports when only decorators used them", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "command.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractCommand as CommandMarker, ContractEvent } from "@hexaijs/contracts";
+
+@CommandMarker()
+export class CreateUserCommand {}
+
+@ContractEvent()
+export class UserCreated {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).not.toContain("@CommandMarker");
+            expect(copiedContent).not.toContain("@ContractEvent");
+            expect(copiedContent).not.toContain("CommandMarker");
+            expect(copiedContent).not.toContain("ContractEvent");
+            expect(copiedContent).not.toContain("@hexaijs/contracts");
+        });
+
+        it("should keep named alias decorator imports when the local alias is still used", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "command.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractCommand as CommandMarker } from "@hexaijs/contracts";
+
+@CommandMarker()
+export class CreateUserCommand {}
+
+export const markerReference = CommandMarker;
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).not.toContain("@CommandMarker");
+            expect(copiedContent).toContain(
+                "ContractCommand as CommandMarker"
+            );
+            expect(copiedContent).toContain(
+                "export const markerReference = CommandMarker"
+            );
+        });
+
+        it("should remove generic Contract decorators and imports", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { Contract } from "@hexaijs/contracts";
+
+@Contract({ kind: "query" })
+export class FindUserQuery {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).not.toContain("@Contract");
+            expect(copiedContent).not.toContain("Contract");
+            expect(copiedContent).not.toContain("@hexaijs/contracts");
+            expect(copiedContent).toContain("export class FindUserQuery");
+        });
+
+        it("should remove decorators imported from configured trusted sources", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "command.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractCommand } from "@app/contracts";
+
+@ContractCommand()
+export class CreateUserCommand {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                {
+                    removeDecorators: true,
+                    trustedDecoratorSources: ["@app/contracts"],
+                }
+            );
+
+            expect(copiedContent).not.toContain("@ContractCommand");
+            expect(copiedContent).not.toContain("@app/contracts");
+            expect(copiedContent).toContain("export class CreateUserCommand");
+        });
+
+        it("should preserve non-decorator specifiers in legacy mixed imports", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "event.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { PublicEvent, PublicEventOptions } from "@hexaijs/contracts";
+
+const options: PublicEventOptions = {};
+
+@PublicEvent(options)
+export class UserCreated {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).not.toContain("@PublicEvent");
+            expect(copiedContent).not.toMatch(/\bPublicEvent,/);
+            expect(copiedContent).toContain("PublicEventOptions");
+            expect(copiedContent).toContain("@hexaijs/contracts");
+        });
+
+        it("should remove comment marker lines with options", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "contracts.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `// @Contract({ kind: "snapshot", visibility: "internal" })
+export interface UserSnapshot {}
+
+/** @PublicContract({ kind: "projection", tags: ["read"] }) */
+export type UserProjection = {
+    id: string;
+};
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).not.toContain("@Contract");
+            expect(copiedContent).not.toContain("@PublicContract");
+            expect(copiedContent).toContain("export interface UserSnapshot");
+            expect(copiedContent).toContain("export type UserProjection");
+        });
+
+        it("should preserve prose comments that mention Contract marker names", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "contracts.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `/**
+ * @Contract is a documentation tag here, not a marker call.
+ */
+export interface ContractDocs {}
+
+// @Contract({ kind: "snapshot" })
+export interface UserSnapshot {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).toContain(
+                "@Contract is a documentation tag here"
+            );
+            expect(copiedContent).not.toContain('@Contract({ kind: "snapshot" })');
+            expect(copiedContent).toContain("export interface ContractDocs");
+            expect(copiedContent).toContain("export interface UserSnapshot");
+        });
+
+        it("should preserve same-name decorators imported from untrusted sources", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "command.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractCommand } from "other-contracts";
+
+@ContractCommand()
+export class CreateUserCommand {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                { removeDecorators: true }
+            );
+
+            expect(copiedContent).toContain(
+                'import { ContractCommand } from "other-contracts"'
+            );
+            expect(copiedContent).toContain("@ContractCommand()");
+            expect(copiedContent).toContain("export class CreateUserCommand");
+        });
+    });
+
+    describe("symbols entry strategy", () => {
+        it("should extract ContractCommand, generic custom Contract, and comment marker declarations", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "contracts.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { Contract, ContractCommand } from "@hexaijs/contracts";
+
+@ContractCommand()
+export class CreateUserCommand {}
+
+@Contract({ kind: "snapshot" })
+class UserSnapshot {}
+
+// @Contract({ kind: "projection" })
+interface UserProjection {}
+
+class InternalHelper {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                {
+                    entryStrategy: "symbols",
+                    includePublicContracts: true,
+                }
+            );
+
+            expect(copiedContent).toContain("CreateUserCommand");
+            expect(copiedContent).toContain("export class UserSnapshot");
+            expect(copiedContent).toContain("export interface UserProjection");
+            expect(copiedContent).not.toContain("InternalHelper");
+        });
+
+        it("should treat generic Contract message kinds as selected messages", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "queries.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { Contract } from "@hexaijs/contracts";
+
+@Contract({ kind: "query" })
+export class FindUserQuery {}
+
+@Contract({ kind: "snapshot" })
+export class UserSnapshot {}
+`
+            );
+
+            const copiedContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                {
+                    entryStrategy: "symbols",
+                    messageTypes: ["query"],
+                    includePublicContracts: false,
+                }
+            );
+
+            expect(copiedContent).toContain("FindUserQuery");
+            expect(copiedContent).not.toContain("UserSnapshot");
         });
     });
 

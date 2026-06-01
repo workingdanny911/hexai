@@ -4,9 +4,43 @@ Defines the core domain model for the Contracts Generator.
 
 ## Core Concepts
 
-### 1. Message (Message Contract Target)
+### 1. ContractDeclaration (Canonical Contract Target)
 
-Message is a data structure used for inter-system communication. Messages are marked by class decorators (`@PublicEvent()`, `@PublicCommand()`, `@PublicQuery()`), extracted as classes, and registered in `MessageRegistry` when they are selected and registry generation is enabled.
+`ContractDeclaration` is the canonical model for everything the generator can select and emit. It records the contract role (`kind`), public/internal boundary (`visibility`), auxiliary labels (`tags`), and marker metadata for both message and general contracts.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   ContractDeclaration                       │
+├─────────────────────────────────────────────────────────────┤
+│ - name: string                                              │
+│ - contractType: 'message' | 'contract'                      │
+│ - kind: ContractKind                                        │
+│ - visibility: 'public' | 'internal'                         │
+│ - tags: string[]                                            │
+│ - marker: ContractMarkerMetadata                            │
+│ - sourceFile: SourceFile                                    │
+│ - exported: boolean                                         │
+└─────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+┌─────────────────────────────┐  ┌─────────────────────────────┐
+│ ContractMessageDeclaration  │  │ GeneralContractDeclaration  │
+├─────────────────────────────┤  ├─────────────────────────────┤
+│ kind: 'event' | 'command'   │  │ kind: 'contract' | custom   │
+│     | 'query'               │  │ declarationKind: class      │
+│ message payload/response    │  │     | interface | type      │
+│ metadata                    │  │     | enum                  │
+└─────────────────────────────┘  └─────────────────────────────┘
+```
+
+`visibility` is the primary boundary for output selection. `tags` are auxiliary filters only. `kind` is the generic role/discriminator; the built-in message kinds are `event`, `command`, and `query`, while custom kinds such as `read-model`, `value-object`, `dto`, or `snapshot` are modeled as general contracts.
+
+`DomainEvent`, `Command`, `Query`, `Message`, and `PublicContract` remain compatibility views for existing APIs and tests.
+
+### 2. Message (Message Contract Target)
+
+Message is a data structure used for inter-system communication. Messages are marked by class decorators (`@ContractEvent()`, `@ContractCommand()`, `@ContractQuery()`), generic `@Contract({ kind: "event" | "command" | "query" })`, or deprecated `Public*` aliases. They are extracted as classes and registered in `MessageRegistry` when they are selected and registry generation is enabled.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -40,9 +74,9 @@ isCommand(msg: Message): msg is Command          // messageType === 'command'
 isQuery(msg: Message): msg is Query              // messageType === 'query'
 ```
 
-### 2. PublicContract (General Contract Target)
+### 3. PublicContract (General Contract Target Compatibility View)
 
-PublicContract is a general TypeScript declaration explicitly exposed to the generated contracts package. Classes can use the no-op `@PublicContract()` decorator. Interfaces, type aliases, and enums must use a leading TypeScript comment marker because TypeScript decorators cannot be applied to those declarations.
+PublicContract is the compatibility view for a general TypeScript declaration explicitly exposed to the generated contracts package. Classes can use the no-op `@Contract({ kind: "contract" })` decorator or deprecated `@PublicContract()` alias. Interfaces, type aliases, and enums must use a leading TypeScript comment marker because TypeScript decorators cannot be applied to those declarations.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -54,35 +88,41 @@ PublicContract is a general TypeScript declaration explicitly exposed to the gen
 │     'class' | 'interface' | 'type' | 'enum'                 │
 │ - sourceFile: SourceFile    // Original file info           │
 │ - exported: boolean         // Export flag                  │
+│ - kind?: ContractKind       // Compatibility metadata       │
+│ - visibility?:              // 'public' | 'internal'        │
+│ - tags?: string[]           // Auxiliary labels             │
+│ - marker?:                  // Matched decorator/comment    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 Supported markers:
 
 ```typescript
-@PublicContract()
+@Contract({ kind: "snapshot" })
 export class OrderSnapshotContract {
   constructor(public readonly orderId: string) {}
 }
 
-// @PublicContract()
+// @Contract({ kind: "snapshot", visibility: "public", tags: ["frontend"] })
 interface OrderSnapshot {
   orderId: string;
 }
 
-/* @PublicContract() */
+/* @Contract({ kind: "value-object" }) */
 enum OrderChannel {
   Online = "online",
   Store = "store",
 }
 
-/** @PublicContract() */
+/** @Contract({ kind: "read-model", visibility: "internal", tags: ["admin"] }) */
 type OrderStatus = "draft" | "placed";
 ```
 
 `PublicContract` is separate from the `Message` union. It has no `messageType`, payload, response type, or registry behavior. Marked contracts are included in generated contracts output, but they are never registered in `MessageRegistry`; `MessageRegistry` registers selected messages only. If a marked declaration is not exported in source, the copier adds `export` in generated output.
 
-### 3. Field
+Legacy `@PublicContract()` still works and maps to the canonical `Contract` marker with public visibility.
+
+### 4. Field
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -95,7 +135,7 @@ type OrderStatus = "draft" | "placed";
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 4. TypeRef (Type Reference)
+### 5. TypeRef (Type Reference)
 
 TypeRef is the core of the type system. All types are represented in a unified way.
 
@@ -125,7 +165,7 @@ symbol
                   A & B     'foo'|42   [A,B,C]  (a:T)=>R
 ```
 
-#### 4.1 PrimitiveType
+#### 5.1 PrimitiveType
 
 ```typescript
 interface PrimitiveType {
@@ -135,7 +175,7 @@ interface PrimitiveType {
 }
 ```
 
-#### 4.2 ArrayType
+#### 5.2 ArrayType
 
 ```typescript
 interface ArrayType {
@@ -144,7 +184,7 @@ interface ArrayType {
 }
 ```
 
-#### 4.3 ObjectType
+#### 5.3 ObjectType
 
 ```typescript
 interface ObjectType {
@@ -153,7 +193,7 @@ interface ObjectType {
 }
 ```
 
-#### 4.4 UnionType
+#### 5.4 UnionType
 
 ```typescript
 interface UnionType {
@@ -162,7 +202,7 @@ interface UnionType {
 }
 ```
 
-#### 4.5 IntersectionType
+#### 5.5 IntersectionType
 
 ```typescript
 interface IntersectionType {
@@ -171,7 +211,7 @@ interface IntersectionType {
 }
 ```
 
-#### 4.6 ReferenceType
+#### 5.6 ReferenceType
 
 ```typescript
 interface ReferenceType {
@@ -181,7 +221,7 @@ interface ReferenceType {
 }
 ```
 
-#### 4.7 LiteralType
+#### 5.7 LiteralType
 
 ```typescript
 interface LiteralType {
@@ -190,7 +230,7 @@ interface LiteralType {
 }
 ```
 
-#### 4.8 TupleType
+#### 5.8 TupleType
 
 ```typescript
 interface TupleType {
@@ -199,7 +239,7 @@ interface TupleType {
 }
 ```
 
-#### 4.9 FunctionType
+#### 5.9 FunctionType
 
 ```typescript
 interface FunctionType {
@@ -215,7 +255,7 @@ interface FunctionParameter {
 }
 ```
 
-### 5. TypeDefinition
+### 6. TypeDefinition
 
 Represents the complete structure of an externally defined type.
 
@@ -232,7 +272,7 @@ Represents the complete structure of an externally defined type.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.1 EnumDefinition
+### 6.1 EnumDefinition
 
 ```typescript
 interface EnumMember {
@@ -246,7 +286,7 @@ interface EnumDefinition extends Omit<TypeDefinition, 'kind' | 'body'> {
 }
 ```
 
-### 5.2 ClassDefinition
+### 6.2 ClassDefinition
 
 Information about classes referenced by messages or public contracts. Unlike types, source text is preserved as-is.
 
@@ -265,7 +305,7 @@ Information about classes referenced by messages or public contracts. Unlike typ
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.3 ClassImport
+### 6.3 ClassImport
 
 Import information used by a class.
 
@@ -305,7 +345,7 @@ In `entryStrategy: "symbols"`, import filtering operates on the original entry-f
 
 The strategy still models dependency traversal at file granularity after an import is retained. Referenced local dependency files are copied whole; they are not represented as symbol-sliced `TypeDefinition` subsets.
 
-### 6. SourceFile
+### 7. SourceFile
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -317,7 +357,7 @@ The strategy still models dependency traversal at file granularity after an impo
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 7. Dependency
+### 8. Dependency
 
 Information about external types/values referenced by a message or public contract declaration.
 
@@ -338,9 +378,9 @@ ImportSource =
 DependencyKind = 'type' | 'value' | 'class'
 ```
 
-### 8. DecoratorNames
+### 9. DecoratorNames
 
-Customizes decorator names used to identify public messages. These names apply only to message class decorators and do not configure general public contract comments.
+Customizes legacy decorator names used to identify public messages. These names apply only to legacy message class decorators and do not configure general contract comments. Canonical `ContractEvent`, `ContractCommand`, `ContractQuery`, and `Contract` are always recognized.
 
 ```typescript
 interface DecoratorNames {
@@ -356,9 +396,9 @@ const DEFAULT_DECORATOR_NAMES: Required<DecoratorNames> = {
 };
 ```
 
-### 9. ContractMarkerNames
+### 10. ContractMarkerNames
 
-Customizes comment marker names used to identify general public contracts. The same name is also used for `@PublicContract()` class decorator detection.
+Customizes legacy comment marker names used to identify general public contracts. The same name is also used for legacy `@PublicContract()` class decorator detection. Canonical `@Contract(...)` markers are always recognized.
 
 ```typescript
 interface ContractMarkerNames {
@@ -372,7 +412,7 @@ const DEFAULT_CONTRACT_MARKER_NAMES: Required<ContractMarkerNames> = {
 
 The marker is searched as a class decorator and in leading line, block, or JSDoc comments before `class`, `interface`, `type`, and `enum` declarations. Interface, type alias, and enum declarations are comment marker only.
 
-### 10. EntryStrategy
+### 11. EntryStrategy
 
 Controls how selected entry files become generated output.
 
@@ -380,12 +420,12 @@ Controls how selected entry files become generated output.
 type EntryStrategy = "graph" | "symbols";
 ```
 
-- `symbols` is the default. It emits selected message declarations and marked `PublicContract` declarations with minimal entry-file dependencies, while preserving retained default, namespace, aliased, mixed, type-only default, and qualified-reference import shapes.
+- `symbols` is the default. It emits selected message declarations and marked general contract declarations with minimal entry-file dependencies, while preserving retained default, namespace, aliased, mixed, type-only default, and qualified-reference import shapes.
 - `graph` is the conservative copy strategy. It copies selected entry files and their dependency graphs, preserving runtime dependencies when explicitly requested.
 - Under `graph`, message filters select graph roots and registry entries only. A selected entry file can still be copied whole with other declarations from the same file, and the pipeline logs a warning when filters are used. Use `symbols` when strict filtering is required.
 - `symbols` is AST-based and does not use the TypeScript TypeChecker as a semantic slicer. Local dependency files reached through retained imports are copied whole.
 
-### 11. ResponseNamingConvention
+### 12. ResponseNamingConvention
 
 Defines naming patterns for matching response types to messages.
 
@@ -473,9 +513,10 @@ Items excluded during extraction:
 ```typescript
 // packages/lecture/src/events/lecture-created.ts
 import { Message } from '@hexaijs/core';
+import { ContractEvent } from '@hexaijs/contracts/decorators';
 import { UserId } from '../domain/user-id';
 
-@PublicEvent()
+@ContractEvent()
 export class LectureCreated extends Message {
   constructor(
     public readonly lectureId: string,
@@ -494,7 +535,7 @@ export type UserId = string & Brand<'UserId'>;
 
 ```typescript
 // packages/lecture/src/contracts/lecture-summary.ts
-// @PublicContract()
+// @Contract({ kind: "read-model", visibility: "public" })
 interface LectureSummary {
   lectureId: string;
   title: string;
@@ -507,6 +548,9 @@ interface LectureSummary {
 const lectureCreatedEvent: DomainEvent = {
   name: 'LectureCreated',
   messageType: 'event',
+  kind: 'event',
+  visibility: 'public',
+  tags: [],
   sourceFile: {
     absolutePath: '/project/packages/lecture/src/events/lecture-created.ts',
     relativePath: 'packages/lecture/src/events/lecture-created.ts',
@@ -538,6 +582,9 @@ const userIdType: TypeDefinition = {
 const lectureSummaryContract: PublicContract = {
   name: 'LectureSummary',
   contractType: 'contract',
+  kind: 'read-model',
+  visibility: 'public',
+  tags: [],
   declarationKind: 'interface',
   sourceFile: {
     absolutePath: '/project/packages/lecture/src/contracts/lecture-summary.ts',
@@ -575,7 +622,6 @@ export type UserId = string & Brand<'UserId'>;
 
 ```typescript
 // contracts/src/contracts/lecture-summary.ts
-// @PublicContract()
 export interface LectureSummary {
   lectureId: string;
   title: string;

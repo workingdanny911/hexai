@@ -125,6 +125,41 @@ export interface ClassDefinition {
   readonly exported: boolean;
 }
 
+export type MessageContractKind = 'command' | 'query' | 'event';
+
+export type BuiltInContractKind = MessageContractKind | 'contract';
+
+export type ContractKind = BuiltInContractKind | (string & {});
+
+export type ContractVisibility = 'public' | 'internal';
+
+export type ContractMarkerSyntax = 'decorator' | 'comment';
+
+export interface ContractMarkerMetadata {
+  readonly syntax: ContractMarkerSyntax;
+  readonly name: string;
+  readonly canonicalName: string;
+  readonly kind?: ContractKind;
+  readonly visibility: ContractVisibility;
+  readonly tags: readonly string[];
+  readonly legacy: boolean;
+  readonly options?: Readonly<Record<string, unknown>>;
+  readonly importedName?: string;
+  readonly localName?: string;
+  readonly moduleSpecifier?: string;
+}
+
+export interface ContractDeclarationBase {
+  readonly name: string;
+  readonly contractType: 'message' | 'contract';
+  readonly kind: ContractKind;
+  readonly visibility: ContractVisibility;
+  readonly tags: readonly string[];
+  readonly marker: ContractMarkerMetadata;
+  readonly sourceFile: SourceFile;
+  readonly exported: boolean;
+}
+
 export type PublicContractDeclarationKind = 'class' | 'interface' | 'type' | 'enum';
 
 export interface PublicContract {
@@ -133,6 +168,10 @@ export interface PublicContract {
   readonly declarationKind: PublicContractDeclarationKind;
   readonly sourceFile: SourceFile;
   readonly exported: boolean;
+  readonly kind?: ContractKind;
+  readonly visibility?: ContractVisibility;
+  readonly tags?: readonly string[];
+  readonly marker?: ContractMarkerMetadata;
 }
 
 export interface MessageBase {
@@ -142,6 +181,10 @@ export interface MessageBase {
   readonly baseClass?: string;
   readonly sourceText: string;
   readonly imports: readonly ClassImport[];
+  readonly kind?: MessageContractKind;
+  readonly visibility?: ContractVisibility;
+  readonly tags?: readonly string[];
+  readonly marker?: ContractMarkerMetadata;
 }
 
 export interface DomainEvent extends MessageBase {
@@ -170,7 +213,79 @@ export type Message = DomainEvent | Command | Query;
 /** Used to filter which decorators the scanner should look for. */
 export type MessageType = Message['messageType'];
 
+export function isMessageContractKind(
+  kind: unknown
+): kind is MessageContractKind {
+  return kind === 'command' || kind === 'query' || kind === 'event';
+}
+
+export function toMessageType(kind: unknown): MessageType | undefined {
+  return isMessageContractKind(kind) ? kind : undefined;
+}
+
+export interface ContractEventDeclaration
+  extends ContractDeclarationBase,
+    Omit<DomainEvent, 'kind' | 'visibility' | 'tags' | 'marker'> {
+  readonly contractType: 'message';
+  readonly kind: 'event';
+  readonly marker: ContractMarkerMetadata;
+}
+
+export interface ContractCommandDeclaration
+  extends ContractDeclarationBase,
+    Omit<Command, 'kind' | 'visibility' | 'tags' | 'marker'> {
+  readonly contractType: 'message';
+  readonly kind: 'command';
+  readonly marker: ContractMarkerMetadata;
+}
+
+export interface ContractQueryDeclaration
+  extends ContractDeclarationBase,
+    Omit<Query, 'kind' | 'visibility' | 'tags' | 'marker'> {
+  readonly contractType: 'message';
+  readonly kind: 'query';
+  readonly marker: ContractMarkerMetadata;
+}
+
+export type ContractMessageDeclaration =
+  | ContractEventDeclaration
+  | ContractCommandDeclaration
+  | ContractQueryDeclaration;
+
+export interface GeneralContractDeclaration extends ContractDeclarationBase {
+  readonly contractType: 'contract';
+  readonly declarationKind: PublicContractDeclarationKind;
+}
+
+export type ContractDeclaration =
+  | ContractMessageDeclaration
+  | GeneralContractDeclaration;
+
 export type EntryStrategy = 'graph' | 'symbols';
+
+export type ContractOutputInclude = 'all' | 'messages' | 'contracts';
+
+export interface ContractOutputTagSelect {
+  readonly include?: readonly string[];
+  readonly exclude?: readonly string[];
+}
+
+export interface ContractOutputSelect {
+  readonly visibility?: readonly ContractVisibility[];
+  readonly kinds?: readonly ContractKind[];
+  readonly messageKinds?: readonly MessageContractKind[];
+  readonly include?: ContractOutputInclude;
+  readonly tags?: ContractOutputTagSelect;
+}
+
+export interface ContractOutputConfig {
+  readonly name: string;
+  readonly path: string;
+  readonly select?: ContractOutputSelect;
+  readonly registry?: boolean;
+}
+
+export type TrustedDecoratorSources = readonly string[];
 
 export const VALID_ENTRY_STRATEGIES: readonly EntryStrategy[] = [
   'graph',
@@ -270,6 +385,7 @@ export interface Config {
   readonly exclude?: readonly string[];
   readonly externalPackages?: Readonly<Record<string, string>>;
   readonly decoratorNames?: DecoratorNames;
+  readonly trustedDecoratorSources?: TrustedDecoratorSources;
   readonly entryStrategy?: EntryStrategy;
   readonly responseNamingConventions?: readonly ResponseNamingConvention[];
 }

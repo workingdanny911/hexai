@@ -79,7 +79,7 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
         {
             flags: "-o, --output-dir <path>",
             description: "Output directory for generated contracts",
-            required: true,
+            required: false,
         },
         {
             flags: "--include <mode>",
@@ -120,7 +120,10 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
         config: ContractsPluginConfig
     ): Promise<void> => {
         const options: RunWithConfigOptions = {
-            outputDir: String(args.outputDir),
+            outputDir:
+                args.outputDir === undefined
+                    ? undefined
+                    : String(args.outputDir),
             include: args.include
                 ? parseIncludeMode(String(args.include))
                 : undefined,

@@ -128,6 +128,241 @@ describe("Parser", () => {
         });
     });
 
+    describe("Contract API parser integration", () => {
+        it("should parse ContractCommand as a command with default metadata", () => {
+            const sourceCode = `
+        import { Request } from '@hexaijs/core';
+        import { ContractCommand } from '@hexaijs/contracts';
+
+        @ContractCommand()
+        export class CreateUser extends Request<{
+          email: string;
+        }> {}
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.commands).toHaveLength(1);
+            expect(result.publicContracts).toHaveLength(0);
+            expect(result.contractDeclarations).toHaveLength(1);
+            expect(result.commands[0]).toMatchObject({
+                name: "CreateUser",
+                messageType: "command",
+                kind: "command",
+                visibility: "public",
+                tags: [],
+                marker: {
+                    canonicalName: "ContractCommand",
+                    legacy: false,
+                },
+            });
+        });
+
+        it("should parse ContractQuery response metadata", () => {
+            const sourceCode = `
+        import { Request } from '@hexaijs/core';
+        import { ContractQuery } from '@hexaijs/contracts';
+
+        @ContractQuery({ response: 'UserProfile' })
+        export class GetUserProfile extends Request<void> {}
+
+        export interface UserProfile {
+          name: string;
+        }
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.queries).toHaveLength(1);
+            const query = result.queries[0] as Query;
+            expect((query.resultType as ReferenceType).name).toBe("UserProfile");
+            expect(result.contractDeclarations[0]).toBe(query);
+        });
+
+        it("should parse ContractEvent version metadata when provided", () => {
+            const sourceCode = `
+        import { Message } from '@hexaijs/core';
+        import { ContractEvent } from '@hexaijs/contracts';
+
+        @ContractEvent({ version: 2 })
+        export class UserCreated extends Message<{
+          userId: string;
+        }> {}
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.events).toHaveLength(1);
+            expect(result.events[0]).toMatchObject({
+                name: "UserCreated",
+                messageType: "event",
+                version: 2,
+            });
+        });
+
+        it("should parse generic Contract kind command as a command", () => {
+            const sourceCode = `
+        import { Request } from '@hexaijs/core';
+        import { Contract } from '@hexaijs/contracts';
+
+        @Contract({ kind: 'command', response: 'CreateUserResult' })
+        export class CreateUser extends Request<void> {}
+
+        export type CreateUserResult = {
+          userId: string;
+        };
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.commands).toHaveLength(1);
+            expect(result.publicContracts).toHaveLength(0);
+            expect((result.commands[0].resultType as ReferenceType).name).toBe(
+                "CreateUserResult"
+            );
+            expect(result.commands[0].marker?.canonicalName).toBe("Contract");
+        });
+
+        it("should parse generic custom Contract kind as a public contract", () => {
+            const sourceCode = `
+        import { Contract } from '@hexaijs/contracts';
+
+        @Contract({ kind: 'read-model', visibility: 'internal', tags: ['admin'] })
+        export class AdminReadModel {
+          readonly id = 'admin';
+        }
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.commands).toHaveLength(0);
+            expect(result.publicContracts).toHaveLength(1);
+            expect(result.contractDeclarations).toHaveLength(1);
+            expect(result.publicContracts[0]).toMatchObject({
+                name: "AdminReadModel",
+                contractType: "contract",
+                declarationKind: "class",
+                kind: "read-model",
+                visibility: "internal",
+                tags: ["admin"],
+            });
+        });
+
+        it("should parse Contract comment marker options without an import", () => {
+            const sourceCode = `
+        // @Contract({ kind: "read-model", visibility: "internal", tags: ["admin"] })
+        export interface AdminProjection {
+          id: string;
+        }
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.publicContracts).toHaveLength(1);
+            expect(result.publicContracts[0]).toMatchObject({
+                name: "AdminProjection",
+                declarationKind: "interface",
+                kind: "read-model",
+                visibility: "internal",
+                tags: ["admin"],
+            });
+        });
+
+        it("should parse named import aliases through matcher metadata", () => {
+            const sourceCode = `
+        import { Request } from '@hexaijs/core';
+        import { ContractCommand as InternalCommand } from '@hexaijs/contracts';
+
+        @InternalCommand({ visibility: 'internal' })
+        export class CreateAdmin extends Request<void> {}
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.commands).toHaveLength(1);
+            expect(result.commands[0]).toMatchObject({
+                name: "CreateAdmin",
+                visibility: "internal",
+                marker: {
+                    name: "InternalCommand",
+                    importedName: "ContractCommand",
+                    localName: "InternalCommand",
+                    moduleSpecifier: "@hexaijs/contracts",
+                },
+            });
+        });
+
+        it("should parse canonical decorators from configured trusted sources", () => {
+            const sourceCode = `
+        import { Request } from '@hexaijs/core';
+        import { ContractCommand } from '@app/contracts';
+
+        @ContractCommand()
+        export class CreateAdmin extends Request<void> {}
+      `;
+
+            const parser = new Parser({
+                trustedDecoratorSources: ["@app/contracts"],
+            });
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.commands).toHaveLength(1);
+            expect(result.commands[0]).toMatchObject({
+                name: "CreateAdmin",
+                marker: {
+                    moduleSpecifier: "@app/contracts",
+                    canonicalName: "ContractCommand",
+                },
+            });
+        });
+
+        it("should ignore unbound canonical decorators", () => {
+            const sourceCode = `
+        import { Request } from '@hexaijs/core';
+
+        @ContractCommand()
+        export class CreateAdmin extends Request<void> {}
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.commands).toHaveLength(0);
+            expect(result.contractDeclarations).toHaveLength(0);
+        });
+
+        it("should keep legacy Public decorators compatible", () => {
+            const sourceCode = `
+        import { Request } from '@hexaijs/core';
+
+        @PublicCommand()
+        export class LegacyCreateUser extends Request<void> {}
+      `;
+
+            const parser = new Parser();
+            const result = parser.parse(sourceCode, testSourceFile);
+
+            expect(result.commands).toHaveLength(1);
+            expect(result.commands[0]).toMatchObject({
+                name: "LegacyCreateUser",
+                visibility: "public",
+                tags: [],
+                marker: {
+                    name: "PublicCommand",
+                    canonicalName: "ContractCommand",
+                    legacy: true,
+                },
+            });
+        });
+    });
+
     describe("parsing type reference as generic argument", () => {
         it("should mark payload as reference type when generic argument is a type reference", () => {
             const sourceCode = `

@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { ConfigLoader, ConfigLoadError } from "./config-loader.js";
 import type { ContractMarkerNames, DecoratorNames } from "./domain/index.js";
@@ -241,6 +244,55 @@ describe("ConfigLoader", () => {
         });
     });
 
+    describe("trustedDecoratorSources configuration", () => {
+        it("should load trusted decorator sources from config", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-config-"));
+            const configPath = join(root, "application.config.ts");
+            await writeFile(
+                configPath,
+                `export default {
+                    contracts: {
+                        contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                        trustedDecoratorSources: ["@app/contracts", "@shared/contracts"]
+                    }
+                };`
+            );
+
+            try {
+                const result = await new ConfigLoader().load(configPath);
+
+                expect(result.trustedDecoratorSources).toEqual([
+                    "@app/contracts",
+                    "@shared/contracts",
+                ]);
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        });
+
+        it("should reject invalid trusted decorator sources", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-config-"));
+            const configPath = join(root, "application.config.ts");
+            await writeFile(
+                configPath,
+                `export default {
+                    contracts: {
+                        contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                        trustedDecoratorSources: ["@app/contracts", 42]
+                    }
+                };`
+            );
+
+            try {
+                await expect(new ConfigLoader().load(configPath)).rejects.toThrow(
+                    "Invalid contracts.trustedDecoratorSources: expected string array"
+                );
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        });
+    });
+
     describe("responseNamingConventions configuration", () => {
         // Tests for response naming conventions feature
         // This allows automatic matching of Response types to Command/Query messages
@@ -291,6 +343,128 @@ describe("ConfigLoader", () => {
             // and should default to undefined (no automatic response matching)
             expect(result.responseNamingConventions).toBeUndefined();
             expect(result.contexts[0].responseNamingConventions).toBeUndefined();
+        });
+    });
+
+    describe("outputs configuration", () => {
+        async function writeTempConfig(config: object): Promise<{
+            configPath: string;
+            cleanup(): Promise<void>;
+        }> {
+            const root = await mkdtemp(join(tmpdir(), "contracts-config-"));
+            const configPath = join(root, "application.config.ts");
+            await writeFile(
+                configPath,
+                `export default ${JSON.stringify(config, null, 2)};`
+            );
+
+            return {
+                configPath,
+                cleanup: () => rm(root, { recursive: true, force: true }),
+            };
+        }
+
+        it("should load output selection config", async () => {
+            const temp = await writeTempConfig({
+                contracts: {
+                    contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                    outputs: [
+                        {
+                            name: "public",
+                            path: "packages/contracts/src",
+                            select: {
+                                visibility: ["public"],
+                                include: "all",
+                                tags: { exclude: ["experimental"] },
+                            },
+                        },
+                        {
+                            name: "internal-commands",
+                            path: "packages/contracts/src/internal",
+                            registry: true,
+                            select: {
+                                visibility: ["internal"],
+                                kinds: ["command"],
+                                messageKinds: ["command"],
+                                tags: { include: ["bus"] },
+                            },
+                        },
+                    ],
+                },
+            });
+
+            try {
+                const result = await new ConfigLoader().load(temp.configPath);
+
+                expect(result.configDir).toBe(resolve(temp.configPath, ".."));
+                expect(result.outputs).toEqual([
+                    {
+                        name: "public",
+                        path: "packages/contracts/src",
+                        select: {
+                            visibility: ["public"],
+                            include: "all",
+                            tags: { exclude: ["experimental"] },
+                        },
+                    },
+                    {
+                        name: "internal-commands",
+                        path: "packages/contracts/src/internal",
+                        registry: true,
+                        select: {
+                            visibility: ["internal"],
+                            kinds: ["command"],
+                            messageKinds: ["command"],
+                            tags: { include: ["bus"] },
+                        },
+                    },
+                ]);
+            } finally {
+                await temp.cleanup();
+            }
+        });
+
+        it("should reject invalid output visibility", async () => {
+            const temp = await writeTempConfig({
+                contracts: {
+                    contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                    outputs: [
+                        {
+                            name: "public",
+                            path: "contracts",
+                            select: { visibility: ["private"] },
+                        },
+                    ],
+                },
+            });
+
+            try {
+                await expect(new ConfigLoader().load(temp.configPath)).rejects.toThrow(
+                    'Invalid contracts.outputs[0].select.visibility: "private"'
+                );
+            } finally {
+                await temp.cleanup();
+            }
+        });
+
+        it("should reject duplicate output names", async () => {
+            const temp = await writeTempConfig({
+                contracts: {
+                    contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                    outputs: [
+                        { name: "public", path: "contracts/public" },
+                        { name: "public", path: "contracts/public-copy" },
+                    ],
+                },
+            });
+
+            try {
+                await expect(new ConfigLoader().load(temp.configPath)).rejects.toThrow(
+                    'duplicate name "public"'
+                );
+            } finally {
+                await temp.cleanup();
+            }
         });
     });
 });

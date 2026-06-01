@@ -1,20 +1,34 @@
 import * as path from "path";
 import * as ts from "typescript";
 
-import type { FileGraph, FileNode } from "./file-graph-resolver.js";
-import { FileReadError, FileWriteError } from "./errors.js";
-import { FileSystem, nodeFileSystem } from "./file-system.js";
-import type {
-    ContractMarkerNames,
-    DecoratorNames,
-    EntryStrategy,
-    MessageType,
-} from "./domain/index.js";
+import {
+    CONTRACT_DECORATOR_NAMES,
+    ContractDecoratorMatcher,
+} from "./contract-decorator-matcher.js";
 import {
     DEFAULT_CONTRACT_MARKER_NAMES,
     DEFAULT_DECORATOR_NAMES,
+    toMessageType,
 } from "./domain/index.js";
-import { hasDecorator, hasLeadingCommentMarker } from "./class-analyzer.js";
+import {
+    hasStrictOutputSelection,
+    isContractSelected,
+} from "./contract-selector.js";
+import { BoundaryViolationError, FileReadError, FileWriteError } from "./errors.js";
+import { FileSystem, nodeFileSystem } from "./file-system.js";
+
+import type {
+    ContractMarkerMetadata,
+    ContractMarkerNames,
+    ContractOutputSelect,
+    DecoratorNames,
+    EntryStrategy,
+    MessageContractKind,
+    MessageType,
+    TrustedDecoratorSources,
+} from "./domain/index.js";
+import type { FileGraph, FileNode } from "./file-graph-resolver.js";
+import type { ImportBinding } from "./import-analyzer.js";
 
 const CONTRACTS_GENERATOR_MODULE = "@hexaijs/plugin-contracts-generator";
 const CONTRACTS_ROOT_MODULE = "@hexaijs/contracts";
@@ -36,8 +50,10 @@ export interface CopyOptions {
     messageTypes?: readonly MessageType[];
     decoratorNames?: DecoratorNames;
     contractMarkerNames?: ContractMarkerNames;
+    trustedDecoratorSources?: TrustedDecoratorSources;
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
+    select?: ContractOutputSelect;
 }
 
 export interface CopyResult {
@@ -60,9 +76,10 @@ interface SymbolExtractionContext {
     sourceFile: ts.SourceFile;
     content: string;
     messageTypes: readonly MessageType[];
-    decoratorToMessageType: Record<string, MessageType>;
-    contractMarkerName: string;
     includePublicContracts: boolean;
+    select?: ContractOutputSelect;
+    matcher: ContractDecoratorMatcher;
+    importBindings: ReadonlyMap<string, ImportBinding>;
 }
 
 interface ExtractedSymbols {
@@ -77,6 +94,16 @@ interface ImportInfo {
     moduleSpecifier: string;
     declaration: ts.ImportDeclaration;
     localNames: Set<string>;
+}
+
+interface BoundaryDeclaration {
+    name: string;
+    marker: ContractMarkerMetadata;
+    contractType: "message" | "contract";
+    kind: ContractMarkerMetadata["kind"];
+    visibility: ContractMarkerMetadata["visibility"];
+    tags: ContractMarkerMetadata["tags"];
+    messageType?: MessageContractKind;
 }
 
 export class FileCopier {
@@ -99,8 +126,10 @@ export class FileCopier {
             messageTypes,
             decoratorNames,
             contractMarkerNames,
+            trustedDecoratorSources,
             includePublicContracts,
             entryStrategy = "graph",
+            select,
         } = options;
         const copiedFiles: string[] = [];
         const rewrittenImports = new Map<string, string[]>();
@@ -112,9 +141,11 @@ export class FileCopier {
                 messageTypes,
                 decoratorNames,
                 contractMarkerNames,
+                trustedDecoratorSources,
                 includePublicContracts,
                 responseTypesToInclude,
-                sourceRoot
+                sourceRoot,
+                select
             );
 
         if (entryStrategy === "symbols") {
@@ -133,6 +164,28 @@ export class FileCopier {
                 continue;
             }
 
+            if (
+                this.shouldSkipTrustedDecoratorHelperFile(
+                    content,
+                    node,
+                    removeDecorators,
+                    decoratorNames,
+                    contractMarkerNames,
+                    trustedDecoratorSources
+                )
+            ) {
+                continue;
+            }
+
+            this.assertSelectedBoundary(
+                content,
+                node,
+                select,
+                decoratorNames,
+                contractMarkerNames,
+                trustedDecoratorSources
+            );
+
             const transformedContent = this.applyTransformations(
                 content,
                 node,
@@ -143,6 +196,7 @@ export class FileCopier {
                 publicContractsToExport,
                 decoratorNames,
                 contractMarkerNames,
+                trustedDecoratorSources,
                 pathAliasRewrites
             );
 
@@ -161,15 +215,294 @@ export class FileCopier {
         return { copiedFiles, rewrittenImports };
     }
 
+    private shouldSkipTrustedDecoratorHelperFile(
+        content: string,
+        node: FileNode,
+        removeDecorators: boolean | undefined,
+        decoratorNames: DecoratorNames | undefined,
+        contractMarkerNames: ContractMarkerNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined
+    ): boolean {
+        if (!removeDecorators || node.isEntryPoint) {
+            return false;
+        }
+
+        return this.isTrustedDecoratorOnlyHelperFile(
+            content,
+            node.absolutePath,
+            decoratorNames,
+            contractMarkerNames,
+            trustedDecoratorSources
+        );
+    }
+
+    private assertSelectedBoundary(
+        content: string,
+        node: FileNode,
+        select: ContractOutputSelect | undefined,
+        decoratorNames: DecoratorNames | undefined,
+        contractMarkerNames: ContractMarkerNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined
+    ): void {
+        if (!hasStrictOutputSelection(select)) {
+            return;
+        }
+
+        const violations = this.collectBoundaryDeclarations(
+            content,
+            node.absolutePath,
+            decoratorNames,
+            contractMarkerNames,
+            trustedDecoratorSources
+        ).filter((declaration) => !isContractSelected(declaration, select));
+
+        if (violations.length === 0) {
+            return;
+        }
+
+        const details = violations
+            .map((declaration) => {
+                const messageKind = declaration.messageType
+                    ? `, messageKind=${declaration.messageType}`
+                    : "";
+                return `${declaration.name} (kind=${declaration.marker.kind}, visibility=${declaration.marker.visibility}${messageKind})`;
+            })
+            .join(", ");
+
+        throw new BoundaryViolationError(
+            `Contract boundary violation in ${node.relativePath}: selected output would copy declaration(s) outside its selection: ${details}. Move shared public dependencies behind public contract markers, adjust the output selection, or split the source so unselected contract declarations are not copied whole.`
+        );
+    }
+
+    private collectBoundaryDeclarations(
+        content: string,
+        filePath: string,
+        decoratorNames: DecoratorNames | undefined,
+        contractMarkerNames: ContractMarkerNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined
+    ): BoundaryDeclaration[] {
+        const sourceFile = ts.createSourceFile(
+            filePath,
+            content,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.TS
+        );
+        const markerNames = {
+            ...DEFAULT_CONTRACT_MARKER_NAMES,
+            ...contractMarkerNames,
+        };
+        const matcher = this.createMatcher(
+            decoratorNames,
+            markerNames.contract,
+            trustedDecoratorSources
+        );
+        const importBindings = matcher.buildImportBindingIndex(sourceFile);
+        const declarations: BoundaryDeclaration[] = [];
+
+        const visit = (node: ts.Node): void => {
+            if (ts.isClassDeclaration(node) && node.name) {
+                const decoratorMatch = this.findContractDecoratorMatch(
+                    node,
+                    {
+                        sourceFile,
+                        content,
+                        messageTypes: ["event", "command", "query"],
+                        includePublicContracts: true,
+                        matcher,
+                        importBindings,
+                    }
+                );
+
+                if (decoratorMatch) {
+                    declarations.push(
+                        this.createBoundaryDeclaration(
+                            node.name.text,
+                            decoratorMatch.marker
+                        )
+                    );
+                }
+            }
+
+            if (this.isBoundaryCommentDeclarationNode(node)) {
+                const match = matcher.matchLeadingCommentMarker(
+                    node,
+                    sourceFile
+                );
+
+                if (match && node.name) {
+                    declarations.push(
+                        this.createBoundaryDeclaration(
+                            node.name.text,
+                            match.marker
+                        )
+                    );
+                }
+            }
+
+            ts.forEachChild(node, visit);
+        };
+
+        visit(sourceFile);
+        return declarations;
+    }
+
+    private createBoundaryDeclaration(
+        name: string,
+        marker: ContractMarkerMetadata
+    ): BoundaryDeclaration {
+        const messageType = toMessageType(marker.kind);
+
+        return {
+            name,
+            marker,
+            contractType: messageType ? "message" : "contract",
+            kind: marker.kind,
+            visibility: marker.visibility,
+            tags: marker.tags,
+            messageType,
+        };
+    }
+
+    private isBoundaryCommentDeclarationNode(
+        node: ts.Node
+    ): node is
+        | ts.ClassDeclaration
+        | ts.InterfaceDeclaration
+        | ts.TypeAliasDeclaration
+        | ts.EnumDeclaration {
+        return (
+            ts.isClassDeclaration(node) ||
+            ts.isInterfaceDeclaration(node) ||
+            ts.isTypeAliasDeclaration(node) ||
+            ts.isEnumDeclaration(node)
+        );
+    }
+
+    private isTrustedDecoratorOnlyHelperFile(
+        content: string,
+        filePath: string,
+        decoratorNames: DecoratorNames | undefined,
+        contractMarkerNames: ContractMarkerNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined
+    ): boolean {
+        const sourceFile = ts.createSourceFile(
+            filePath,
+            content,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.TS
+        );
+        const decoratorImportNames = this.buildContractDecoratorNames(
+            decoratorNames,
+            contractMarkerNames
+        );
+        let hasMarkerOnlyStatement = false;
+
+        for (const statement of sourceFile.statements) {
+            if (
+                ts.isImportDeclaration(statement) &&
+                this.isMarkerOnlyImportDeclaration(
+                    statement,
+                    decoratorImportNames,
+                    trustedDecoratorSources
+                )
+            ) {
+                hasMarkerOnlyStatement = true;
+                continue;
+            }
+
+            if (
+                ts.isExportDeclaration(statement) &&
+                this.isMarkerOnlyExportDeclaration(
+                    statement,
+                    decoratorImportNames,
+                    trustedDecoratorSources
+                )
+            ) {
+                hasMarkerOnlyStatement = true;
+                continue;
+            }
+
+            if (ts.isEmptyStatement(statement)) {
+                continue;
+            }
+
+            return false;
+        }
+
+        return hasMarkerOnlyStatement;
+    }
+
+    private isMarkerOnlyImportDeclaration(
+        statement: ts.ImportDeclaration,
+        decoratorImportNames: ReadonlySet<string>,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined
+    ): boolean {
+        if (!ts.isStringLiteral(statement.moduleSpecifier)) {
+            return false;
+        }
+
+        if (
+            !this.isTrustedDecoratorImportModule(
+                statement.moduleSpecifier.text,
+                trustedDecoratorSources
+            )
+        ) {
+            return false;
+        }
+
+        const namedBindings = statement.importClause?.namedBindings;
+        if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+            return false;
+        }
+
+        return namedBindings.elements.every((element) =>
+            decoratorImportNames.has(element.propertyName?.text ?? element.name.text)
+        );
+    }
+
+    private isMarkerOnlyExportDeclaration(
+        statement: ts.ExportDeclaration,
+        decoratorImportNames: ReadonlySet<string>,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined
+    ): boolean {
+        if (statement.moduleSpecifier) {
+            if (
+                !ts.isStringLiteral(statement.moduleSpecifier) ||
+                !this.isTrustedDecoratorImportModule(
+                    statement.moduleSpecifier.text,
+                    trustedDecoratorSources
+                )
+            ) {
+                return false;
+            }
+
+            if (!statement.exportClause) {
+                return true;
+            }
+        }
+
+        if (!statement.exportClause || !ts.isNamedExports(statement.exportClause)) {
+            return false;
+        }
+
+        return statement.exportClause.elements.every((element) =>
+            decoratorImportNames.has(element.propertyName?.text ?? element.name.text)
+        );
+    }
+
     private async preprocessEntryFiles(
         fileGraph: FileGraph,
         entryStrategy: EntryStrategy,
         messageTypes: readonly MessageType[] | undefined,
         decoratorNames: DecoratorNames | undefined,
         contractMarkerNames: ContractMarkerNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined,
         includePublicContracts: boolean | undefined,
         responseTypesToInclude: Map<string, string[]> | undefined,
-        sourceRoot: string
+        sourceRoot: string,
+        select: ContractOutputSelect | undefined
     ): Promise<{
         entryContents: Map<string, string>;
         usedLocalImports: Set<string>;
@@ -202,7 +535,9 @@ export class FileCopier {
                     messageTypes,
                     extractPublicContracts,
                     markerNames.contract,
-                    decoratorNames
+                    decoratorNames,
+                    trustedDecoratorSources,
+                    select
                 )
             ) {
                 continue;
@@ -215,8 +550,10 @@ export class FileCopier {
                     extractionMessageTypes,
                     decoratorNames,
                     contractMarkerNames,
+                    trustedDecoratorSources,
                     extractPublicContracts,
-                    responseTypesToInclude?.get(node.absolutePath)
+                    responseTypesToInclude?.get(node.absolutePath),
+                    select
                 );
             entryContents.set(node.absolutePath, extractedContent);
 
@@ -238,38 +575,37 @@ export class FileCopier {
         messageTypes: readonly MessageType[] | undefined,
         includePublicContracts: boolean,
         contractMarkerName: string,
-        decoratorNames: DecoratorNames | undefined
+        decoratorNames: DecoratorNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined,
+        select: ContractOutputSelect | undefined
     ): boolean {
-        if (
-            this.containsSelectedMessageDecorator(
-                content,
-                messageTypes,
-                decoratorNames
-            )
-        ) {
-            return true;
+        if (!content.includes("@")) {
+            return false;
         }
 
-        return (
-            includePublicContracts &&
-            new RegExp(
-                `@${this.escapeRegex(contractMarkerName)}(?:\\s*\\(\\s*\\))?(?![\\w$])`
-            ).test(content)
+        const sourceFile = ts.createSourceFile(
+            "entry.ts",
+            content,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.TS
         );
-    }
-
-    private containsSelectedMessageDecorator(
-        content: string,
-        messageTypes: readonly MessageType[] | undefined,
-        decoratorNames: DecoratorNames | undefined
-    ): boolean {
-        const names = { ...DEFAULT_DECORATOR_NAMES, ...decoratorNames };
-        const selectedTypes =
-            messageTypes ?? (["event", "command", "query"] as const);
-
-        return selectedTypes.some((type) =>
-            new RegExp(`@${this.escapeRegex(names[type])}\\s*\\(`).test(content)
+        const matcher = this.createMatcher(
+            decoratorNames,
+            contractMarkerName,
+            trustedDecoratorSources
         );
+        const context: SymbolExtractionContext = {
+            sourceFile,
+            content,
+            messageTypes: messageTypes ?? (["event", "command", "query"] as const),
+            includePublicContracts,
+            select,
+            matcher,
+            importBindings: matcher.buildImportBindingIndex(sourceFile),
+        };
+
+        return this.findTargetDeclarations(context).targetDeclarations.length > 0;
     }
 
     private expandTransitiveDependencies(
@@ -336,6 +672,7 @@ export class FileCopier {
         publicContractsToExport: Map<string, string[]> | undefined,
         decoratorNames: DecoratorNames | undefined,
         contractMarkerNames: ContractMarkerNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined,
         pathAliasRewrites: Map<string, string> | undefined
     ): { content: string; rewrites: string[] } {
         const rewrites: string[] = [];
@@ -353,6 +690,7 @@ export class FileCopier {
             removeDecorators,
             decoratorNames,
             contractMarkerNames,
+            trustedDecoratorSources,
             rewrites
         );
         transformedContent = this.processTypeExports(
@@ -446,6 +784,7 @@ export class FileCopier {
         removeDecorators: boolean | undefined,
         decoratorNames: DecoratorNames | undefined,
         contractMarkerNames: ContractMarkerNames | undefined,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined,
         rewrites: string[]
     ): string {
         if (!removeDecorators) {
@@ -456,7 +795,8 @@ export class FileCopier {
             content,
             filePath,
             decoratorNames,
-            contractMarkerNames
+            contractMarkerNames,
+            trustedDecoratorSources
         );
         rewrites.push(...decoratorResult.changes);
         return decoratorResult.content;
@@ -750,27 +1090,47 @@ export class FileCopier {
         content: string,
         filePath: string,
         decoratorNames?: DecoratorNames,
-        contractMarkerNames?: ContractMarkerNames
+        contractMarkerNames?: ContractMarkerNames,
+        trustedDecoratorSources?: TrustedDecoratorSources
     ): TransformResult<string> {
         const changes: string[] = [];
-        const contractDecoratorNames = this.buildContractDecoratorNames(
+        const markerNames = {
+            ...DEFAULT_CONTRACT_MARKER_NAMES,
+            ...contractMarkerNames,
+        };
+        const matchers = this.createRemovalMatchers(
             decoratorNames,
-            contractMarkerNames
+            markerNames.contract,
+            trustedDecoratorSources
         );
         const contentWithoutMarkerComments = this.removeContractMarkerComments(
             content,
-            contractDecoratorNames,
+            matchers,
             changes
         );
 
         const visitorFactory = this.createDecoratorRemovalVisitor(
-            contractDecoratorNames,
+            matchers,
             changes
         );
-        const transformedContent = this.transformSourceFile(
+        const contentWithoutDecorators = this.transformSourceFile(
             contentWithoutMarkerComments,
             filePath,
             visitorFactory
+        );
+        const importPruningVisitorFactory =
+            this.createDecoratorImportPruningVisitor(
+                contentWithoutDecorators,
+                filePath,
+                decoratorNames,
+                markerNames.contract,
+                trustedDecoratorSources,
+                changes
+            );
+        const transformedContent = this.transformSourceFile(
+            contentWithoutDecorators,
+            filePath,
+            importPruningVisitorFactory
         );
 
         return { content: transformedContent, changes };
@@ -790,6 +1150,7 @@ export class FileCopier {
         };
 
         return new Set([
+            ...Object.values(CONTRACT_DECORATOR_NAMES),
             ...Object.values(DEFAULT_DECORATOR_NAMES),
             ...Object.values(mergedDecoratorNames),
             DEFAULT_CONTRACT_MARKER_NAMES.contract,
@@ -799,67 +1160,67 @@ export class FileCopier {
 
     private removeContractMarkerComments(
         content: string,
-        markerNames: Set<string>,
+        matchers: readonly ContractDecoratorMatcher[],
         changes: string[]
     ): string {
-        let transformedContent = content;
+        const eol = content.includes("\r\n") ? "\r\n" : "\n";
+        const hasTrailingNewline = content.endsWith("\n");
+        const outputLines: string[] = [];
 
-        for (const markerName of markerNames) {
-            const escapedMarkerName = this.escapeRegex(markerName);
-            const markerPattern = `@${escapedMarkerName}(?:\\s*\\(\\s*\\))?`;
-            const commentPatterns = [
-                new RegExp(
-                    `^[ \\t]*//[ \\t]*${markerPattern}[ \\t]*(?:\\r?\\n|$)`,
-                    "gm"
-                ),
-                new RegExp(
-                    `^[ \\t]*/\\*[ \\t]*${markerPattern}[ \\t]*\\*/[ \\t]*(?:\\r?\\n|$)`,
-                    "gm"
-                ),
-                new RegExp(
-                    `^[ \\t]*/\\*\\*[ \\t]*${markerPattern}[ \\t]*\\*/[ \\t]*(?:\\r?\\n|$)`,
-                    "gm"
-                ),
-                new RegExp(
-                    `^[ \\t]*\\*[ \\t]*${markerPattern}[ \\t]*(?:\\r?\\n|$)`,
-                    "gm"
-                ),
-            ];
-
-            for (const pattern of commentPatterns) {
-                if (pattern.test(transformedContent)) {
-                    changes.push(`removed marker comment: @${markerName}`);
-                    transformedContent = transformedContent.replace(
-                        pattern,
-                        ""
-                    );
-                }
+        for (const line of content.split(/\r?\n/)) {
+            const match = this.findContractMarkerCommentLineMatch(
+                line,
+                matchers
+            );
+            if (match) {
+                changes.push(`removed marker comment: @${match?.marker.name}`);
+                continue;
             }
+
+            outputLines.push(line);
         }
 
-        return transformedContent;
+        if (hasTrailingNewline && outputLines[outputLines.length - 1] === "") {
+            return outputLines.join(eol);
+        }
+
+        return outputLines.join(eol);
+    }
+
+    private findContractMarkerCommentLineMatch(
+        line: string,
+        matchers: readonly ContractDecoratorMatcher[]
+    ) {
+        const trimmedLine = line.trim();
+        if (!/^(?:(?:\/\/)|(?:\/\*\*?)|\*)\s*@/.test(trimmedLine)) {
+            return undefined;
+        }
+
+        for (const matcher of matchers) {
+            const match = matcher.matchCommentText(line);
+            if (match) return match;
+        }
+
+        return undefined;
     }
 
     private createDecoratorRemovalVisitor(
-        contractDecoratorNames: Set<string>,
+        matchers: readonly ContractDecoratorMatcher[],
         changes: string[]
     ): (context: ts.TransformationContext) => VisitorFunction {
         return (context: ts.TransformationContext) => {
+            let importBindings: ReadonlyMap<string, ImportBinding> | undefined;
             const visit: VisitorFunction = (
                 node: ts.Node
             ): ts.Node | undefined => {
-                if (ts.isImportDeclaration(node)) {
-                    return this.processContractDecoratorImport(
-                        node,
-                        contractDecoratorNames,
-                        changes
-                    );
-                }
-
                 if (ts.isClassDeclaration(node) && node.modifiers) {
+                    importBindings ??= matchers[0].buildImportBindingIndex(
+                        node.getSourceFile()
+                    );
                     return this.removeContractDecoratorsFromClass(
                         node,
-                        contractDecoratorNames,
+                        matchers,
+                        importBindings,
                         changes
                     );
                 }
@@ -870,38 +1231,113 @@ export class FileCopier {
         };
     }
 
-    private processContractDecoratorImport(
-        node: ts.ImportDeclaration,
-        contractDecoratorNames: Set<string>,
+    private createDecoratorImportPruningVisitor(
+        content: string,
+        filePath: string,
+        decoratorNames: DecoratorNames | undefined,
+        contractMarkerName: string,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined,
         changes: string[]
-    ): ts.ImportDeclaration | undefined {
-        const moduleSpecifier = (node.moduleSpecifier as ts.StringLiteral).text;
-
-        const isContractDecoratorModule =
-            moduleSpecifier === CONTRACTS_ROOT_MODULE ||
-            moduleSpecifier === CONTRACTS_DECORATORS_MODULE ||
-            moduleSpecifier === CONTRACTS_GENERATOR_MODULE ||
-            moduleSpecifier.startsWith(CONTRACTS_GENERATOR_MODULE + "/");
-
-        if (!isContractDecoratorModule) {
-            return node;
-        }
-
-        const namedBindings = node.importClause?.namedBindings;
-        if (!namedBindings || !ts.isNamedImports(namedBindings)) {
-            return node;
-        }
-
-        const remainingElements = namedBindings.elements.filter(
-            (el) => !contractDecoratorNames.has(el.name.text)
+    ): (context: ts.TransformationContext) => VisitorFunction {
+        const usedIdentifiers = this.collectNonImportIdentifierUsages(
+            content,
+            filePath
+        );
+        const decoratorImportNames = this.buildContractDecoratorNames(
+            decoratorNames,
+            { contract: contractMarkerName }
         );
 
-        if (remainingElements.length === 0) {
-            changes.push(`removed import: ${moduleSpecifier}`);
-            return undefined;
+        return (context: ts.TransformationContext) => {
+            const visit: VisitorFunction = (
+                node: ts.Node
+            ): ts.Node | undefined => {
+                if (ts.isImportDeclaration(node)) {
+                    return this.pruneContractDecoratorImport(
+                        node,
+                        usedIdentifiers,
+                        decoratorImportNames,
+                        trustedDecoratorSources,
+                        changes
+                    );
+                }
+
+                return ts.visitEachChild(node, visit, context);
+            };
+            return visit;
+        };
+    }
+
+    private collectNonImportIdentifierUsages(
+        content: string,
+        filePath: string
+    ): Set<string> {
+        const sourceFile = ts.createSourceFile(
+            filePath,
+            content,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.TS
+        );
+        const usedIdentifiers = new Set<string>();
+
+        const collect = (node: ts.Node): void => {
+            if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+                return;
+            }
+
+            if (
+                ts.isIdentifier(node) &&
+                !this.isDeclarationName(node) &&
+                !this.isPropertyName(node) &&
+                !this.isImportOrExportName(node)
+            ) {
+                usedIdentifiers.add(node.text);
+            }
+
+            ts.forEachChild(node, collect);
+        };
+
+        collect(sourceFile);
+        return usedIdentifiers;
+    }
+
+    private pruneContractDecoratorImport(
+        node: ts.ImportDeclaration,
+        usedIdentifiers: Set<string>,
+        decoratorImportNames: Set<string>,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined,
+        changes: string[]
+    ): ts.ImportDeclaration | undefined {
+        if (!ts.isStringLiteral(node.moduleSpecifier)) {
+            return node;
         }
 
-        if (remainingElements.length < namedBindings.elements.length) {
+        const moduleSpecifier = node.moduleSpecifier.text;
+        if (!this.isTrustedDecoratorImportModule(moduleSpecifier, trustedDecoratorSources)) {
+            return node;
+        }
+
+        const importClause = node.importClause;
+        const namedBindings = importClause?.namedBindings;
+        if (!importClause || !namedBindings || !ts.isNamedImports(namedBindings)) {
+            return node;
+        }
+
+        const remainingElements = namedBindings.elements.filter((element) => {
+            const importedName = element.propertyName?.text ?? element.name.text;
+            const localName = element.name.text;
+            return (
+                !decoratorImportNames.has(importedName) ||
+                usedIdentifiers.has(localName)
+            );
+        });
+
+        if (remainingElements.length === namedBindings.elements.length) {
+            return node;
+        }
+
+        if (remainingElements.length > 0) {
             changes.push(`removed decorators from import: ${moduleSpecifier}`);
             return this.createImportWithFilteredBindings(
                 node,
@@ -909,7 +1345,42 @@ export class FileCopier {
             );
         }
 
-        return node;
+        if (importClause.name) {
+            changes.push(`removed decorators from import: ${moduleSpecifier}`);
+            const newImportClause = ts.factory.updateImportClause(
+                importClause,
+                importClause.isTypeOnly,
+                importClause.name,
+                undefined
+            );
+            return ts.factory.updateImportDeclaration(
+                node,
+                node.modifiers,
+                newImportClause,
+                node.moduleSpecifier,
+                node.attributes
+            );
+        }
+
+        changes.push(`removed import: ${moduleSpecifier}`);
+        return undefined;
+    }
+
+    private isTrustedDecoratorImportModule(
+        moduleSpecifier: string,
+        trustedDecoratorSources: TrustedDecoratorSources | undefined
+    ): boolean {
+        const trustedSources = new Set(trustedDecoratorSources ?? []);
+        if (trustedSources.has(moduleSpecifier)) {
+            return true;
+        }
+
+        return (
+            moduleSpecifier === CONTRACTS_ROOT_MODULE ||
+            moduleSpecifier === CONTRACTS_DECORATORS_MODULE ||
+            moduleSpecifier === CONTRACTS_GENERATOR_MODULE ||
+            moduleSpecifier.startsWith(CONTRACTS_GENERATOR_MODULE + "/")
+        );
     }
 
     private createImportWithFilteredBindings(
@@ -933,7 +1404,8 @@ export class FileCopier {
 
     private removeContractDecoratorsFromClass(
         node: ts.ClassDeclaration,
-        contractDecoratorNames: Set<string>,
+        matchers: readonly ContractDecoratorMatcher[],
+        importBindings: ReadonlyMap<string, ImportBinding>,
         changes: string[]
     ): ts.ClassDeclaration {
         const filteredModifiers = node.modifiers!.filter((modifier) => {
@@ -941,11 +1413,13 @@ export class FileCopier {
                 return true;
             }
 
-            const decoratorName = this.extractDecoratorName(modifier);
-            if (
-                decoratorName &&
-                contractDecoratorNames.has(decoratorName)
-            ) {
+            const match = this.findDecoratorMatch(
+                modifier,
+                matchers,
+                importBindings
+            );
+            if (match) {
+                const decoratorName = match.marker.name;
                 const decoratorSuffix = this.isDecoratorCallExpression(modifier)
                     ? "()"
                     : "";
@@ -969,23 +1443,6 @@ export class FileCopier {
             node.heritageClauses,
             node.members
         );
-    }
-
-    private extractDecoratorName(decorator: ts.Decorator): string | undefined {
-        const expression = decorator.expression;
-
-        if (
-            ts.isCallExpression(expression) &&
-            ts.isIdentifier(expression.expression)
-        ) {
-            return expression.expression.text;
-        }
-
-        if (ts.isIdentifier(expression)) {
-            return expression.text;
-        }
-
-        return undefined;
     }
 
     private isDecoratorCallExpression(decorator: ts.Decorator): boolean {
@@ -1194,8 +1651,10 @@ export class FileCopier {
         messageTypes: readonly MessageType[],
         decoratorNames?: DecoratorNames,
         contractMarkerNames?: ContractMarkerNames,
+        trustedDecoratorSources?: TrustedDecoratorSources,
         includePublicContracts = true,
-        responseTypeNames: readonly string[] = []
+        responseTypeNames: readonly string[] = [],
+        select?: ContractOutputSelect
     ): { content: string; usedModuleSpecifiers: Set<string> } {
         const sourceFile = ts.createSourceFile(
             filePath,
@@ -1205,19 +1664,23 @@ export class FileCopier {
             ts.ScriptKind.TS
         );
 
-        const decoratorToMessageType =
-            this.buildDecoratorToMessageTypeMap(decoratorNames);
         const markerNames = {
             ...DEFAULT_CONTRACT_MARKER_NAMES,
             ...contractMarkerNames,
         };
+        const matcher = this.createMatcher(
+            decoratorNames,
+            markerNames.contract,
+            trustedDecoratorSources
+        );
         const context: SymbolExtractionContext = {
             sourceFile,
             content,
             messageTypes,
-            decoratorToMessageType,
-            contractMarkerName: markerNames.contract,
             includePublicContracts,
+            select,
+            matcher,
+            importBindings: matcher.buildImportBindingIndex(sourceFile),
         };
 
         const { targetClassNames, targetDeclarations } =
@@ -1251,15 +1714,46 @@ export class FileCopier {
         return this.generateExtractedOutput(context, extractedSymbols);
     }
 
-    private buildDecoratorToMessageTypeMap(
-        decoratorNames?: DecoratorNames
-    ): Record<string, MessageType> {
-        const names = { ...DEFAULT_DECORATOR_NAMES, ...decoratorNames };
-        return {
-            [names.event]: "event",
-            [names.command]: "command",
-            [names.query]: "query",
-        };
+    private createMatcher(
+        decoratorNames?: DecoratorNames,
+        contractMarkerName?: string,
+        trustedDecoratorSources?: TrustedDecoratorSources
+    ): ContractDecoratorMatcher {
+        return new ContractDecoratorMatcher({
+            decoratorNames,
+            contractMarkerName,
+            trustedDecoratorSources: [
+                CONTRACTS_GENERATOR_MODULE,
+                ...(trustedDecoratorSources ?? []),
+            ],
+        });
+    }
+
+    private createRemovalMatchers(
+        decoratorNames?: DecoratorNames,
+        contractMarkerName?: string,
+        trustedDecoratorSources?: TrustedDecoratorSources
+    ): readonly ContractDecoratorMatcher[] {
+        const matchers = [
+            this.createMatcher(
+                decoratorNames,
+                contractMarkerName,
+                trustedDecoratorSources
+            ),
+        ];
+
+        if (
+            contractMarkerName &&
+            contractMarkerName !== DEFAULT_CONTRACT_MARKER_NAMES.contract
+        ) {
+            matchers.push(this.createMatcher(
+                decoratorNames,
+                undefined,
+                trustedDecoratorSources
+            ));
+        }
+
+        return matchers;
     }
 
     private findTargetDeclarations(context: SymbolExtractionContext): {
@@ -1271,29 +1765,57 @@ export class FileCopier {
 
         const findDeclarations = (node: ts.Node): void => {
             if (ts.isClassDeclaration(node) && node.name) {
-                const isPublicContract =
-                    context.includePublicContracts &&
-                    (hasDecorator(node, context.contractMarkerName) ||
-                        hasLeadingCommentMarker(
-                            node,
-                            context.content,
-                            context.contractMarkerName
-                        ));
+                const decoratorMatch = this.findContractDecoratorMatch(
+                    node,
+                    context
+                );
+                const decoratorMessageType = toMessageType(
+                    decoratorMatch?.marker.kind
+                );
 
-                for (const [decoratorName, messageType] of Object.entries(
-                    context.decoratorToMessageType
-                )) {
-                    if (
-                        hasDecorator(node, decoratorName) &&
-                        context.messageTypes.includes(messageType)
-                    ) {
-                        targetClassNames.add(node.name.text);
-                        targetDeclarations.push(node);
-                        return;
-                    }
+                if (
+                    decoratorMessageType &&
+                    context.messageTypes.includes(decoratorMessageType) &&
+                    isContractSelected(
+                        {
+                            name: node.name.text,
+                            contractType: "message",
+                            kind: decoratorMessageType,
+                            messageType: decoratorMessageType,
+                            visibility: decoratorMatch?.marker.visibility,
+                            tags: decoratorMatch?.marker.tags,
+                        },
+                        context.select
+                    )
+                ) {
+                    targetClassNames.add(node.name.text);
+                    targetDeclarations.push(node);
+                    return;
                 }
 
-                if (isPublicContract) {
+                if (
+                    context.includePublicContracts &&
+                    decoratorMatch &&
+                    !decoratorMessageType &&
+                    isContractSelected(
+                        {
+                            name: node.name.text,
+                            contractType: "contract",
+                            kind: decoratorMatch.marker.kind,
+                            visibility: decoratorMatch.marker.visibility,
+                            tags: decoratorMatch.marker.tags,
+                        },
+                        context.select
+                    )
+                ) {
+                    targetDeclarations.push(node);
+                    return;
+                }
+
+                if (
+                    context.includePublicContracts &&
+                    this.isGeneralCommentMarkerDeclaration(node, context)
+                ) {
                     targetDeclarations.push(node);
                     return;
                 }
@@ -1325,12 +1847,78 @@ export class FileCopier {
 
         return (
             isSupportedDeclaration &&
-            hasLeadingCommentMarker(
-                node,
-                context.content,
-                context.contractMarkerName
-            )
+            this.isGeneralCommentMarkerDeclaration(node, context)
         );
+    }
+
+    private findContractDecoratorMatch(
+        node: ts.ClassDeclaration,
+        context: SymbolExtractionContext
+    ) {
+        const decorators = ts.getDecorators(node);
+        if (!decorators) return undefined;
+
+        for (const decorator of decorators) {
+            const match = context.matcher.matchDecorator(
+                decorator,
+                context.importBindings
+            );
+            if (match) return match;
+        }
+
+        return undefined;
+    }
+
+    private findDecoratorMatch(
+        decorator: ts.Decorator,
+        matchers: readonly ContractDecoratorMatcher[],
+        importBindings: ReadonlyMap<string, ImportBinding>
+    ) {
+        for (const matcher of matchers) {
+            const match = matcher.matchDecorator(decorator, importBindings);
+            if (match) return match;
+        }
+
+        return undefined;
+    }
+
+    private isGeneralCommentMarkerDeclaration(
+        node: ts.Node,
+        context: SymbolExtractionContext
+    ): boolean {
+        const match = context.matcher.matchLeadingCommentMarker(
+            node,
+            context.sourceFile
+        );
+        if (!match || toMessageType(match.marker.kind)) {
+            return false;
+        }
+
+        const name = this.getDeclarationName(node);
+
+        return isContractSelected(
+            {
+                name,
+                contractType: "contract",
+                kind: match.marker.kind,
+                visibility: match.marker.visibility,
+                tags: match.marker.tags,
+            },
+            context.select
+        );
+    }
+
+    private getDeclarationName(node: ts.Node): string {
+        if (
+            ts.isClassDeclaration(node) ||
+            ts.isInterfaceDeclaration(node) ||
+            ts.isTypeAliasDeclaration(node) ||
+            ts.isEnumDeclaration(node)
+        ) {
+            return node.name?.text ?? "";
+        }
+
+        return "";
     }
 
     private computeRelatedTypeNames(
@@ -1963,7 +2551,7 @@ export class FileCopier {
 
         return ts.factory.updateClassDeclaration(
             node,
-            this.prependExportModifier(node.modifiers),
+            this.addExportModifierAfterDecorators(node.modifiers),
             node.name,
             node.typeParameters,
             node.heritageClauses,
@@ -1971,18 +2559,34 @@ export class FileCopier {
         );
     }
 
+    private addExportModifierAfterDecorators(
+        modifiers: ts.NodeArray<ts.ModifierLike> | undefined
+    ): ts.ModifierLike[] {
+        const exportModifier = ts.factory.createModifier(
+            ts.SyntaxKind.ExportKeyword
+        );
+        if (!modifiers) {
+            return [exportModifier];
+        }
+
+        const decorators = modifiers.filter(ts.isDecorator);
+        const nonDecorators = modifiers.filter(
+            (modifier) => !ts.isDecorator(modifier)
+        );
+
+        return [...decorators, exportModifier, ...nonDecorators];
+    }
+
     private isPublicContractClassDeclaration(
         node: ts.ClassDeclaration,
         context: SymbolExtractionContext
     ): boolean {
-        return (
-            hasDecorator(node, context.contractMarkerName) ||
-            hasLeadingCommentMarker(
-                node,
-                context.content,
-                context.contractMarkerName
-            )
-        );
+        const decoratorMatch = this.findContractDecoratorMatch(node, context);
+        if (decoratorMatch && !toMessageType(decoratorMatch.marker.kind)) {
+            return true;
+        }
+
+        return this.isGeneralCommentMarkerDeclaration(node, context);
     }
 
     private appendNodeWithExport(
