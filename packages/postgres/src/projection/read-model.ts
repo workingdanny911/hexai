@@ -12,10 +12,16 @@ export interface IPostgresReadModel {
      * checkpoint in the same transaction, so a crash before commit replays the
      * event rather than skipping it.
      *
-     * Implementations should be idempotent. Delivery is at-least-once: a commit
-     * that succeeds server-side but reports a client error (commit ambiguity),
-     * or a retry after a transient failure, can re-apply the same event. Prefer
-     * upserts / `ON CONFLICT` over blind inserts.
+     * Processing is effectively-once: within that same transaction the engine
+     * locks and reads the committed checkpoint (`SELECT ... FOR UPDATE`) and
+     * skips any event whose position is already covered, so an in-process retry
+     * after a commit-ambiguous failure cannot re-apply an already-committed
+     * event.
+     *
+     * Even so, implementations should stay idempotent as defense-in-depth —
+     * prefer upserts / `ON CONFLICT` over blind inserts. The guard relies on the
+     * mutation and checkpoint sharing one transaction; an implementation that
+     * writes outside that transaction forfeits the guarantee.
      */
     apply(storedEvent: StoredEvent, client: ClientBase): Promise<void>;
     reset(client: ClientBase): Promise<void>;

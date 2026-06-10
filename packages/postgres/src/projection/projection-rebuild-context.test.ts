@@ -405,4 +405,189 @@ describe("ProjectionRebuildContext", () => {
             "rebuilding"
         );
     });
+
+    describe("transactional dedup guard", () => {
+        function checkpointAt(lastPosition: number) {
+            return {
+                projectionName: "test-read-model",
+                lastPosition,
+                version: 1,
+                status: "rebuilding" as const,
+                updatedAt: new Date(),
+            };
+        }
+
+        it("does not re-apply committed-prefix events when a batch is retried", async () => {
+            const appliedPositions: number[] = [];
+            let firstAttempt = true;
+            const readModel = createFakeReadModel({
+                apply: vi.fn(async (storedEvent: StoredEvent) => {
+                    appliedPositions.push(storedEvent.position);
+                }),
+            });
+
+            const checkpointStore = new CheckpointStore();
+            vi.spyOn(checkpointStore, "save").mockResolvedValue(undefined);
+            // First batch attempt commits server-side (events 1-3) but reports an
+            // error; the retry must see committed=3 and skip every event.
+            vi.spyOn(checkpointStore, "getForUpdate").mockImplementation(
+                async () => (firstAttempt ? checkpointAt(0) : checkpointAt(3))
+            );
+
+            const { ctx } = createContext({
+                readModel,
+                checkpointStore,
+                batchSize: 3,
+                maxRetries: 3,
+                targetPosition: 9,
+                totalEvents: 9,
+            });
+
+            // Make only the first batch attempt fail after its applies.
+            const scope = (ctx as any).unitOfWork.scope;
+            scope.mockImplementation(async (fn: () => Promise<any>) => {
+                const result = await fn();
+                if (firstAttempt) {
+                    firstAttempt = false;
+                    throw new Error("commit ambiguity");
+                }
+                return result;
+            });
+
+            for (let i = 1; i <= 3; i++) {
+                const thunk = ctx.accept(createStoredEvent(i));
+                if (thunk) await thunk();
+            }
+
+            // Events 1,2,3 applied once on the first (ambiguous) attempt; the
+            // retry applies nothing because the guard sees them as committed.
+            expect(appliedPositions).toEqual([1, 2, 3]);
+            expect(ctx.currentPosition).toBe(3);
+            expect(ctx.isActive).toBe(true);
+        });
+
+        it("advances position and completes when an entire batch is already committed", async () => {
+            const readModel = createFakeReadModel();
+            const checkpointStore = new CheckpointStore();
+            vi.spyOn(checkpointStore, "save").mockResolvedValue(undefined);
+            vi.spyOn(checkpointStore, "getForUpdate").mockResolvedValue(
+                checkpointAt(3)
+            );
+
+            const { ctx, logger } = createContext({
+                readModel,
+                checkpointStore,
+                batchSize: 3,
+                maxRetries: 3,
+                targetPosition: 3,
+                totalEvents: 3,
+            });
+
+            for (let i = 1; i <= 3; i++) {
+                const thunk = ctx.accept(createStoredEvent(i));
+                if (thunk) await thunk();
+            }
+
+            expect(readModel.apply).not.toHaveBeenCalled();
+            expect(ctx.currentPosition).toBe(3);
+            expect(ctx.isCompleted).toBe(true);
+            expect(logger.rebuildComplete).toHaveBeenCalled();
+        });
+
+        it("does not re-apply in single-event fallback after a commit-ambiguous failure", async () => {
+            const appliedPositions: number[] = [];
+            const readModel = createFakeReadModel({
+                apply: vi.fn(async (storedEvent: StoredEvent) => {
+                    appliedPositions.push(storedEvent.position);
+                }),
+            });
+
+            const checkpointStore = new CheckpointStore();
+            vi.spyOn(checkpointStore, "save").mockResolvedValue(undefined);
+            // Force batch path to exhaust retries so single fallback runs.
+            // Single fallback: event 1 commits ambiguously (committed→1), retry skips.
+            let getForUpdateCalls = 0;
+            vi.spyOn(checkpointStore, "getForUpdate").mockImplementation(
+                async () => {
+                    getForUpdateCalls++;
+                    // Batch attempts (3) + first single-event attempt see committed=0;
+                    // the single-event retry sees committed=1.
+                    return getForUpdateCalls <= 4
+                        ? checkpointAt(0)
+                        : checkpointAt(1);
+                }
+            );
+
+            const { ctx } = createContext({
+                readModel,
+                checkpointStore,
+                batchSize: 1,
+                maxRetries: 3,
+                targetPosition: 9,
+                totalEvents: 9,
+            });
+
+            const scope = (ctx as any).unitOfWork.scope;
+            let scopeCalls = 0;
+            scope.mockImplementation(async (fn: () => Promise<any>) => {
+                scopeCalls++;
+                const result = await fn();
+                // Fail the 3 batch attempts and the first single-event attempt.
+                if (scopeCalls <= 4) throw new Error("commit ambiguity");
+                return result;
+            });
+
+            const thunk = ctx.accept(createStoredEvent(1));
+            if (thunk) await thunk();
+
+            // Event 1 applied on each failed attempt before its commit, but the
+            // successful retry must NOT apply it again (guard sees committed=1).
+            expect(appliedPositions.filter((p) => p === 1)).toHaveLength(4);
+            expect(ctx.currentPosition).toBe(1);
+            expect(ctx.isActive).toBe(true);
+        });
+
+        it("never saves a checkpoint below the committed position in single fallback", async () => {
+            const readModel = createFakeReadModel();
+            const checkpointStore = new CheckpointStore();
+            vi.spyOn(checkpointStore, "save").mockResolvedValue(undefined);
+            // The whole batch already landed via an ambiguous commit: committed=5
+            // is ahead of every event the fallback replays. Saving those event
+            // positions would rewind the checkpoint — the guard's source of truth.
+            vi.spyOn(checkpointStore, "getForUpdate").mockResolvedValue(
+                checkpointAt(5)
+            );
+
+            const { ctx, unitOfWork, logger } = createContext({
+                readModel,
+                checkpointStore,
+                batchSize: 2,
+                maxRetries: 2,
+                targetPosition: 2,
+                totalEvents: 2,
+            });
+
+            // Fail every batch attempt before any mutation so only the single
+            // fallback reaches the transaction body.
+            let scopeCalls = 0;
+            vi.mocked(unitOfWork.scope).mockImplementation(
+                async (fn: () => Promise<any>) => {
+                    scopeCalls++;
+                    if (scopeCalls <= 2) throw new Error("network flap");
+                    return fn();
+                }
+            );
+
+            for (let i = 1; i <= 2; i++) {
+                const thunk = ctx.accept(createStoredEvent(i));
+                if (thunk) await thunk();
+            }
+
+            expect(readModel.apply).not.toHaveBeenCalled();
+            expect(checkpointStore.save).not.toHaveBeenCalled();
+            expect(ctx.currentPosition).toBe(2);
+            expect(ctx.isCompleted).toBe(true);
+            expect(logger.rebuildComplete).toHaveBeenCalled();
+        });
+    });
 });

@@ -1,5 +1,6 @@
 import { Propagation } from "@hexaijs/core";
 import type { StoredEvent } from "@hexaijs/core";
+import type { ClientBase } from "pg";
 
 import { CheckpointStore } from "./checkpoint-store.js";
 
@@ -106,7 +107,9 @@ export class ProjectionRebuildContext {
             try {
                 await this.unitOfWork.scope(async () => {
                     await this.unitOfWork.withClient(async (client) => {
+                        const committed = await this.committedPosition(client);
                         for (const storedEvent of batch) {
+                            if (storedEvent.position <= committed) continue;
                             if (this.readModel.canHandle(storedEvent)) {
                                 await this.readModel.apply(
                                     storedEvent,
@@ -166,6 +169,12 @@ export class ProjectionRebuildContext {
             try {
                 await this.unitOfWork.scope(async () => {
                     await this.unitOfWork.withClient(async (client) => {
+                        const committed = await this.committedPosition(client);
+                        // Skip the save as well: writing storedEvent.position when
+                        // it is below committed would rewind the checkpoint — the
+                        // guard's source of truth, which must stay monotonic.
+                        if (storedEvent.position <= committed) return;
+
                         if (this.readModel.canHandle(storedEvent)) {
                             await this.readModel.apply(storedEvent, client);
                         }
@@ -220,6 +229,17 @@ export class ProjectionRebuildContext {
         }
 
         this.logger.runnerIsolated(this.name, this.config.maxRetries, error);
+    }
+
+    // Reads the committed position under a row lock so an in-process retry after
+    // a commit-ambiguous failure does not re-apply events the previous
+    // (server-side committed) transaction already persisted.
+    private async committedPosition(client: ClientBase): Promise<number> {
+        const checkpoint = await this.checkpointStore.getForUpdate(
+            this.readModel.name,
+            client
+        );
+        return checkpoint?.lastPosition ?? 0;
     }
 
     private reportProgress(): void {

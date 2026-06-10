@@ -9,7 +9,7 @@ import {
 } from "./test-helpers.fixtures.js";
 
 import type { IPostgresReadModel } from "./read-model.js";
-import type { ProjectionEngineLogger } from "./types.js";
+import type { CheckpointStatus, ProjectionEngineLogger } from "./types.js";
 import type { PostgresUnitOfWork } from "../postgres-unit-of-work.js";
 
 function createFakeReadModel(
@@ -203,6 +203,128 @@ describe("ProjectionRunner", () => {
         vi.mocked(readModel.apply).mockReset();
         await runner.processEvent(createStoredEvent(2));
         expect(readModel.apply).not.toHaveBeenCalled();
+    });
+
+    describe("transactional dedup guard", () => {
+        function checkpointAt(
+            lastPosition: number,
+            status: CheckpointStatus = "running"
+        ) {
+            return {
+                projectionName: "test-read-model",
+                lastPosition,
+                version: 1,
+                status,
+                updatedAt: new Date(),
+            };
+        }
+
+        it("skips apply and save when checkpoint already covers the event position", async () => {
+            vi.spyOn(checkpointStore, "getForUpdate").mockResolvedValue(
+                checkpointAt(5)
+            );
+            const runner = new ProjectionRunner(
+                readModel,
+                checkpointStore,
+                unitOfWork,
+                logger
+            );
+
+            const result = await runner.processEvent(createStoredEvent(5));
+
+            expect(result).toBe("processed");
+            expect(readModel.apply).not.toHaveBeenCalled();
+            expect(checkpointStore.save).not.toHaveBeenCalled();
+            expect(runner.currentPosition).toBe(5);
+        });
+
+        it("advances in-memory position to the committed checkpoint when skipping", async () => {
+            vi.spyOn(checkpointStore, "getForUpdate").mockResolvedValue(
+                checkpointAt(8)
+            );
+            const runner = new ProjectionRunner(
+                readModel,
+                checkpointStore,
+                unitOfWork,
+                logger
+            );
+
+            await runner.processEvent(createStoredEvent(3));
+
+            expect(runner.currentPosition).toBe(8);
+        });
+
+        it("applies and saves when checkpoint is behind the event position", async () => {
+            vi.spyOn(checkpointStore, "getForUpdate").mockResolvedValue(
+                checkpointAt(4)
+            );
+            const runner = new ProjectionRunner(
+                readModel,
+                checkpointStore,
+                unitOfWork,
+                logger
+            );
+
+            const result = await runner.processEvent(createStoredEvent(5));
+
+            expect(result).toBe("processed");
+            expect(readModel.apply).toHaveBeenCalled();
+            expect(checkpointStore.save).toHaveBeenCalledWith(
+                "test-read-model",
+                5,
+                1,
+                expect.anything()
+            );
+            expect(runner.currentPosition).toBe(5);
+        });
+
+        it("treats a missing checkpoint as committed=0 and applies the event", async () => {
+            vi.spyOn(checkpointStore, "getForUpdate").mockResolvedValue(null);
+            const runner = new ProjectionRunner(
+                readModel,
+                checkpointStore,
+                unitOfWork,
+                logger
+            );
+
+            await runner.processEvent(createStoredEvent(1));
+
+            expect(readModel.apply).toHaveBeenCalled();
+            expect(runner.currentPosition).toBe(1);
+        });
+
+        it("recovers to healthy on retry after a commit-ambiguous failure without re-applying", async () => {
+            const getForUpdate = vi
+                .spyOn(checkpointStore, "getForUpdate")
+                .mockResolvedValueOnce(checkpointAt(0))
+                .mockResolvedValue(checkpointAt(1));
+            // First attempt: apply runs but the surrounding commit is reported as
+            // failed even though it landed server-side. Subsequent attempts see the
+            // committed checkpoint and must not re-apply.
+            const apply = vi
+                .fn(async () => {})
+                .mockRejectedValueOnce(new Error("commit ambiguity"));
+            readModel = createFakeReadModel({ apply });
+            const runner = new ProjectionRunner(
+                readModel,
+                checkpointStore,
+                unitOfWork,
+                logger
+            );
+
+            const first = await runner.processEvent(createStoredEvent(1));
+            expect(first).toBe("retrying");
+            expect(runner.getStatus().health).toBe("retrying");
+
+            const second = await runner.processEvent(createStoredEvent(1));
+
+            expect(second).toBe("processed");
+            expect(apply).toHaveBeenCalledTimes(1);
+            expect(runner.getStatus().health).toBe("healthy");
+            expect(runner.getStatus().retryCount).toBe(0);
+            expect(runner.currentPosition).toBe(1);
+            expect(getForUpdate).toHaveBeenCalledTimes(2);
+        });
     });
 
     describe("initialize", () => {

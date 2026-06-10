@@ -48,7 +48,9 @@ class OrderSummary extends SelectorBasedReadModel {
 }
 ```
 
-`apply()` **must be idempotent** — see [Delivery semantics](#delivery-semantics).
+The engine deduplicates at the checkpoint level, so `apply()` runs effectively
+once per event; keeping it idempotent is still recommended — see
+[Delivery semantics](#delivery-semantics).
 
 ## Lifecycle
 
@@ -95,9 +97,37 @@ Consequences:
   transaction that later rolls back does **not** roll back projection progress or
   desynchronize the in-memory position from the database.
 
-Delivery is therefore **at-least-once**: a retry after a transient failure, or a
-commit that succeeds on the server but reports a client-side error, can re-apply
-the same event. Make `apply()` idempotent (prefer upserts / `ON CONFLICT`).
+### Effectively-once processing
+
+Atomic commits alone still leave one duplicate window: an **in-process retry
+after a commit-ambiguous failure** — the server commits, but the client sees an
+error (e.g. the connection drops before the `COMMIT` acknowledgement arrives),
+so the engine retries an event that already landed.
+
+The engine closes this window with a **checkpoint-guarded transaction**: inside
+the same transaction as the mutation, it locks the checkpoint row
+(`SELECT ... FOR UPDATE`) and skips both the read model write and the checkpoint
+save for any event whose position is already covered by the committed
+checkpoint. The retry then sees the committed position, applies nothing, and
+advances past the duplicate. The same guard protects rebuild batch flushes and
+the single-event fallback.
+
+Processing is therefore **effectively-once**. The guard's soundness rests on
+three invariants:
+
+1. **The checkpoint never moves backward.** It is the guard's source of truth;
+   all engine writes keep `last_position` monotonically non-decreasing.
+2. **Read model writes share the projection transaction.** An `apply()` that
+   writes through anything other than the provided `client` forfeits the
+   guarantee.
+3. **A single process owns the projection** (see
+   [Scope and non-goals](#scope-and-non-goals)). The row lock serializes
+   accidental concurrent writers, but it is a safety net, not a multi-process
+   ownership mechanism.
+
+Keep `apply()` idempotent as defense-in-depth (prefer upserts / `ON CONFLICT`)
+— it costs little and protects you if an implementation ever violates
+invariant 2.
 
 ## Failure handling
 
