@@ -4,21 +4,42 @@ import type { Checkpoint, CheckpointStatus } from "./types.js";
 
 const TABLE_NAME = "projection__checkpoints";
 
+type CheckpointRow = {
+    projection_name: string;
+    last_position: string;
+    version: number;
+    status: CheckpointStatus;
+    updated_at: Date;
+};
+
 export class CheckpointStore {
     async get(
         projectionName: string,
         client: ClientBase
     ): Promise<Checkpoint | null> {
-        const result = await client.query<{
-            projection_name: string;
-            last_position: string;
-            version: number;
-            status: CheckpointStatus;
-            updated_at: Date;
-        }>(
+        return this.select(projectionName, client, "");
+    }
+
+    // Locks the checkpoint row for the duration of the surrounding transaction.
+    // The dedup guard reads the committed position under this lock so an
+    // in-process retry after a commit-ambiguous failure cannot re-apply an
+    // event the previous (server-side committed) transaction already persisted.
+    async getForUpdate(
+        projectionName: string,
+        client: ClientBase
+    ): Promise<Checkpoint | null> {
+        return this.select(projectionName, client, " FOR UPDATE");
+    }
+
+    private async select(
+        projectionName: string,
+        client: ClientBase,
+        lockClause: string
+    ): Promise<Checkpoint | null> {
+        const result = await client.query<CheckpointRow>(
             `SELECT projection_name, last_position, version, status, updated_at
              FROM ${TABLE_NAME}
-             WHERE projection_name = $1`,
+             WHERE projection_name = $1${lockClause}`,
             [projectionName]
         );
 

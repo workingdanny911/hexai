@@ -171,17 +171,35 @@ export class ProjectionRunner {
         if (!this.isActive) return "skipped";
 
         try {
-            await this.applyAndCheckpoint(storedEvent);
-            this.advancePosition(storedEvent.position);
+            const effectivePosition = await this.applyAndCheckpoint(
+                storedEvent
+            );
+            this.advancePosition(effectivePosition);
             return "processed";
         } catch (error) {
             return this.handleProcessingFailure(storedEvent.position, error);
         }
     }
 
-    private async applyAndCheckpoint(storedEvent: StoredEvent): Promise<void> {
-        await this.unitOfWork.scope(async () => {
-            await this.unitOfWork.withClient(async (client) => {
+    // Reads the committed checkpoint under a row lock within the same
+    // transaction as the mutation. When the event is already covered by the
+    // committed position — the in-process retry window after a commit-ambiguous
+    // failure — apply and save are skipped and the committed position is
+    // returned so the in-memory position advances past the duplicate.
+    private async applyAndCheckpoint(
+        storedEvent: StoredEvent
+    ): Promise<number> {
+        return this.unitOfWork.scope(async () => {
+            return this.unitOfWork.withClient(async (client) => {
+                const checkpoint = await this.checkpointStore.getForUpdate(
+                    this.readModel.name,
+                    client
+                );
+                const committed = checkpoint?.lastPosition ?? 0;
+                if (storedEvent.position <= committed) {
+                    return committed;
+                }
+
                 if (this.readModel.canHandle(storedEvent)) {
                     await this.readModel.apply(storedEvent, client);
                 }
@@ -191,6 +209,7 @@ export class ProjectionRunner {
                     this.readModel.version,
                     client
                 );
+                return storedEvent.position;
             });
         }, { propagation: Propagation.NEW });
     }

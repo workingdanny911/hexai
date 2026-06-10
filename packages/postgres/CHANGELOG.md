@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0] - 2026-06-10
+
+### Changed
+
+- Projection processing is now **effectively-once**: the apply + checkpoint transaction reads the committed checkpoint under a row lock (`SELECT ... FOR UPDATE`) and skips events already covered by it, so an in-process retry after a commit-ambiguous failure (server-side commit, client-side error) no longer re-applies committed events. The guard covers live polling, rebuild batch flushes, and the single-event rebuild fallback, and keeps the checkpoint monotonically non-decreasing.
+- Read model `apply()` idempotency is now defense-in-depth rather than a hard requirement; `README.md` and `docs/projection.md` document the new delivery semantics and the invariants the guarantee relies on.
+
+### Added
+
+- `CheckpointStore.getForUpdate()` — locked checkpoint read backing the dedup guard.
+
 ## [0.9.0] - 2026-05-29
 
 ### Added

@@ -99,6 +99,40 @@ describe("CheckpointStore", () => {
         expect(result).toBeNull();
     });
 
+    describe("getForUpdate", () => {
+        it("returns null for missing checkpoint", async () => {
+            const result = await store.getForUpdate(
+                "nonexistent",
+                client as any
+            );
+            expect(result).toBeNull();
+        });
+
+        it("returns the same mapping as get", async () => {
+            await store.save("test-projection", 42, 1, client as any);
+
+            const viaGet = await store.get("test-projection", client as any);
+            const viaForUpdate = await store.getForUpdate(
+                "test-projection",
+                client as any
+            );
+
+            expect(viaForUpdate).toEqual(viaGet);
+            expect(viaForUpdate!.lastPosition).toBe(42);
+            expect(viaForUpdate!.status).toBe("running");
+        });
+
+        it("issues a SELECT ... FOR UPDATE query", async () => {
+            await store.getForUpdate("test-projection", client as any);
+
+            const forUpdateCall = client.query.mock.calls.find(([sql]) =>
+                /FOR UPDATE/i.test(sql as string)
+            );
+            expect(forUpdateCall).toBeDefined();
+            expect(forUpdateCall![1]).toEqual(["test-projection"]);
+        });
+    });
+
     it("saves with rebuilding status", async () => {
         await store.save("test-projection", 10, 1, client as any, "rebuilding");
         const result = await store.get("test-projection", client as any);
