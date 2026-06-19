@@ -11,6 +11,7 @@
     "author": "",
     "license": "ISC",
     "private": true,
+    "packageManager": "pnpm@11.8.0",
     "workspaces": [
         "packages/*"
     ],
