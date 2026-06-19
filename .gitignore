@@ -142,5 +142,6 @@ dist
 todo.txt
 todo
 
-# claude files
+# claude / codex files
 .claude
+.codex
