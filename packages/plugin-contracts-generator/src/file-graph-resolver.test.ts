@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
+import fs from "fs";
+import os from "os";
 import path from "path";
+
+import { describe, it, expect } from "vitest";
 
 import { FileGraphResolver } from "./file-graph-resolver.js";
 import { ContextConfig } from "./context-config.js";
@@ -64,6 +67,94 @@ describe("FileGraphResolver", () => {
             const isEmptyNode = graph.nodes.get(isEmptyPath);
             expect(isEmptyNode).toBeDefined();
             expect(isEmptyNode!.isEntryPoint).toBe(false);
+        });
+
+        it("should resolve .js source imports to sibling .ts files", async () => {
+            const testDir = fs.mkdtempSync(
+                path.join(os.tmpdir(), "pcg-nodenext-relative-")
+            );
+
+            try {
+                const entryPoint = path.join(testDir, "entry.ts");
+                const sharedPath = path.join(testDir, "shared.ts");
+
+                fs.writeFileSync(
+                    entryPoint,
+                    `import type { Shared } from "./shared.js";
+
+export type Entry = Shared & { id: string };
+`
+                );
+                fs.writeFileSync(
+                    sharedPath,
+                    `export interface Shared {
+    value: string;
+}
+`
+                );
+
+                const resolver = FileGraphResolver.create({
+                    contextConfig: createTestContextConfig(testDir),
+                });
+
+                const graph = await resolver.buildGraph([entryPoint], testDir);
+                const entryNode = graph.nodes.get(entryPoint);
+                const importInfo = entryNode!.imports.find(
+                    (i) => i.moduleSpecifier === "./shared.js"
+                );
+
+                expect(importInfo).toBeDefined();
+                expect(importInfo!.isExternal).toBe(false);
+                expect(importInfo!.resolvedPath).toBe(sharedPath);
+                expect(graph.nodes.has(sharedPath)).toBe(true);
+            } finally {
+                fs.rmSync(testDir, { recursive: true, force: true });
+            }
+        });
+
+        it("should resolve .js index source imports to index.ts files", async () => {
+            const testDir = fs.mkdtempSync(
+                path.join(os.tmpdir(), "pcg-nodenext-index-")
+            );
+
+            try {
+                const entryPoint = path.join(testDir, "entry.ts");
+                const typesDir = path.join(testDir, "types");
+                const indexPath = path.join(typesDir, "index.ts");
+
+                fs.mkdirSync(typesDir, { recursive: true });
+                fs.writeFileSync(
+                    entryPoint,
+                    `import type { Shared } from "./types/index.js";
+
+export type Entry = Shared & { id: string };
+`
+                );
+                fs.writeFileSync(
+                    indexPath,
+                    `export interface Shared {
+    value: string;
+}
+`
+                );
+
+                const resolver = FileGraphResolver.create({
+                    contextConfig: createTestContextConfig(testDir),
+                });
+
+                const graph = await resolver.buildGraph([entryPoint], testDir);
+                const entryNode = graph.nodes.get(entryPoint);
+                const importInfo = entryNode!.imports.find(
+                    (i) => i.moduleSpecifier === "./types/index.js"
+                );
+
+                expect(importInfo).toBeDefined();
+                expect(importInfo!.isExternal).toBe(false);
+                expect(importInfo!.resolvedPath).toBe(indexPath);
+                expect(graph.nodes.has(indexPath)).toBe(true);
+            } finally {
+                fs.rmSync(testDir, { recursive: true, force: true });
+            }
         });
     });
 

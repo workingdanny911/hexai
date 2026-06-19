@@ -88,7 +88,10 @@ describe("E2E: Message Parser", () => {
             it("should re-export entry point files", async () => {
                 await expectFileContains(
                     ctx.getOutputFile("lecture/index.ts"),
-                    ["export * from './events'", "export * from './commands'"]
+                    [
+                        "export * from './events.js'",
+                        "export * from './commands.js'",
+                    ]
                 );
             });
         });

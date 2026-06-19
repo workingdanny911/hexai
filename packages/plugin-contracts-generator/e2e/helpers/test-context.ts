@@ -9,7 +9,11 @@ import {
     RegistryGenerator,
     ContextMessages,
 } from "../../src/index.js";
-import type { ResponseNamingConvention, MessageType } from "../../src/domain/types.js";
+import type {
+    MessageType,
+    OutputModuleSpecifiers,
+    ResponseNamingConvention,
+} from "../../src/domain/types.js";
 
 export type EntryStrategy = "graph" | "symbols";
 
@@ -22,6 +26,7 @@ export interface RunParserOptions {
     responseNamingConventions?: readonly ResponseNamingConvention[];
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
     removeDecorators?: boolean;
 }
 
@@ -117,6 +122,7 @@ export class E2ETestContext {
             responseNamingConventions: opts.responseNamingConventions,
             messageTypes: opts.messageTypes,
             entryStrategy: opts.entryStrategy,
+            outputModuleSpecifiers: opts.outputModuleSpecifiers,
             removeDecorators: opts.removeDecorators,
         } as Parameters<typeof processContext>[0] & {
             entryStrategy?: EntryStrategy;
@@ -161,7 +167,8 @@ export class E2ETestContext {
      */
     async generateRegistry(
         results: Map<string, ProcessContextResult> | ProcessContextResult,
-        contextName?: string
+        contextName?: string,
+        outputModuleSpecifiers?: OutputModuleSpecifiers
     ): Promise<string> {
         const contextMessages: ContextMessages[] = [];
 
@@ -183,7 +190,7 @@ export class E2ETestContext {
             });
         }
 
-        const generator = new RegistryGenerator();
+        const generator = new RegistryGenerator({ outputModuleSpecifiers });
         const content = generator.generate(contextMessages);
 
         const registryPath = join(this.getOutputDir(), "registry.ts");

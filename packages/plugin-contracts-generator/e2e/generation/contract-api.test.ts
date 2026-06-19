@@ -9,6 +9,7 @@ import {
     expectFileNotContains,
     expectGeneratedFiles,
     expectTypeScriptCompiles,
+    expectTypeScriptCompilesWithNodeNext,
 } from "@e2e/helpers";
 import type { ProcessContextResult } from "../../src/index.js";
 import { runWithConfig } from "../../src/cli.js";
@@ -143,6 +144,10 @@ describe("E2E: Contract API", () => {
                 "IgnoredFakeContractCommand"
             );
             await expectTypeScriptCompiles(ctx.getOutputFile("contract-api"));
+        });
+
+        it("generates sources that compile with NodeNext module resolution", async () => {
+            await expectTypeScriptCompilesWithNodeNext(ctx.getOutputDir());
         });
 
         it("registers selected Contract* messages but not general/custom contracts", async () => {

@@ -45,6 +45,7 @@ export type {
     ContractOutputSelect,
     ContractOutputTagSelect,
     EntryStrategy,
+    OutputModuleSpecifiers,
     Message,
     MessageType,
     MessageBase,
@@ -165,6 +166,7 @@ import type {
     DecoratorNames,
     EntryStrategy,
     MessageType,
+    OutputModuleSpecifiers,
     ResponseNamingConvention,
     TrustedDecoratorSources,
 } from "./domain/types.js";
@@ -184,6 +186,7 @@ export interface ProcessContextOptions {
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
     fileSystem?: FileSystem;
     logger?: Logger;
 }
@@ -214,6 +217,7 @@ export async function processContext(
         messageTypes,
         includePublicContracts,
         entryStrategy,
+        outputModuleSpecifiers,
         fileSystem = nodeFileSystem,
         logger = noopLogger,
     } = options;
@@ -239,6 +243,7 @@ export async function processContext(
         messageTypes,
         includePublicContracts,
         entryStrategy,
+        outputModuleSpecifiers,
         fileSystem,
         logger,
     }).execute({
@@ -247,6 +252,7 @@ export async function processContext(
         outputDir,
         pathAliasRewrites,
         removeDecorators,
+        outputModuleSpecifiers,
     });
 }
 

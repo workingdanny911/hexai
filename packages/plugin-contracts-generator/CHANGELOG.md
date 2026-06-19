@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.1] - 2026-06-19
+
+### Added
+
+- Added `outputModuleSpecifiers: "js" | "extensionless"` and the `--output-module-specifiers` CLI/plugin option for choosing generated relative import/export module specifiers globally, per configured output, or per run.
+
+### Changed
+
+- Generated relative import/export specifiers now default to `.js` for NodeNext and ESM-compatible output.
+- Root registry namespace imports and exports now use `./context/index.js` by default instead of directory imports.
+- Copied local relative import/export declarations are normalized to `.js` by default when they target copied local files.
+- Legacy extensionless generated output remains available with `outputModuleSpecifiers: "extensionless"`.
+
+### Fixed
+
+- Resolved NodeNext-style source imports such as `./shared.js` back to TypeScript source files such as `shared.ts`, including pure type dependency files.
+
 ## [0.5.0] - 2026-06-01
 
 ### Added

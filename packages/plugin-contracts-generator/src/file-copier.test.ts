@@ -9,6 +9,10 @@ import { ContextConfig } from "./context-config.js";
 
 import type { CopyOptions } from "./file-copier.js";
 
+type BarrelExportOptions = {
+    readonly outputModuleSpecifiers?: "js" | "extensionless";
+};
+
 function createTestContextConfig(sourceDir: string): ContextConfig {
     return ContextConfig.createSync("test-context", sourceDir);
 }
@@ -170,6 +174,25 @@ describe("FileCopier", () => {
     });
 
     describe("barrel export generation", () => {
+        it("should generate NodeNext-safe .js barrel exports by default", async () => {
+            const copier = new FileCopier();
+
+            const copiedFiles = [
+                path.join(outputDir, "events.ts"),
+                path.join(outputDir, "nested/is-empty.ts"),
+            ];
+
+            const indexContent = copier.generateBarrelExport(
+                copiedFiles,
+                outputDir
+            );
+
+            expect(indexContent.split("\n")).toEqual([
+                "export * from './events.js'",
+                "export * from './nested/is-empty.js'",
+            ]);
+        });
+
         it("should generate barrel export for copied files", async () => {
             const copier = new FileCopier();
 
@@ -186,11 +209,11 @@ describe("FileCopier", () => {
             );
 
             expect(indexContent).toContain(
-                "export * from './commands-but-different-filename'"
+                "export * from './commands-but-different-filename.js'"
             );
-            expect(indexContent).toContain("export * from './foo.validator'");
-            expect(indexContent).toContain("export * from './bar.validator'");
-            expect(indexContent).toContain("export * from './is-empty'");
+            expect(indexContent).toContain("export * from './foo.validator.js'");
+            expect(indexContent).toContain("export * from './bar.validator.js'");
+            expect(indexContent).toContain("export * from './is-empty.js'");
         });
 
         it("should generate exports in order of copiedFiles array", async () => {
@@ -225,9 +248,34 @@ describe("FileCopier", () => {
             );
 
             expect(indexContent).toContain(
-                "export * from './commands-but-different-filename'"
+                "export * from './commands-but-different-filename.js'"
             );
-            expect(indexContent).toContain("export * from './nested/is-empty'");
+            expect(indexContent).toContain("export * from './nested/is-empty.js'");
+        });
+
+        it("should support legacy extensionless barrel exports when requested", async () => {
+            const copier = new FileCopier();
+            const generateBarrelExport = copier.generateBarrelExport.bind(
+                copier
+            ) as (
+                copiedFiles: string[],
+                outputDir: string,
+                options?: BarrelExportOptions
+            ) => string;
+
+            const copiedFiles = [
+                path.join(outputDir, "events.ts"),
+                path.join(outputDir, "nested/is-empty.ts"),
+            ];
+
+            const indexContent = generateBarrelExport(copiedFiles, outputDir, {
+                outputModuleSpecifiers: "extensionless",
+            });
+
+            expect(indexContent.split("\n")).toEqual([
+                "export * from './events'",
+                "export * from './nested/is-empty'",
+            ]);
         });
 
         it("should not duplicate exports for same file", async () => {

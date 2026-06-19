@@ -61,7 +61,9 @@ describe("RegistryGenerator", () => {
         expect(result).toContain(
             'import { MessageRegistry } from "@hexaijs/plugin-contracts-generator/runtime"'
         );
-        expect(result).toContain('import { LectureCreated } from "./lecture"');
+        expect(result).toContain(
+            'import { LectureCreated } from "./lecture/index.js"'
+        );
         expect(result).toContain(
             "export const messageRegistry = new MessageRegistry()"
         );
@@ -83,7 +85,7 @@ describe("RegistryGenerator", () => {
         const result = generator.generate(contexts);
 
         expect(result).toContain(
-            'import { LectureCreated, LectureExpanded, CreateLecture } from "./lecture"'
+            'import { LectureCreated, LectureExpanded, CreateLecture } from "./lecture/index.js"'
         );
         expect(result).toContain(".register(LectureCreated)");
         expect(result).toContain(".register(LectureExpanded)");
@@ -106,9 +108,11 @@ describe("RegistryGenerator", () => {
 
         const result = generator.generate(contexts);
 
-        expect(result).toContain('import { LectureCreated } from "./lecture"');
         expect(result).toContain(
-            'import { VideoLessonStarted, StartVideoLesson } from "./video-lesson"'
+            'import { LectureCreated } from "./lecture/index.js"'
+        );
+        expect(result).toContain(
+            'import { VideoLessonStarted, StartVideoLesson } from "./video-lesson/index.js"'
         );
         expect(result).toContain(".register(LectureCreated)");
         expect(result).toContain(".register(VideoLessonStarted)");
@@ -132,7 +136,9 @@ describe("RegistryGenerator", () => {
         const result = generator.generate(contexts);
 
         expect(result).not.toContain("empty-context");
-        expect(result).toContain('import { LectureCreated } from "./lecture"');
+        expect(result).toContain(
+            'import { LectureCreated } from "./lecture/index.js"'
+        );
     });
 
     test("generates valid chained syntax", () => {
@@ -167,6 +173,23 @@ describe("RegistryGenerator", () => {
         expect(result).toContain(
             'import { MessageRegistry } from "@hexaijs/core"'
         );
+    });
+
+    test("supports legacy extensionless imports when requested", () => {
+        const legacyGenerator = new RegistryGenerator({
+            messageRegistryImport: "@hexaijs/plugin-contracts-generator/runtime",
+            outputModuleSpecifiers: "extensionless",
+        });
+
+        const result = legacyGenerator.generate([
+            {
+                contextName: "lecture",
+                events: [createEvent("LectureCreated")],
+                commands: [],
+            },
+        ]);
+
+        expect(result).toContain('import { LectureCreated } from "./lecture"');
     });
 
     describe("deterministic output", () => {
@@ -257,9 +280,11 @@ describe("RegistryGenerator", () => {
 
             const result = nsGenerator.generate(contexts);
 
-            // namespace import 사용
-            expect(result).toContain('import * as lecture from "./lecture"');
-            // named import 사용하지 않음
+            // Uses namespace imports.
+            expect(result).toContain(
+                'import * as lecture from "./lecture/index.js"'
+            );
+            // Does not use named imports.
             expect(result).not.toContain("import { LectureCreated }");
         });
 
@@ -279,10 +304,33 @@ describe("RegistryGenerator", () => {
 
             const result = nsGenerator.generate(contexts);
 
-            expect(result).toContain('export * as lecture from "./lecture"');
             expect(result).toContain(
-                'export * as videoLesson from "./video-lesson"'
+                'export * as lecture from "./lecture/index.js"'
             );
+            expect(result).toContain(
+                'export * as videoLesson from "./video-lesson/index.js"'
+            );
+        });
+
+        test("supports legacy extensionless namespace imports and exports when requested", () => {
+            const legacyNsGenerator = new RegistryGenerator({
+                messageRegistryImport: "@hexaijs/core",
+                useNamespace: true,
+                outputModuleSpecifiers: "extensionless",
+            });
+
+            const contexts: ContextMessages[] = [
+                {
+                    contextName: "lecture",
+                    events: [createEvent("LectureCreated")],
+                    commands: [],
+                },
+            ];
+
+            const result = legacyNsGenerator.generate(contexts);
+
+            expect(result).toContain('import * as lecture from "./lecture"');
+            expect(result).toContain('export * as lecture from "./lecture"');
         });
 
         test("registers messages with namespace prefix", () => {
@@ -316,10 +364,10 @@ describe("RegistryGenerator", () => {
 
             const result = nsGenerator.generate(contexts);
 
-            // 같은 이름이지만 namespace로 구분됨
+            // Same class names are separated by namespace.
             expect(result).toContain(".register(resources.StudentRegistered)");
             expect(result).toContain(".register(step1.StudentRegistered)");
-            // named import는 사용하지 않음 (충돌 방지)
+            // Avoids named imports to prevent collisions.
             expect(result).not.toContain("import { StudentRegistered }");
         });
 
@@ -334,15 +382,15 @@ describe("RegistryGenerator", () => {
 
             const result = nsGenerator.generate(contexts);
 
-            // import는 원래 경로 유지
+            // Keeps the original context path.
             expect(result).toContain(
-                'import * as videoLesson from "./video-lesson"'
+                'import * as videoLesson from "./video-lesson/index.js"'
             );
-            // export도 camelCase namespace
+            // Exports with a camelCase namespace.
             expect(result).toContain(
-                'export * as videoLesson from "./video-lesson"'
+                'export * as videoLesson from "./video-lesson/index.js"'
             );
-            // registration도 camelCase
+            // Registers with the camelCase namespace.
             expect(result).toContain(".register(videoLesson.VideoStarted)");
         });
     });

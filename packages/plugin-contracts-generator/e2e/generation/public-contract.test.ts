@@ -92,7 +92,7 @@ describe("E2E: PublicContract comment markers", () => {
         it("should barrel export the generated contract file", async () => {
             await expectFileContains(
                 ctx.getOutputFile("public-contract/index.ts"),
-                "export * from './contracts'"
+                "export * from './contracts.js'"
             );
         });
 

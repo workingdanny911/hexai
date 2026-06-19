@@ -16,6 +16,11 @@ import {
 } from "./contract-selector.js";
 import { BoundaryViolationError, FileReadError, FileWriteError } from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
+import {
+    DEFAULT_OUTPUT_MODULE_SPECIFIERS,
+    formatRelativePathFromFile,
+    formatRelativeTypeScriptFileSpecifier,
+} from "./module-specifier.js";
 
 import type {
     ContractMarkerMetadata,
@@ -25,6 +30,7 @@ import type {
     EntryStrategy,
     MessageContractKind,
     MessageType,
+    OutputModuleSpecifiers,
     TrustedDecoratorSources,
 } from "./domain/index.js";
 import type { FileGraph, FileNode } from "./file-graph-resolver.js";
@@ -33,8 +39,6 @@ import type { ImportBinding } from "./import-analyzer.js";
 const CONTRACTS_GENERATOR_MODULE = "@hexaijs/plugin-contracts-generator";
 const CONTRACTS_ROOT_MODULE = "@hexaijs/contracts";
 const CONTRACTS_DECORATORS_MODULE = "@hexaijs/contracts/decorators";
-const TS_EXTENSION_PATTERN = /\.ts$/;
-const TS_EXTENSION = ".ts";
 const REQUEST_SUFFIX = "Request";
 const QUERY_SUFFIX = "Query";
 
@@ -54,6 +58,11 @@ export interface CopyOptions {
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
     select?: ContractOutputSelect;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
+}
+
+export interface BarrelExportOptions {
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
 export interface CopyResult {
@@ -130,6 +139,7 @@ export class FileCopier {
             includePublicContracts,
             entryStrategy = "graph",
             select,
+            outputModuleSpecifiers = DEFAULT_OUTPUT_MODULE_SPECIFIERS,
         } = options;
         const copiedFiles: string[] = [];
         const rewrittenImports = new Map<string, string[]>();
@@ -197,7 +207,8 @@ export class FileCopier {
                 decoratorNames,
                 contractMarkerNames,
                 trustedDecoratorSources,
-                pathAliasRewrites
+                pathAliasRewrites,
+                outputModuleSpecifiers
             );
 
             const outputPath = await this.writeOutputFile(
@@ -673,7 +684,8 @@ export class FileCopier {
         decoratorNames: DecoratorNames | undefined,
         contractMarkerNames: ContractMarkerNames | undefined,
         trustedDecoratorSources: TrustedDecoratorSources | undefined,
-        pathAliasRewrites: Map<string, string> | undefined
+        pathAliasRewrites: Map<string, string> | undefined,
+        outputModuleSpecifiers: OutputModuleSpecifiers
     ): { content: string; rewrites: string[] } {
         const rewrites: string[] = [];
         let transformedContent = content;
@@ -710,7 +722,15 @@ export class FileCopier {
             node,
             fileGraph,
             sourceRoot,
-            rewrites
+            rewrites,
+            outputModuleSpecifiers
+        );
+        transformedContent = this.processRelativeModuleSpecifiers(
+            transformedContent,
+            node,
+            fileGraph,
+            rewrites,
+            outputModuleSpecifiers
         );
         transformedContent = this.processExternalPathAliases(
             transformedContent,
@@ -723,11 +743,17 @@ export class FileCopier {
 
     
 
-    generateBarrelExport(copiedFiles: string[], outputDir: string): string {
+    generateBarrelExport(
+        copiedFiles: string[],
+        outputDir: string,
+        options: BarrelExportOptions = {}
+    ): string {
+        const outputModuleSpecifiers =
+            options.outputModuleSpecifiers ?? DEFAULT_OUTPUT_MODULE_SPECIFIERS;
         const lines: string[] = [];
         for (const filePath of copiedFiles) {
             const relativePath = path.relative(outputDir, filePath);
-            lines.push(this.createExportStatement(relativePath));
+            lines.push(this.createExportStatement(relativePath, outputModuleSpecifiers));
         }
         return lines.sort().join("\n");
     }
@@ -826,16 +852,39 @@ export class FileCopier {
         node: FileNode,
         fileGraph: FileGraph,
         sourceRoot: string,
-        rewrites: string[]
+        rewrites: string[],
+        outputModuleSpecifiers: OutputModuleSpecifiers
     ): string {
         const internalResult = this.rewriteInternalPathAliases(
             content,
             node,
             fileGraph,
-            sourceRoot
+            sourceRoot,
+            outputModuleSpecifiers
         );
         rewrites.push(...internalResult.rewrites);
         return internalResult.content;
+    }
+
+    private processRelativeModuleSpecifiers(
+        content: string,
+        node: FileNode,
+        fileGraph: FileGraph,
+        rewrites: string[],
+        outputModuleSpecifiers: OutputModuleSpecifiers
+    ): string {
+        if (outputModuleSpecifiers === "extensionless") {
+            return content;
+        }
+
+        const relativeResult = this.rewriteRelativeModuleSpecifiers(
+            content,
+            node,
+            fileGraph,
+            outputModuleSpecifiers
+        );
+        rewrites.push(...relativeResult.rewrites);
+        return relativeResult.content;
     }
 
     private processExternalPathAliases(
@@ -855,9 +904,14 @@ export class FileCopier {
         return aliasResult.content;
     }
 
-    private createExportStatement(relativePath: string): string {
-        const exportPath =
-            "./" + relativePath.replace(TS_EXTENSION_PATTERN, "");
+    private createExportStatement(
+        relativePath: string,
+        outputModuleSpecifiers: OutputModuleSpecifiers
+    ): string {
+        const exportPath = formatRelativeTypeScriptFileSpecifier(
+            relativePath,
+            outputModuleSpecifiers
+        );
         return `export * from '${exportPath}'`;
     }
 
@@ -865,7 +919,8 @@ export class FileCopier {
         content: string,
         node: FileNode,
         fileGraph: FileGraph,
-        sourceRoot: string
+        sourceRoot: string,
+        outputModuleSpecifiers: OutputModuleSpecifiers
     ): { content: string; rewrites: string[] } {
         let transformedContent = content;
         const appliedRewrites: string[] = [];
@@ -885,8 +940,59 @@ export class FileCopier {
 
             const relativePath = this.computeRelativePath(
                 node.relativePath,
-                targetNode.relativePath
+                targetNode.relativePath,
+                outputModuleSpecifiers
             );
+            const rewriteResult = this.rewriteModuleSpecifier(
+                transformedContent,
+                importInfo.moduleSpecifier,
+                relativePath
+            );
+
+            if (rewriteResult.wasRewritten) {
+                transformedContent = rewriteResult.content;
+                appliedRewrites.push(
+                    `${importInfo.moduleSpecifier} → ${relativePath}`
+                );
+            }
+        }
+
+        return { content: transformedContent, rewrites: appliedRewrites };
+    }
+
+    private rewriteRelativeModuleSpecifiers(
+        content: string,
+        node: FileNode,
+        fileGraph: FileGraph,
+        outputModuleSpecifiers: OutputModuleSpecifiers
+    ): { content: string; rewrites: string[] } {
+        let transformedContent = content;
+        const appliedRewrites: string[] = [];
+
+        for (const importInfo of node.imports) {
+            if (
+                importInfo.isExternal ||
+                !importInfo.moduleSpecifier.startsWith(".") ||
+                !importInfo.resolvedPath
+            ) {
+                continue;
+            }
+
+            const targetNode = fileGraph.nodes.get(importInfo.resolvedPath);
+            if (!targetNode) {
+                continue;
+            }
+
+            const relativePath = this.computeRelativePath(
+                node.relativePath,
+                targetNode.relativePath,
+                outputModuleSpecifiers
+            );
+
+            if (relativePath === importInfo.moduleSpecifier) {
+                continue;
+            }
+
             const rewriteResult = this.rewriteModuleSpecifier(
                 transformedContent,
                 importInfo.moduleSpecifier,
@@ -932,7 +1038,7 @@ export class FileCopier {
         newSpecifier: string
     ): { content: string; wasRewritten: boolean } {
         const importPattern = new RegExp(
-            `(from\\s+['"])${this.escapeRegex(originalSpecifier)}(['"])`,
+            `((?:from|import)\\s+['"])${this.escapeRegex(originalSpecifier)}(['"])`,
             "g"
         );
 
@@ -949,18 +1055,14 @@ export class FileCopier {
 
     private computeRelativePath(
         fromRelative: string,
-        toRelative: string
+        toRelative: string,
+        outputModuleSpecifiers: OutputModuleSpecifiers
     ): string {
-        const fromDir = path.dirname(fromRelative);
-        let relativePath = path.relative(fromDir, toRelative);
-
-        relativePath = relativePath.replace(TS_EXTENSION_PATTERN, "");
-
-        if (!relativePath.startsWith(".")) {
-            relativePath = "./" + relativePath;
-        }
-
-        return relativePath;
+        return formatRelativePathFromFile(
+            fromRelative,
+            toRelative,
+            outputModuleSpecifiers
+        );
     }
 
     private applyPathAliasRewrites(

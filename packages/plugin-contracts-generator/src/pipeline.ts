@@ -16,6 +16,7 @@ import type {
     DomainEvent,
     EntryStrategy,
     MessageType,
+    OutputModuleSpecifiers,
     PublicContract,
     Query,
     ResponseNamingConvention,
@@ -56,6 +57,7 @@ interface PipelineCreateOptions {
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
 export interface PipelineOptions {
@@ -65,6 +67,7 @@ export interface PipelineOptions {
     readonly pathAliasRewrites?: Map<string, string>;
     readonly select?: ContractOutputSelect;
     readonly removeDecorators?: boolean;
+    readonly outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
 export interface PipelineResult {
@@ -90,6 +93,7 @@ export class ContractsPipeline {
     private readonly trustedDecoratorSources?: TrustedDecoratorSources;
     private readonly includePublicContracts?: boolean;
     private readonly entryStrategy: EntryStrategy;
+    private readonly outputModuleSpecifiers: OutputModuleSpecifiers;
 
     private constructor(
         private readonly deps: PipelineDependencies,
@@ -98,7 +102,8 @@ export class ContractsPipeline {
         contractMarkerNames?: ContractMarkerNames,
         trustedDecoratorSources?: TrustedDecoratorSources,
         includePublicContracts?: boolean,
-        entryStrategy: EntryStrategy = "symbols"
+        entryStrategy: EntryStrategy = "symbols",
+        outputModuleSpecifiers: OutputModuleSpecifiers = "js"
     ) {
         this.messageTypes = messageTypes;
         this.decoratorNames = decoratorNames;
@@ -106,6 +111,7 @@ export class ContractsPipeline {
         this.trustedDecoratorSources = trustedDecoratorSources;
         this.includePublicContracts = includePublicContracts;
         this.entryStrategy = entryStrategy;
+        this.outputModuleSpecifiers = outputModuleSpecifiers;
     }
 
     static create(options: PipelineCreateOptions): ContractsPipeline {
@@ -151,7 +157,8 @@ export class ContractsPipeline {
             options.contractMarkerNames,
             options.trustedDecoratorSources,
             includePublicContracts,
-            entryStrategy
+            entryStrategy,
+            options.outputModuleSpecifiers ?? "js"
         );
     }
 
@@ -160,7 +167,15 @@ export class ContractsPipeline {
     }
 
     async execute(options: PipelineOptions): Promise<PipelineResult> {
-        const { contextName, sourceDir, outputDir, pathAliasRewrites, select, removeDecorators } = options;
+        const {
+            contextName,
+            sourceDir,
+            outputDir,
+            pathAliasRewrites,
+            select,
+            removeDecorators,
+            outputModuleSpecifiers = this.outputModuleSpecifiers,
+        } = options;
         const contextOutputDir = join(outputDir, contextName);
 
         this.deps.logger.info(`Processing context: ${contextName}`);
@@ -200,9 +215,10 @@ export class ContractsPipeline {
             removeDecorators,
             this.messageTypes,
             this.entryStrategy,
-            select
+            select,
+            outputModuleSpecifiers
         );
-        await this.exportBarrel(copiedFiles, contextOutputDir);
+        await this.exportBarrel(copiedFiles, contextOutputDir, outputModuleSpecifiers);
 
         this.deps.logger.info(`Completed context: ${contextName} (${messages.events.length} events, ${messages.commands.length} commands, ${messages.queries.length} queries, ${messages.publicContracts.length} public contracts, ${copiedFiles.length} files)`);
 
@@ -403,7 +419,8 @@ export class ContractsPipeline {
         removeDecorators?: boolean,
         messageTypes?: readonly MessageType[],
         entryStrategy: EntryStrategy = "symbols",
-        select?: ContractOutputSelect
+        select?: ContractOutputSelect,
+        outputModuleSpecifiers: OutputModuleSpecifiers = this.outputModuleSpecifiers
     ): Promise<string[]> {
         this.deps.logger.debug(`Copying files to ${outputDir}`);
         await this.deps.fileSystem.mkdir(outputDir, { recursive: true });
@@ -424,15 +441,24 @@ export class ContractsPipeline {
             includePublicContracts: this.includePublicContracts,
             entryStrategy,
             select,
+            outputModuleSpecifiers,
         });
 
         this.deps.logger.debug(`Copied ${result.copiedFiles.length} file(s)`);
         return result.copiedFiles;
     }
 
-    async exportBarrel(copiedFiles: string[], outputDir: string): Promise<void> {
+    async exportBarrel(
+        copiedFiles: string[],
+        outputDir: string,
+        outputModuleSpecifiers: OutputModuleSpecifiers = this.outputModuleSpecifiers
+    ): Promise<void> {
         this.deps.logger.debug(`Generating barrel export at ${outputDir}/index.ts`);
-        const indexContent = this.deps.fileCopier.generateBarrelExport(copiedFiles, outputDir);
+        const indexContent = this.deps.fileCopier.generateBarrelExport(
+            copiedFiles,
+            outputDir,
+            { outputModuleSpecifiers }
+        );
         await this.deps.fileSystem.writeFile(join(outputDir, "index.ts"), indexContent);
     }
 }

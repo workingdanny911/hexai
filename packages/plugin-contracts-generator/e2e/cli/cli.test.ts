@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 
 import { run, runWithConfig } from "../../src/cli.js";
 import { cliPlugin } from "../../src/hexai-plugin.js";
+import { expectTypeScriptCompilesWithNodeNext } from "../helpers/typescript-validator.js";
 
 /**
  * CLI E2E Tests
@@ -232,6 +233,49 @@ export class RebuildInternalIndexCommand {}
             await run(["--config", configPath, `--output-dir=${contractsDir}`]);
 
             expect(existsSync(join(contractsDir, "lecture"))).toBe(true);
+        });
+
+        it("should accept --output-module-specifiers=extensionless", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--registry",
+                "--output-module-specifiers=extensionless",
+            ]);
+
+            const rootRegistryContent = readFileSync(
+                join(contractsDir, "index.ts"),
+                "utf-8"
+            );
+            const contextIndexContent = readFileSync(
+                join(contractsDir, "lecture", "index.ts"),
+                "utf-8"
+            );
+
+            expect(rootRegistryContent).toContain('from "./lecture"');
+            expect(rootRegistryContent).not.toContain("./lecture/index.js");
+            expect(contextIndexContent).toContain("export * from './events'");
+            expect(contextIndexContent).not.toContain("export * from './events.js'");
+        });
+
+        it("should reject invalid --output-module-specifiers", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+
+            await expect(
+                run([
+                    "--config",
+                    configPath,
+                    "-o",
+                    contractsDir,
+                    "--output-module-specifiers",
+                    "cjs",
+                ])
+            ).rejects.toThrow('Invalid --output-module-specifiers: "cjs"');
         });
 
         it("should throw error when --output-dir is missing", async () => {
@@ -834,7 +878,30 @@ export class RebuildInternalIndexCommand {}
             // Should contain namespace exports
             expect(indexContent).toContain("lecture");
             // Should import from the context
-            expect(indexContent).toContain("./lecture");
+            expect(indexContent).toContain("./lecture/index.js");
+        });
+
+        it("should generate a root registry that compiles with NodeNext", async () => {
+            await createConfig({
+                contracts: {
+                    contexts: [
+                        {
+                            name: "catalog",
+                            path: join(fixturesDir, "contract-api"),
+                        },
+                    ],
+                },
+            });
+            const contractsDir = join(outputDir, "contracts");
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--generate-message-registry",
+            ]);
+
+            await expectTypeScriptCompilesWithNodeNext(contractsDir);
         });
 
         it("should work with --message-types and --generate-message-registry together", async () => {
@@ -1047,6 +1114,54 @@ describe("runWithConfig E2E", () => {
             const content = readFileSync(outputFile, "utf-8");
             expect(content).toContain("@PublicCommand()");
             expect(content).toContain("@hexaijs/plugin-contracts-generator");
+        });
+    });
+
+    describe("Hexai plugin CLI options", () => {
+        it("should pass outputModuleSpecifiers from plugin args", async () => {
+            const contractsDir = join(outputDir, "plugin-contracts");
+
+            await cliPlugin.run(
+                {
+                    outputDir: contractsDir,
+                    registry: true,
+                    outputModuleSpecifiers: "extensionless",
+                },
+                {
+                    contexts: [
+                        {
+                            name: "lecture",
+                            path: join(fixturesDir, "lecture"),
+                        },
+                    ],
+                }
+            );
+
+            const rootRegistryContent = readFileSync(
+                join(contractsDir, "index.ts"),
+                "utf-8"
+            );
+            expect(rootRegistryContent).toContain('from "./lecture"');
+            expect(rootRegistryContent).not.toContain("./lecture/index.js");
+        });
+
+        it("should reject invalid plugin outputModuleSpecifiers args", async () => {
+            await expect(
+                cliPlugin.run(
+                    {
+                        outputDir: join(outputDir, "plugin-contracts"),
+                        outputModuleSpecifiers: "cjs",
+                    },
+                    {
+                        contexts: [
+                            {
+                                name: "lecture",
+                                path: join(fixturesDir, "lecture"),
+                            },
+                        ],
+                    }
+                )
+            ).rejects.toThrow('Invalid outputModuleSpecifiers: "cjs"');
         });
     });
 

@@ -263,6 +263,8 @@ export type ContractDeclaration =
 
 export type EntryStrategy = 'graph' | 'symbols';
 
+export type OutputModuleSpecifiers = 'js' | 'extensionless';
+
 export type ContractOutputInclude = 'all' | 'messages' | 'contracts';
 
 export interface ContractOutputTagSelect {
@@ -283,6 +285,7 @@ export interface ContractOutputConfig {
   readonly path: string;
   readonly select?: ContractOutputSelect;
   readonly registry?: boolean;
+  readonly outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
 export type TrustedDecoratorSources = readonly string[];
@@ -292,10 +295,24 @@ export const VALID_ENTRY_STRATEGIES: readonly EntryStrategy[] = [
   'symbols',
 ];
 
+export const VALID_OUTPUT_MODULE_SPECIFIERS: readonly OutputModuleSpecifiers[] = [
+  'js',
+  'extensionless',
+];
+
 export function isEntryStrategy(value: unknown): value is EntryStrategy {
   return (
     typeof value === 'string' &&
     VALID_ENTRY_STRATEGIES.includes(value as EntryStrategy)
+  );
+}
+
+export function isOutputModuleSpecifiers(
+  value: unknown
+): value is OutputModuleSpecifiers {
+  return (
+    typeof value === 'string' &&
+    VALID_OUTPUT_MODULE_SPECIFIERS.includes(value as OutputModuleSpecifiers)
   );
 }
 
@@ -387,6 +404,7 @@ export interface Config {
   readonly decoratorNames?: DecoratorNames;
   readonly trustedDecoratorSources?: TrustedDecoratorSources;
   readonly entryStrategy?: EntryStrategy;
+  readonly outputModuleSpecifiers?: OutputModuleSpecifiers;
   readonly responseNamingConventions?: readonly ResponseNamingConvention[];
 }
 

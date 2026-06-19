@@ -81,7 +81,7 @@ describe("E2E: Path Alias Transformation", () => {
         it("should preserve other imports unchanged", async () => {
             await expectFileContains(
                 ctx.getOutputFile("path-alias", "commands.ts"),
-                ['from "@hexaijs/core"', 'from "./types"']
+                ['from "@hexaijs/core"', 'from "./types.js"']
             );
         });
     });
@@ -100,7 +100,7 @@ describe("E2E: Path Alias Transformation", () => {
         it("should preserve other imports unchanged", async () => {
             await expectFileContains(
                 ctx.getOutputFile("path-alias", "events.ts"),
-                ['from "@hexaijs/core"', 'from "./types"']
+                ['from "@hexaijs/core"', 'from "./types.js"']
             );
         });
     });
@@ -122,7 +122,10 @@ describe("E2E: Path Alias Transformation", () => {
         it("should export entry point files", async () => {
             await expectFileContains(
                 ctx.getOutputFile("path-alias", "index.ts"),
-                ["export * from './commands'", "export * from './events'"]
+                [
+                    "export * from './commands.js'",
+                    "export * from './events.js'",
+                ]
             );
         });
     });

@@ -5,7 +5,12 @@ import {
     type IncludeMode,
     type RunWithConfigOptions,
 } from "./cli.js";
-import type { EntryStrategy, MessageType } from "./domain/types.js";
+import { validateOutputModuleSpecifiers } from "./config-loader.js";
+import type {
+    EntryStrategy,
+    MessageType,
+    OutputModuleSpecifiers,
+} from "./domain/types.js";
 
 const VALID_MESSAGE_TYPES: MessageType[] = ["event", "command", "query"];
 const VALID_INCLUDE_MODES: IncludeMode[] = ["all", "messages", "contracts"];
@@ -54,6 +59,13 @@ function parseEntryStrategy(value: string): EntryStrategy {
     return strategy as EntryStrategy;
 }
 
+function parseOutputModuleSpecifiers(value: string): OutputModuleSpecifiers {
+    return validateOutputModuleSpecifiers(
+        value.trim().toLowerCase() as OutputModuleSpecifiers,
+        "outputModuleSpecifiers"
+    );
+}
+
 function readMessageTypes(args: Record<string, unknown>): MessageType[] | undefined {
     const value = args.messages ?? args.messageTypes;
     return value ? parseMessageTypes(String(value)) : undefined;
@@ -99,6 +111,11 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
             description: "Entry copy strategy: graph, symbols",
         },
         {
+            flags: "--output-module-specifiers <style>",
+            description:
+                "Generated relative module specifiers: js, extensionless",
+        },
+        {
             flags: "--registry",
             description: "Generate message registry index.ts file",
         },
@@ -130,6 +147,11 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
             messageTypes: readMessageTypes(args),
             entryStrategy: args.entryStrategy
                 ? parseEntryStrategy(String(args.entryStrategy))
+                : undefined,
+            outputModuleSpecifiers: args.outputModuleSpecifiers
+                ? parseOutputModuleSpecifiers(
+                      String(args.outputModuleSpecifiers)
+                  )
                 : undefined,
             generateMessageRegistry:
                 args.registry === true ||

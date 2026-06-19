@@ -8,6 +8,7 @@ import { FileReadError } from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
 
 const TYPESCRIPT_EXTENSIONS = [".ts", ".tsx"];
+const JAVASCRIPT_MODULE_EXTENSIONS = [".js", ".mjs", ".cjs"];
 const INDEX_FILE = "index.ts";
 
 export interface ImportInfo {
@@ -209,9 +210,16 @@ export class FileGraphResolver {
     }
 
     private async tryResolveWithExtensions(basePath: string): Promise<string | null> {
-        const extensionCandidates = TYPESCRIPT_EXTENSIONS.map(ext => basePath + ext);
-        const indexCandidate = path.join(basePath, INDEX_FILE);
-        const candidates = [...extensionCandidates, indexCandidate];
+        const extension = path.extname(basePath);
+        const hasJavaScriptModuleExtension =
+            JAVASCRIPT_MODULE_EXTENSIONS.includes(extension);
+        const sourceBasePath = hasJavaScriptModuleExtension
+            ? basePath.slice(0, -extension.length)
+            : basePath;
+        const extensionCandidates = TYPESCRIPT_EXTENSIONS.map(ext => sourceBasePath + ext);
+        const candidates = hasJavaScriptModuleExtension
+            ? extensionCandidates
+            : [...extensionCandidates, path.join(sourceBasePath, INDEX_FILE)];
 
         for (const candidate of candidates) {
             if (await this.fs.exists(candidate)) {

@@ -13,8 +13,11 @@ export {
 } from "./assertions.js";
 export {
     compileTypeScript,
+    compileTypeScriptWithNodeNext,
     expectTypeScriptCompiles,
+    expectTypeScriptCompilesWithNodeNext,
     type CompilationResult,
+    type CompileTypeScriptOptions,
 } from "./typescript-validator.js";
 export {
     importGeneratedModule,

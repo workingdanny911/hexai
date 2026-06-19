@@ -10,6 +10,7 @@ import {
     resolveContextEntries,
     validateContractOutputs,
     validateEntryStrategy,
+    validateOutputModuleSpecifiers,
     validateTrustedDecoratorSources,
 } from "./config-loader.js";
 import type { InputContextConfig } from "./context-config.js";
@@ -17,6 +18,7 @@ import { ContractsPipeline, type PipelineResult, ConsoleLogger, type Logger } fr
 import { RegistryGenerator, ContextMessages } from "./registry-generator.js";
 import { ReexportGenerator } from "./reexport-generator.js";
 import { nodeFileSystem } from "./file-system.js";
+import { formatRelativeIndexSpecifier } from "./module-specifier.js";
 import type {
     ContractMarkerNames,
     ContractOutputConfig,
@@ -24,6 +26,7 @@ import type {
     DecoratorNames,
     EntryStrategy,
     MessageType,
+    OutputModuleSpecifiers,
     ResponseNamingConvention,
     TrustedDecoratorSources,
 } from "./domain/types.js";
@@ -56,6 +59,11 @@ const CLI_OPTIONS = {
         long: "--entry-strategy",
         requiresValue: true,
     },
+    outputModuleSpecifiers: {
+        short: null,
+        long: "--output-module-specifiers",
+        requiresValue: true,
+    },
     registry: { short: null, long: "--registry", requiresValue: false },
     generateMessageRegistry: { short: null, long: "--generate-message-registry", requiresValue: false },
     dryRun: { short: null, long: "--dry-run", requiresValue: false },
@@ -69,6 +77,7 @@ interface CliOptions {
     include?: IncludeMode;
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
     generateMessageRegistry?: boolean;
     dryRun?: boolean;
     check?: boolean;
@@ -82,6 +91,7 @@ export interface RunWithConfigOptions {
     include?: IncludeMode;
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
     generateMessageRegistry?: boolean;
     dryRun?: boolean;
     check?: boolean;
@@ -100,6 +110,7 @@ export interface ContractsPluginConfig {
     contractMarkerNames?: ContractMarkerNames;
     trustedDecoratorSources?: TrustedDecoratorSources;
     entryStrategy?: EntryStrategy;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
     responseNamingConventions?: ResponseNamingConvention[];
     removeDecorators?: boolean;
 }
@@ -115,6 +126,7 @@ interface OutputPlan {
     outputDir: string;
     select?: ContractOutputSelect;
     generateMessageRegistry: boolean;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
 interface GenerationScope {
@@ -158,6 +170,13 @@ function parseEntryStrategy(value: string): EntryStrategy {
     }
 
     return strategy as EntryStrategy;
+}
+
+function parseOutputModuleSpecifiers(value: string): OutputModuleSpecifiers {
+    return validateOutputModuleSpecifiers(
+        value.trim().toLowerCase() as OutputModuleSpecifiers,
+        "--output-module-specifiers"
+    );
 }
 
 function resolveGenerationScope(options: {
@@ -246,6 +265,14 @@ function parseArgs(args: string[]): CliOptions {
             const { value, nextIndex } = extractOptionValue(args, i, "--entry-strategy");
             options.entryStrategy = parseEntryStrategy(value);
             i = nextIndex;
+        } else if (matchesOption(arg, CLI_OPTIONS.outputModuleSpecifiers)) {
+            const { value, nextIndex } = extractOptionValue(
+                args,
+                i,
+                "--output-module-specifiers"
+            );
+            options.outputModuleSpecifiers = parseOutputModuleSpecifiers(value);
+            i = nextIndex;
         } else if (
             matchesOption(arg, CLI_OPTIONS.registry) ||
             matchesOption(arg, CLI_OPTIONS.generateMessageRegistry)
@@ -286,6 +313,9 @@ Options:
   -m, --message-types <types>   Alias for --messages
   --entry-strategy <strategy>   Entry copy strategy: graph, symbols
                                 Default: symbols
+  --output-module-specifiers <style>
+                                Generated relative module specifiers: js, extensionless
+                                Default: js
   --registry                    Generate message registry index.ts file
   --generate-message-registry   Alias for --registry
                                 Default: not generated
@@ -399,6 +429,9 @@ function logGenerationSettings(
     logger.info(`Include mode: ${options.include ?? "all"}`);
     logger.info(
         `Entry strategy: ${options.entryStrategy ?? config.entryStrategy ?? "symbols"}`
+    );
+    logger.info(
+        `Output module specifiers: ${options.outputModuleSpecifiers ?? config.outputModuleSpecifiers}`
     );
     logger.info(`Message types filter: ${formatMessageTypesForLog(scope.messageTypes)}`);
     logger.info(
@@ -544,6 +577,10 @@ async function generateContracts(
     logger: Logger
 ): Promise<ContextProcessingResult[]> {
     const outputDir = outputPlan.outputDir;
+    const outputModuleSpecifiers =
+        outputPlan.outputModuleSpecifiers ??
+        options.outputModuleSpecifiers ??
+        config.outputModuleSpecifiers;
     const pathAliasRewrites = config.pathAliasRewrites
         ? new Map(Object.entries(config.pathAliasRewrites))
         : undefined;
@@ -560,6 +597,7 @@ async function generateContracts(
             messageTypes: scope.messageTypes,
             includePublicContracts: scope.includePublicContracts,
             entryStrategy: options.entryStrategy ?? config.entryStrategy,
+            outputModuleSpecifiers,
             logger,
         });
 
@@ -570,6 +608,7 @@ async function generateContracts(
             pathAliasRewrites,
             select: outputPlan.select,
             removeDecorators: config.removeDecorators,
+            outputModuleSpecifiers,
         });
 
         results.push({ name: contextConfig.name, result, outputDir });
@@ -579,7 +618,13 @@ async function generateContracts(
     logSummary(logger, totals);
 
     if (outputPlan.generateMessageRegistry) {
-        await generateRegistry(outputDir, results, totals, logger);
+        await generateRegistry(
+            outputDir,
+            results,
+            totals,
+            logger,
+            outputModuleSpecifiers
+        );
     }
 
     if (config.pathAliasRewrites) {
@@ -606,6 +651,7 @@ function createOutputPlans(
             select: output.select,
             generateMessageRegistry:
                 options.generateMessageRegistry === true || output.registry === true,
+            outputModuleSpecifiers: output.outputModuleSpecifiers,
         }));
     }
 
@@ -618,6 +664,7 @@ function createOutputPlans(
             name: "default",
             outputDir: resolve(config.configDir, options.outputDir),
             generateMessageRegistry: options.generateMessageRegistry === true,
+            outputModuleSpecifiers: options.outputModuleSpecifiers,
         },
     ];
 }
@@ -737,6 +784,9 @@ async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<C
             pluginConfig.trustedDecoratorSources
         ),
         entryStrategy: validateEntryStrategy(pluginConfig.entryStrategy),
+        outputModuleSpecifiers: validateOutputModuleSpecifiers(
+            pluginConfig.outputModuleSpecifiers
+        ),
         responseNamingConventions: pluginConfig.responseNamingConventions,
         removeDecorators: pluginConfig.removeDecorators ?? true,
     };
@@ -763,11 +813,19 @@ async function generateRegistry(
     outputDir: string,
     results: ContextProcessingResult[],
     totals: SummaryTotals,
-    logger: Logger
+    logger: Logger,
+    outputModuleSpecifiers: OutputModuleSpecifiers
 ): Promise<void> {
     const contextMessages: ContextMessages[] = results.map((contextResult) => {
         const contextOutputDir = join(contextResult.outputDir, contextResult.name);
-        const importPath = "./" + relative(outputDir, contextOutputDir).replace(/\\/g, "/");
+        const relativeContextDir = relative(outputDir, contextOutputDir).replace(/\\/g, "/");
+        const relativeContextPath = relativeContextDir
+            ? `./${relativeContextDir}`
+            : ".";
+        const importPath = formatRelativeIndexSpecifier(
+            relativeContextPath,
+            outputModuleSpecifiers
+        );
 
         return {
             contextName: contextResult.name,
@@ -778,7 +836,10 @@ async function generateRegistry(
         };
     });
 
-    const generator = new RegistryGenerator({ useNamespace: true });
+    const generator = new RegistryGenerator({
+        useNamespace: true,
+        outputModuleSpecifiers,
+    });
     const registryContent = generator.generate(contextMessages);
 
     await nodeFileSystem.mkdir(outputDir, { recursive: true });

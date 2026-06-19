@@ -31,7 +31,7 @@ describe("Registry Generation E2E", () => {
             const registryPath = await ctx.generateRegistry(result);
             const content = await readFile(registryPath, "utf-8");
 
-            expect(content).toContain('from "./registry"');
+            expect(content).toContain('from "./registry/index.js"');
             expect(content).toContain("UserRegistered");
             expect(content).toContain("UserRegistered_V2");
             expect(content).toContain("OrderPlaced");
@@ -97,8 +97,8 @@ describe("Registry Generation E2E", () => {
             const registryPath = await multiCtx.generateRegistry(results);
             const content = await readFile(registryPath, "utf-8");
 
-            expect(content).toContain('from "./orders"');
-            expect(content).toContain('from "./inventory"');
+            expect(content).toContain('from "./orders/index.js"');
+            expect(content).toContain('from "./inventory/index.js"');
         });
 
         it("should include messages from all contexts in registry", async () => {
@@ -146,8 +146,10 @@ describe("Registry Generation E2E", () => {
             const registryPath = await multiCtx.generateRegistry(results);
             const content = await readFile(registryPath, "utf-8");
 
-            const inventoryImportIdx = content.indexOf('from "./inventory"');
-            const ordersImportIdx = content.indexOf('from "./orders"');
+            const inventoryImportIdx = content.indexOf(
+                'from "./inventory/index.js"'
+            );
+            const ordersImportIdx = content.indexOf('from "./orders/index.js"');
             expect(inventoryImportIdx).toBeLessThan(ordersImportIdx);
 
             const lines = content.split("\n");

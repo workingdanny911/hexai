@@ -1,10 +1,20 @@
-import type { DomainEvent, Command, Query } from "./domain/types.js";
+import type {
+    DomainEvent,
+    Command,
+    Query,
+    OutputModuleSpecifiers,
+} from "./domain/types.js";
+import {
+    DEFAULT_OUTPUT_MODULE_SPECIFIERS,
+    formatRelativeIndexSpecifier,
+} from "./module-specifier.js";
 
 type Message = DomainEvent | Command | Query;
 
 export interface RegistryGeneratorOptions {
     readonly messageRegistryImport: string;
     readonly useNamespace?: boolean;
+    readonly outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
 export interface ContextMessages {
@@ -17,6 +27,7 @@ export interface ContextMessages {
 
 const DEFAULT_OPTIONS: RegistryGeneratorOptions = {
     messageRegistryImport: "@hexaijs/plugin-contracts-generator/runtime",
+    outputModuleSpecifiers: DEFAULT_OUTPUT_MODULE_SPECIFIERS,
 };
 
 function hasMessages(ctx: ContextMessages): boolean {
@@ -119,9 +130,16 @@ export class RegistryGenerator {
         contexts: readonly ContextMessages[]
     ): Array<{ importPath: string; namespace: string }> {
         return contexts.filter(hasMessages).map((ctx) => ({
-            importPath: ctx.importPath ?? `./${ctx.contextName}`,
+            importPath: ctx.importPath ?? this.createContextImportPath(ctx.contextName),
             namespace: this.toNamespace(ctx.contextName),
         }));
+    }
+
+    private createContextImportPath(contextName: string): string {
+        return formatRelativeIndexSpecifier(
+            `./${contextName}`,
+            this.options.outputModuleSpecifiers ?? DEFAULT_OUTPUT_MODULE_SPECIFIERS
+        );
     }
 
     private generateNamespaceImports(
@@ -173,7 +191,7 @@ export class RegistryGenerator {
             const messageNames = getAllMessages(ctx).map((m) => m.name);
 
             if (messageNames.length > 0) {
-                const importPath = ctx.importPath ?? `./${ctx.contextName}`;
+                const importPath = ctx.importPath ?? this.createContextImportPath(ctx.contextName);
                 lines.push(
                     `import { ${messageNames.join(", ")} } from "${importPath}";`
                 );

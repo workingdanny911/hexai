@@ -228,6 +228,10 @@ export default {
         // Entry strategy (optional, default: "symbols")
         entryStrategy: "symbols",
 
+        // Generated relative import/export specifiers (optional, default: "js")
+        // Use "extensionless" only for legacy generated packages.
+        outputModuleSpecifiers: "js",
+
         // Strip decorators from generated output (optional, default: true)
         removeDecorators: true,
     },
@@ -256,6 +260,17 @@ Each matched directory is treated as a context with sensible defaults:
 - Context name = directory name (e.g., `packages/auth` → `auth`)
 - Source directory = `src/` (default)
 - TypeScript config = `tsconfig.json` (auto-detected if exists)
+
+### Configuration Reference
+
+| Field | Description |
+|-------|-------------|
+| `contexts` | Required context definitions or glob patterns |
+| `outputs` | Optional multi-output plans. Omit for single-output CLI mode with `--output-dir` |
+| `entryStrategy` | `symbols` for strict declaration extraction (default), or `graph` for conservative entry file graph copying |
+| `outputModuleSpecifiers` | Generated relative module specifier style. Defaults to `"js"` for NodeNext/ESM-safe `.js` imports and exports. Use `"extensionless"` only for legacy generated packages |
+| `removeDecorators` | Removes matched contract decorators from generated output by default |
+| `trustedDecoratorSources` | Additional import sources trusted for canonical `Contract*` decorators |
 
 ### Multiple Outputs
 
@@ -325,6 +340,8 @@ export default {
 
 `outputs[].registry: true` generates a `MessageRegistry` for that output. General contracts are still exported but never registered.
 
+`outputs[].outputModuleSpecifiers` can override the global `contracts.outputModuleSpecifiers` setting for one output.
+
 If `outputs[]` is omitted, existing single-output mode remains unchanged:
 
 ```bash
@@ -379,10 +396,21 @@ The generator handles two types of files differently:
 
 **Dependency files** (imported by entry files) are copied entirely:
 - Supports barrel files (`export * from './module'`)
+- Resolves NodeNext-style source imports such as `./shared.js` back to TypeScript files such as `shared.ts`, including type-only dependency files
 - Preserves all exports for transitive dependencies
 - Ensures type dependencies remain intact
 
 `symbols` is still an AST-based slicer, not a full TypeScript TypeChecker semantic slicer. Dependency files referenced by retained local imports are copied as whole files; they are not symbol-sliced. With strict output selectors, the generator fails fast with `BoundaryViolationError` if copying would include a marked declaration outside the selected output. Keep public DTO/value-object dependencies boundary-clean and separate from internal implementation modules.
+
+### Generated Module Specifiers
+
+Generated relative imports and exports use `.js` by default. This makes the emitted TypeScript source safe for `moduleResolution: "NodeNext"` and ESM package output:
+
+- Context barrels emit exports such as `export * from "./events.js"`.
+- Copied local relative import/export declarations are normalized to `.js` when they target copied local files.
+- Root registry namespace imports and exports use `./context/index.js` instead of directory imports.
+
+Set `outputModuleSpecifiers: "extensionless"` to preserve legacy extensionless generated output.
 
 ## Usage
 
@@ -399,6 +427,8 @@ npx generate-contracts -o packages/contracts/src --config ./app.config.ts
 ```
 
 By default, the CLI uses `--include all`, all message types, and `--entry-strategy symbols`. In single-output mode this generates public `@ContractEvent()`, `@ContractCommand()`, and `@ContractQuery()` message contracts plus marked general `@Contract(...)` declarations as a strict public contract surface. Legacy `Public*` markers are still recognized.
+
+Use `--output-module-specifiers js` for the default NodeNext-safe `.js` generated relative imports and exports, or `--output-module-specifiers extensionless` for legacy generated packages that still require extensionless module specifiers.
 
 | Option | Description |
 |--------|-------------|
@@ -561,6 +591,7 @@ const result = await processContext({
     messageTypes: ["event", "command"],
     includePublicContracts: true,
     entryStrategy: "symbols",
+    outputModuleSpecifiers: "js",
     responseNamingConventions: [
         { messageSuffix: "Command", responseSuffix: "CommandResult" },
     ],
@@ -597,11 +628,18 @@ contracts/
 The root `index.ts` uses namespace exports to prevent name collisions:
 
 ```typescript
+// contracts/src/order/index.ts
+export * from "./events.js";
+export * from "./commands.js";
+export * from "./types.js";
+
 // contracts/src/index.ts
 import { MessageRegistry } from "@hexaijs/plugin-contracts-generator/runtime";
+import * as order from "./order/index.js";
+import * as inventory from "./inventory/index.js";
 
-export * as order from "./order";
-export * as inventory from "./inventory";
+export * as order from "./order/index.js";
+export * as inventory from "./inventory/index.js";
 
 export const messageRegistry = new MessageRegistry()
     .register(order.OrderPlaced)
@@ -669,9 +707,10 @@ try {
 | `PublicEvent`, `PublicCommand`, `PublicQuery`, `PublicContract` | Deprecated compatibility aliases for the canonical `Contract*` API; no runtime warnings |
 | `ContractDeclaration` | Canonical domain model for selected message and general contract declarations |
 | `PublicContract` type | Compatibility domain model for marked `class`, `interface`, `type`, and `enum` declarations |
-| `ContractOutputConfig` | `outputs[]` configuration shape for output-level path, selector, and registry settings |
+| `ContractOutputConfig` | `outputs[]` configuration shape for output-level path, selector, registry, and module specifier settings |
 | `ContractMarkerNames` | Configuration shape for customizing legacy public contract comment marker names |
 | `EntryStrategy` | `symbols` for default strict declaration extraction, or `graph` for entry file graph copy |
+| `OutputModuleSpecifiers` | `"js"` for default NodeNext-safe `.js` generated specifiers, or `"extensionless"` for legacy generated specifiers |
 | `MessageRegistry` | Runtime registry for decorated message deserialization |
 | `ConsoleLogger` | Configurable logger for build output |
 | Error types | `ConfigLoadError`, `FileReadError`, `MessageParserError`, etc. |

@@ -36,7 +36,7 @@ describe("E2E: Dependency Extraction", () => {
                 ctx.getOutputFile(
                     "dependency-extraction/query-with-extends.ts"
                 ),
-                ["import", "BaseProfile", 'from "./base-types"']
+                ["import", "BaseProfile", 'from "./base-types.js"']
             );
         });
 
@@ -72,7 +72,7 @@ describe("E2E: Dependency Extraction", () => {
                 ctx.getOutputFile(
                     "dependency-extraction/query-with-extends.ts"
                 ),
-                ["import", "generateId", 'from "./base-types"']
+                ["import", "generateId", 'from "./base-types.js"']
             );
         });
 
@@ -81,7 +81,7 @@ describe("E2E: Dependency Extraction", () => {
                 ctx.getOutputFile(
                     "dependency-extraction/query-with-extends.ts"
                 ),
-                ["import", "formatDate", 'from "./base-types"']
+                ["import", "formatDate", 'from "./base-types.js"']
             );
         });
     });
@@ -128,8 +128,8 @@ describe("E2E: Dependency Extraction", () => {
 
         it("should preserve default and type-only default imports", async () => {
             await expectFileContains(outputFile(), [
-                'import DefaultProfile from "./default-profile";',
-                'import type TypeOnlyDefault from "./type-only-default";',
+                'import DefaultProfile from "./default-profile.js";',
+                'import type TypeOnlyDefault from "./type-only-default.js";',
                 "primary: DefaultProfile",
                 "typeOnly: TypeOnlyDefault",
             ]);
@@ -137,7 +137,7 @@ describe("E2E: Dependency Extraction", () => {
 
         it("should preserve namespace imports and nested qualified type names", async () => {
             await expectFileContains(outputFile(), [
-                'import * as Types from "./namespace-types";',
+                'import * as Types from "./namespace-types.js";',
                 "namespaceUser: Types.User",
                 "nestedNamespaceUser: Types.Inner.User",
             ]);
@@ -145,14 +145,14 @@ describe("E2E: Dependency Extraction", () => {
 
         it("should preserve named import aliases", async () => {
             await expectFileContains(outputFile(), [
-                'import { AliasedUser as DomainUser } from "./aliased-user";',
+                'import { AliasedUser as DomainUser } from "./aliased-user.js";',
                 "owner: DomainUser",
             ]);
         });
 
         it("should preserve mixed imports and remove unused named imports", async () => {
             await expectFileContains(outputFile(), [
-                'import MixedDefault, { MixedUserSource as MixedUser } from "./mixed-user";',
+                'import MixedDefault, { MixedUserSource as MixedUser } from "./mixed-user.js";',
                 "mixedDefault: MixedDefault",
                 "mixedUser: MixedUser",
             ]);

@@ -142,8 +142,8 @@ describe("E2E: Class Support", () => {
                 "utf-8"
             );
 
-            expect(commandsContent).toContain('from "./domain"');
-            expect(commandsContent).toContain('from "./types"');
+            expect(commandsContent).toContain('from "./domain.js"');
+            expect(commandsContent).toContain('from "./types.js"');
             expect(commandsContent).toContain("export class CreateLecture");
         });
     });

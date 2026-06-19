@@ -7,12 +7,17 @@ import { join } from "node:path";
 import { ConfigLoader, ConfigLoadError } from "./config-loader.js";
 import type { ContractMarkerNames, DecoratorNames } from "./domain/index.js";
 
+const FIXTURE_CONFIG_ROOT = resolve(__dirname, "../test/fixtures/config");
+
+function fixtureConfigPath(name: string): string {
+    return join(FIXTURE_CONFIG_ROOT, name, "application.config.ts");
+}
+
 describe("ConfigLoader", () => {
     describe("object context format", () => {
         it("should load contracts config from a valid config file", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/valid-config/application.config.ts";
+            const configPath = fixtureConfigPath("valid-config");
 
             const result = await configLoader.load(configPath);
 
@@ -26,8 +31,7 @@ describe("ConfigLoader", () => {
 
         it("should throw ConfigLoadError when context has missing required fields", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/invalid-contexts/application.config.ts";
+            const configPath = fixtureConfigPath("invalid-contexts");
 
             await expect(configLoader.load(configPath)).rejects.toThrow(
                 ConfigLoadError
@@ -39,8 +43,7 @@ describe("ConfigLoader", () => {
 
         it("should load multiple contexts", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/multi-context/application.config.ts";
+            const configPath = fixtureConfigPath("multi-context");
 
             const result = await configLoader.load(configPath);
 
@@ -51,8 +54,7 @@ describe("ConfigLoader", () => {
 
         it("should load multiple pathAliasRewrites", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/multi-context/application.config.ts";
+            const configPath = fixtureConfigPath("multi-context");
 
             const result = await configLoader.load(configPath);
 
@@ -66,8 +68,7 @@ describe("ConfigLoader", () => {
     describe("string context format", () => {
         it("should load context from package's application.config.ts", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/string-context/application.config.ts";
+            const configPath = fixtureConfigPath("string-context");
 
             const result = await configLoader.load(configPath);
 
@@ -78,8 +79,7 @@ describe("ConfigLoader", () => {
 
         it("should include pathAliasRewrites from root config", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/string-context/application.config.ts";
+            const configPath = fixtureConfigPath("string-context");
 
             const result = await configLoader.load(configPath);
 
@@ -90,8 +90,7 @@ describe("ConfigLoader", () => {
 
         it("should expand glob pattern in contexts array", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/string-context-glob/application.config.ts";
+            const configPath = fixtureConfigPath("string-context-glob");
 
             const result = await configLoader.load(configPath);
 
@@ -104,13 +103,12 @@ describe("ConfigLoader", () => {
 
         it("should resolve sourceDir relative to package directory", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/string-context/application.config.ts";
+            const configPath = fixtureConfigPath("string-context");
 
             const result = await configLoader.load(configPath);
 
             expect(result.contexts[0].sourceDir).toBe(
-                resolve("test/fixtures/config/string-context/packages/lecture/src")
+                resolve(FIXTURE_CONFIG_ROOT, "string-context/packages/lecture/src")
             );
         });
 
@@ -119,8 +117,7 @@ describe("ConfigLoader", () => {
     describe("error handling", () => {
         it("should throw ConfigLoadError when contracts section is missing", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/missing-contracts/application.config.ts";
+            const configPath = fixtureConfigPath("missing-contracts");
 
             await expect(configLoader.load(configPath)).rejects.toThrow(
                 ConfigLoadError
@@ -132,15 +129,14 @@ describe("ConfigLoader", () => {
 
         it("should throw error for non-existent config file", async () => {
             const configLoader = new ConfigLoader();
-            const configPath = "test/fixtures/config/non-existent/application.config.ts";
+            const configPath = fixtureConfigPath("non-existent");
 
             await expect(configLoader.load(configPath)).rejects.toThrow();
         });
 
         it("should throw error for invalid glob pattern with multiple wildcards", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/packages-multi-wildcard/application.config.ts";
+            const configPath = fixtureConfigPath("packages-multi-wildcard");
 
             await expect(configLoader.load(configPath)).rejects.toThrow(
                 ConfigLoadError
@@ -152,8 +148,7 @@ describe("ConfigLoader", () => {
 
         it("should throw ConfigLoadError for invalid entryStrategy", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/invalid-entry-strategy/application.config.ts";
+            const configPath = fixtureConfigPath("invalid-entry-strategy");
 
             await expect(configLoader.load(configPath)).rejects.toThrow(
                 ConfigLoadError
@@ -172,8 +167,7 @@ describe("ConfigLoader", () => {
 
         it("should use default decorator names when decoratorNames is not specified", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/valid-config/application.config.ts";
+            const configPath = fixtureConfigPath("valid-config");
 
             const result = await configLoader.load(configPath);
 
@@ -188,8 +182,7 @@ describe("ConfigLoader", () => {
 
         it("should accept custom decorator names in config", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/custom-decorators/application.config.ts";
+            const configPath = fixtureConfigPath("custom-decorators");
 
             const result = await configLoader.load(configPath);
 
@@ -203,8 +196,7 @@ describe("ConfigLoader", () => {
 
         it("should allow partial decorator names (use defaults for unspecified)", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/partial-decorators/application.config.ts";
+            const configPath = fixtureConfigPath("partial-decorators");
 
             const result = await configLoader.load(configPath);
 
@@ -220,8 +212,7 @@ describe("ConfigLoader", () => {
     describe("ContractMarkerNames configuration", () => {
         it("should use default contract marker names when contractMarkerNames is not specified", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/valid-config/application.config.ts";
+            const configPath = fixtureConfigPath("valid-config");
 
             const result = await configLoader.load(configPath);
 
@@ -233,8 +224,7 @@ describe("ConfigLoader", () => {
 
         it("should accept custom contract marker names in config", async () => {
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/custom-contract-marker/application.config.ts";
+            const configPath = fixtureConfigPath("custom-contract-marker");
 
             const result = await configLoader.load(configPath);
 
@@ -301,8 +291,7 @@ describe("ConfigLoader", () => {
         it("should load global responseNamingConventions into ContractsConfig", async () => {
             // Arrange
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/global-response-naming/application.config.ts";
+            const configPath = fixtureConfigPath("global-response-naming");
 
             // Act
             const result = await configLoader.load(configPath);
@@ -317,8 +306,7 @@ describe("ConfigLoader", () => {
         it("should load context-level responseNamingConventions into ContextConfig", async () => {
             // Arrange
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/context-response-naming/application.config.ts";
+            const configPath = fixtureConfigPath("context-response-naming");
 
             // Act
             const result = await configLoader.load(configPath);
@@ -333,8 +321,7 @@ describe("ConfigLoader", () => {
         it("should default responseNamingConventions to undefined when not specified (backward compatibility)", async () => {
             // Arrange
             const configLoader = new ConfigLoader();
-            const configPath =
-                "test/fixtures/config/valid-config/application.config.ts";
+            const configPath = fixtureConfigPath("valid-config");
 
             // Act
             const result = await configLoader.load(configPath);

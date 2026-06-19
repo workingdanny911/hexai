@@ -60,22 +60,22 @@ describe("E2E: Barrel Import (Directory Import Resolution)", () => {
         });
     });
 
-    describe("Import Path Preservation", () => {
-        it("should preserve directory import path (./domain, not ./domain/index)", async () => {
+    describe("Import Path Normalization", () => {
+        it("should normalize directory import path to explicit NodeNext-safe index.js", async () => {
             await expectFileContains(
                 ctx.getOutputFile("barrel-import", "commands.ts"),
-                ['from "./domain"']
+                ['from "./domain/index.js"']
             );
         });
 
-        it("should not rewrite to explicit index path", async () => {
+        it("should not preserve the extensionless directory import path", async () => {
             const content = await import("fs/promises").then((fs) =>
                 fs.readFile(
                     ctx.getOutputFile("barrel-import", "commands.ts"),
                     "utf-8"
                 )
             );
-            expect(content).not.toContain('from "./domain/index"');
+            expect(content).not.toContain('from "./domain"');
         });
     });
 

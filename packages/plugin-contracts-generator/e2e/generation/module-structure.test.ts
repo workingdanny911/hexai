@@ -82,7 +82,7 @@ describe("E2E: Module Structure", () => {
                     "module-structure",
                     "commands-but-different-filename.ts"
                 ),
-                ['from "./foo.validator"', 'from "./bar.validator"']
+                ['from "./foo.validator.js"', 'from "./bar.validator.js"']
             );
         });
 
@@ -108,7 +108,7 @@ describe("E2E: Module Structure", () => {
                 [
                     "export class FooValidator",
                     "validateFoo(value: string)",
-                    'from "./is-empty"',
+                    'from "./is-empty.js"',
                 ]
             );
         });
@@ -116,7 +116,7 @@ describe("E2E: Module Structure", () => {
         it("should copy bar.validator.ts with function export", async () => {
             await expectFileContains(
                 ctx.getOutputFile("module-structure", "bar.validator.ts"),
-                ["export function validateBar", 'from "./is-empty"']
+                ["export function validateBar", 'from "./is-empty.js"']
             );
         });
     });
@@ -145,11 +145,13 @@ describe("E2E: Module Structure", () => {
             );
 
             // Entry point should be exported
-            expect(indexContent).toContain("./commands-but-different-filename");
+            expect(indexContent).toContain(
+                "./commands-but-different-filename.js"
+            );
             // All dependencies should also be exported for type accessibility
-            expect(indexContent).toContain("foo.validator");
-            expect(indexContent).toContain("bar.validator");
-            expect(indexContent).toContain("is-empty");
+            expect(indexContent).toContain("foo.validator.js");
+            expect(indexContent).toContain("bar.validator.js");
+            expect(indexContent).toContain("is-empty.js");
         });
 
         it("should produce sorted exports for deterministic output", async () => {

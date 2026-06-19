@@ -11,12 +11,14 @@ import type {
     ContractMarkerNames,
     DecoratorNames,
     EntryStrategy,
+    OutputModuleSpecifiers,
     ResponseNamingConvention,
     TrustedDecoratorSources,
 } from "./domain/index.js";
 import {
     isEntryStrategy,
     isMessageContractKind,
+    isOutputModuleSpecifiers,
     mergeContractMarkerNames,
     mergeDecoratorNames,
 } from "./domain/index.js";
@@ -34,6 +36,7 @@ export interface ContractsConfig {
     readonly contractMarkerNames: Required<ContractMarkerNames>;
     readonly trustedDecoratorSources?: TrustedDecoratorSources;
     readonly entryStrategy?: EntryStrategy;
+    readonly outputModuleSpecifiers: OutputModuleSpecifiers;
     readonly responseNamingConventions?: readonly ResponseNamingConvention[];
     readonly removeDecorators?: boolean;
 }
@@ -48,6 +51,7 @@ interface ApplicationConfig {
         contractMarkerNames?: ContractMarkerNames;
         trustedDecoratorSources?: TrustedDecoratorSources;
         entryStrategy?: EntryStrategy;
+        outputModuleSpecifiers?: OutputModuleSpecifiers;
         responseNamingConventions?: ResponseNamingConvention[];
         removeDecorators?: boolean;
     };
@@ -70,6 +74,23 @@ export function validateEntryStrategy(
 
     throw new ConfigLoadError(
         `Invalid contracts.entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
+    );
+}
+
+export function validateOutputModuleSpecifiers(
+    outputModuleSpecifiers: OutputModuleSpecifiers | undefined,
+    path = "contracts.outputModuleSpecifiers"
+): OutputModuleSpecifiers {
+    if (outputModuleSpecifiers === undefined) {
+        return "js";
+    }
+
+    if (isOutputModuleSpecifiers(outputModuleSpecifiers)) {
+        return outputModuleSpecifiers;
+    }
+
+    throw new ConfigLoadError(
+        `Invalid ${path}: "${String(outputModuleSpecifiers)}". Expected "js" or "extensionless".`
     );
 }
 
@@ -123,6 +144,14 @@ export function validateContractOutputs(
             path: output.path,
             select: validateOutputSelect(output.select, index),
             registry: output.registry,
+            ...(output.outputModuleSpecifiers === undefined
+                ? {}
+                : {
+                    outputModuleSpecifiers: validateOutputModuleSpecifiers(
+                        output.outputModuleSpecifiers,
+                        `contracts.outputs[${index}].outputModuleSpecifiers`
+                    ),
+                }),
         };
     });
 }
@@ -340,6 +369,9 @@ export class ConfigLoader {
                 contracts.trustedDecoratorSources
             ),
             entryStrategy,
+            outputModuleSpecifiers: validateOutputModuleSpecifiers(
+                contracts.outputModuleSpecifiers
+            ),
             responseNamingConventions: contracts.responseNamingConventions,
             removeDecorators: contracts.removeDecorators ?? true,
         };

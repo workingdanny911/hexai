@@ -55,7 +55,7 @@ describe("E2E: tsconfig.json Path Alias Resolution", () => {
             );
 
             expect(commandsContent).not.toContain('from "@/decorators"');
-            expect(commandsContent).toContain('from "./decorators/index"');
+            expect(commandsContent).toContain('from "./decorators/index.js"');
         });
 
         it("should transform @/decorators to relative path in events.ts", async () => {
@@ -65,7 +65,7 @@ describe("E2E: tsconfig.json Path Alias Resolution", () => {
             );
 
             expect(eventsContent).not.toContain('from "@/decorators"');
-            expect(eventsContent).toContain('from "./decorators/index"');
+            expect(eventsContent).toContain('from "./decorators/index.js"');
         });
     });
 
