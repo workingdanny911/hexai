@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.5] - 2026-06-19
+
+### Changed
+
+- Peer dependency: `typescript` `^5.0.0` → `^5.0.0 || ^6.0.0` (allow TypeScript 6 consumers)
+
 ## [0.2.4] - 2026-03-07
 
 ### Changed
