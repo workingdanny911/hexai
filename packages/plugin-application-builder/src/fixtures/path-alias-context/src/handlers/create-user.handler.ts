@@ -1,5 +1,5 @@
 import { CommandHandlerMarker } from "@hexaijs/plugin-application-builder";
-import { CreateUserCommand } from "@/commands/create-user/request";
+import { CreateUserCommand } from "@app/commands/create-user/request.js";
 
 @CommandHandlerMarker(CreateUserCommand)
 export class CreateUserHandler {

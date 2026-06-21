@@ -1,9 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
+
 import { glob } from "glob";
-import { BuildPluginConfig } from "./config.js";
+
 import { HandlerMetadataExtractor } from "./metadata-extractor.js";
 import { ApplicationCodeGenerator } from "./code-generator.js";
+
+import type { BuildPluginConfig } from "./config.js";
 
 /**
  * Orchestrates the application builder generation process
@@ -18,7 +21,10 @@ export class ApplicationBuilderGenerator {
     ) {
         this.metadataExtractor = new HandlerMetadataExtractor(
             contextPath,
-            config.outputFile
+            config.outputFile,
+            {
+                outputModuleSpecifiers: config.outputModuleSpecifiers,
+            }
         );
         this.codeGenerator = new ApplicationCodeGenerator(config);
     }

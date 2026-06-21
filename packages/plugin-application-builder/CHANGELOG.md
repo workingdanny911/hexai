@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0] - 2026-06-22
+
+### Added
+
+- Added `outputModuleSpecifiers` configuration for generated relative imports, with `"js"` as the default and `"extensionless"` as the legacy opt-out.
+- Added CLI, programmatic API, and Hexai CLI plugin overrides for generated module specifier style.
+
+### Changed
+
+- Generated relative imports now default to explicit `.js` extensions for NodeNext and ESM runtime compatibility.
+
+### Fixed
+
+- Fixed generated ApplicationBuilder output for NodeNext projects by producing runtime-valid relative import specifiers.
+
 ## [0.2.5] - 2026-06-19
 
 ### Changed

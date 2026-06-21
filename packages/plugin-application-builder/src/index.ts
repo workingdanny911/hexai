@@ -1,4 +1,12 @@
 export { generateApplicationBuilder } from "./main.js";
+export { BuildPluginConfig } from "./config.js";
+export type {
+    GenerateApplicationBuilderOptions,
+} from "./main.js";
+export type {
+    OutputModuleSpecifiers,
+    RawBuildPluginConfig,
+} from "./config.js";
 export {
     CommandHandlerMarker,
     EventHandlerMarker,

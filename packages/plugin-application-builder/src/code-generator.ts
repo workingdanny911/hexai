@@ -5,6 +5,11 @@ import {
     DuplicateQueryHandlerError,
 } from "./errors.js";
 import {
+    formatRelativeModuleSpecifier,
+    isRelativeModuleSpecifier,
+} from "./module-specifier.js";
+
+import type {
     HandlerMetadata,
     CommandHandlerMetadata,
     EventHandlerMetadata,
@@ -146,7 +151,7 @@ export class ApplicationCodeGenerator {
         imports.add(
             this.createImportStatement(
                 "ApplicationBuilder",
-                this.config.applicationBuilderImportPath
+                this.formatApplicationBuilderImportPath()
             )
         );
 
@@ -178,6 +183,19 @@ export class ApplicationCodeGenerator {
         }
 
         return imports;
+    }
+
+    private formatApplicationBuilderImportPath(): string {
+        if (
+            !isRelativeModuleSpecifier(this.config.applicationBuilderImportPath)
+        ) {
+            return this.config.applicationBuilderImportPath;
+        }
+
+        return formatRelativeModuleSpecifier(
+            this.config.applicationBuilderImportPath,
+            this.config.outputModuleSpecifiers
+        );
     }
 
     private generateRegistrations(handlers: HandlerMetadata[]): string[] {

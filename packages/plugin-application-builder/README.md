@@ -23,7 +23,7 @@ npm install @hexaijs/plugin-application-builder
 **Peer dependencies:**
 - `@hexaijs/core`
 - `@hexaijs/application`
-- `typescript ^5.0.0`
+- `typescript ^5.0.0 || ^6.0.0`
 
 ## Core Concepts
 
@@ -114,10 +114,10 @@ export class SendOrderConfirmationEmail extends BaseEventHandler<OrderApplicatio
 
 ### Configuration
 
-Create an `application.config.ts` file in your package root:
+Create a `hexai.config.ts` file in each bounded context root:
 
 ```typescript
-import { RawBuildPluginConfig } from "@hexaijs/plugin-application-builder";
+import type { RawBuildPluginConfig } from "@hexaijs/plugin-application-builder";
 
 const config: RawBuildPluginConfig = {
     // Glob patterns to find handler files
@@ -131,7 +131,10 @@ const config: RawBuildPluginConfig = {
     applicationBuilderImportPath: "@/application-builder",
 
     // Output file path (optional, defaults to "src/.generated/application-builder.ts")
-    outputFile: "src/.generated/application-builder.ts"
+    outputFile: "src/.generated/application-builder.ts",
+
+    // Relative generated import style (optional, defaults to "js")
+    outputModuleSpecifiers: "js"
 };
 
 export default config;
@@ -142,6 +145,9 @@ export default config;
 | `handlers` | Yes | - | Glob patterns for files containing decorated handlers |
 | `applicationBuilderImportPath` | Yes | - | Import path for your `ApplicationBuilder` class |
 | `outputFile` | No | `src/.generated/application-builder.ts` | Where to write the generated code |
+| `outputModuleSpecifiers` | No | `"js"` | Relative generated import style: `"js"` emits explicit `.js` extensions; `"extensionless"` keeps the legacy extensionless output |
+
+The default `"js"` output matches NodeNext and ESM runtime resolution by emitting relative imports such as `../commands/create-order/handler.js`. Set `outputModuleSpecifiers: "extensionless"` only when a legacy bundler pipeline still expects extensionless generated imports.
 
 ### Code Generation
 
@@ -151,10 +157,16 @@ Run the generator using the CLI:
 npx generate-app-builder
 ```
 
-Or specify a custom path:
+Or specify a context path:
 
 ```bash
 npx generate-app-builder --context-path ./packages/my-bounded-context
+```
+
+Use `--output-module-specifiers=extensionless` as a CLI opt-out for legacy generated output:
+
+```bash
+npx generate-app-builder --context-path ./packages/my-bounded-context --output-module-specifiers=extensionless
 ```
 
 The generator produces a file like:
@@ -162,11 +174,11 @@ The generator produces a file like:
 ```typescript
 // src/.generated/application-builder.ts (auto-generated)
 import { ApplicationBuilder } from '@/application-builder';
-import { CreateOrderHandler } from '../commands/create-order/handler';
-import { CreateOrderRequest } from '../commands/create-order/request';
-import { GetOrderHandler } from '../queries/get-order/handler';
-import { GetOrderQuery } from '../queries/get-order/query';
-import { HandleOrderPlaced } from '../event-handlers/handle-order-placed';
+import { CreateOrderHandler } from '../commands/create-order/handler.js';
+import { CreateOrderRequest } from '../commands/create-order/request.js';
+import { GetOrderHandler } from '../queries/get-order/handler.js';
+import { GetOrderQuery } from '../queries/get-order/query.js';
+import { HandleOrderPlaced } from '../event-handlers/handle-order-placed.js';
 
 export function createApplicationBuilder(): ApplicationBuilder {
   return new ApplicationBuilder()
@@ -184,9 +196,46 @@ For custom build scripts, use the `generateApplicationBuilder` function:
 import { generateApplicationBuilder } from "@hexaijs/plugin-application-builder";
 
 await generateApplicationBuilder("./packages/order", {
-    configFile: "application.config.ts"  // optional
+    configFile: "hexai.config.ts",
+    outputModuleSpecifiers: "js"
 });
 ```
+
+Both options are optional. `configFile` defaults to `"hexai.config.ts"`, and `outputModuleSpecifiers` defaults to the context config value or `"js"`. Pass `"extensionless"` for legacy generated imports.
+
+### Hexai CLI Plugin
+
+Register the plugin with `@hexaijs/cli` when you want to run it through the unified `hexai` command:
+
+```typescript
+import type { HexaiConfig } from "@hexaijs/cli";
+
+export default {
+    plugins: [
+        {
+            plugin: "@hexaijs/plugin-application-builder",
+            config: {
+                configFile: "hexai.config.ts",
+                outputModuleSpecifiers: "js"
+            }
+        }
+    ]
+} satisfies HexaiConfig;
+```
+
+Run generation for a bounded context:
+
+```bash
+hexai generate-app-builder --context-path packages/order
+```
+
+The Hexai CLI plugin also accepts `--config-file <name>` and `--output-module-specifiers <js|extensionless>`:
+
+```bash
+hexai generate-app-builder --context-path packages/order --output-module-specifiers extensionless
+```
+
+For `outputModuleSpecifiers`, command-line options override plugin config, plugin config overrides the bounded context config, and the final default is `"js"`.
 
 ## Usage
 
@@ -210,7 +259,7 @@ This ensures the generated file is always up-to-date before compilation.
 Import and use the generated function in your application setup:
 
 ```typescript
-import { createApplicationBuilder } from "./.generated/application-builder";
+import { createApplicationBuilder } from "./.generated/application-builder.js";
 
 // The generated builder has all handlers registered
 const builder = createApplicationBuilder();

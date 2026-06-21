@@ -1,13 +1,29 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as ts from "typescript";
+
 import {
+    DEFAULT_OUTPUT_MODULE_SPECIFIERS,
+    type OutputModuleSpecifiers,
+} from "./config.js";
+import { MessageClassNotFoundError } from "./errors.js";
+import {
+    formatRelativePathFromFile,
+    getTypeScriptSourceFileCandidates,
+    isRelativeModuleSpecifier,
+} from "./module-specifier.js";
+
+import type {
     HandlerMetadata,
     CommandHandlerMetadata,
     EventHandlerMetadata,
     QueryHandlerMetadata,
 } from "./types.js";
-import { MessageClassNotFoundError } from "./errors.js";
+
+interface TSConfigCompilerOptions {
+    baseUrl?: string;
+    paths?: Record<string, string[]>;
+}
 
 /**
  * Extracts handler metadata from TypeScript files using AST parsing
@@ -16,10 +32,14 @@ export class HandlerMetadataExtractor {
     private config: {
         commandHandlerDecorator: string;
         eventHandlerDecorator: string;
+        outputModuleSpecifiers: OutputModuleSpecifiers;
     } = {
         commandHandlerDecorator: "CommandHandlerMarker",
         eventHandlerDecorator: "EventHandlerMarker",
+        outputModuleSpecifiers: DEFAULT_OUTPUT_MODULE_SPECIFIERS,
     };
+
+    private compilerOptions: TSConfigCompilerOptions | null | undefined;
 
     constructor(
         private contextPath: string,
@@ -27,6 +47,7 @@ export class HandlerMetadataExtractor {
         config: {
             commandHandlerDecorator?: string;
             eventHandlerDecorator?: string;
+            outputModuleSpecifiers?: OutputModuleSpecifiers;
         } = {}
     ) {
         if (config.commandHandlerDecorator) {
@@ -35,6 +56,9 @@ export class HandlerMetadataExtractor {
         }
         if (config.eventHandlerDecorator) {
             this.config.eventHandlerDecorator = config.eventHandlerDecorator;
+        }
+        if (config.outputModuleSpecifiers) {
+            this.config.outputModuleSpecifiers = config.outputModuleSpecifiers;
         }
     }
 
@@ -134,11 +158,9 @@ export class HandlerMetadataExtractor {
         let resolvedMessageClassName = messageClassName;
 
         if (messageImport) {
-            const handlerDir = path.dirname(filePath);
-            const resolvedImportPath = this.resolvePathAlias(messageImport.path);
-            const messageAbsolutePath = path.resolve(
-                handlerDir,
-                resolvedImportPath + ".ts"
+            const messageAbsolutePath = this.resolveImportedSourceFile(
+                messageImport.path,
+                filePath
             );
             messagePath = this.toRelativeImport(messageAbsolutePath);
             resolvedMessageClassName = messageImport.symbol;
@@ -267,14 +289,12 @@ export class HandlerMetadataExtractor {
             this.contextPath,
             this.outputFile
         );
-        const outputDir = path.dirname(outputFileAbsolutePath);
 
-        const relative = path.relative(outputDir, absolutePath);
-        const withoutExtension = relative.replace(/\.ts$/, "");
-        // Ensure relative path has proper prefix
-        return withoutExtension.startsWith(".")
-            ? withoutExtension
-            : "./" + withoutExtension;
+        return formatRelativePathFromFile(
+            outputFileAbsolutePath,
+            absolutePath,
+            this.config.outputModuleSpecifiers
+        );
     }
 
     private parseObjectLiteral(node: ts.Node): Record<string, any> {
@@ -304,25 +324,106 @@ export class HandlerMetadataExtractor {
         return result;
     }
 
-    private resolvePathAlias(importPath: string): string {
-        const tsconfigPath = path.join(this.contextPath, "tsconfig.json");
-        if (!fs.existsSync(tsconfigPath)) return importPath;
+    private resolveImportedSourceFile(
+        importPath: string,
+        importerFilePath: string
+    ): string {
+        const candidateBasePaths = this.resolveImportBasePaths(
+            importPath,
+            importerFilePath
+        );
+        const sourceFileCandidates = candidateBasePaths.flatMap((candidate) =>
+            getTypeScriptSourceFileCandidates(candidate)
+        );
 
-        const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf-8"));
-        const paths = tsconfig.compilerOptions?.paths;
-        const baseUrl = tsconfig.compilerOptions?.baseUrl || ".";
+        return (
+            sourceFileCandidates.find((candidate) => fs.existsSync(candidate)) ??
+            sourceFileCandidates[0]
+        );
+    }
 
-        if (!paths) return importPath;
+    private resolveImportBasePaths(
+        importPath: string,
+        importerFilePath: string
+    ): string[] {
+        if (isRelativeModuleSpecifier(importPath)) {
+            return [path.resolve(path.dirname(importerFilePath), importPath)];
+        }
 
-        for (const [alias, targets] of Object.entries(paths)) {
-            const aliasPrefix = alias.replace("/*", "");
-            if (importPath.startsWith(aliasPrefix)) {
-                const targetBase = (targets as string[])[0].replace("/*", "");
-                const resolvedBase = path.join(this.contextPath, baseUrl, targetBase);
-                return importPath.replace(aliasPrefix, resolvedBase);
+        const aliasPaths = this.resolvePathAlias(importPath);
+        if (aliasPaths.length > 0) {
+            return aliasPaths;
+        }
+
+        return [path.resolve(path.dirname(importerFilePath), importPath)];
+    }
+
+    private resolvePathAlias(importPath: string): string[] {
+        const compilerOptions = this.getCompilerOptions();
+        if (!compilerOptions?.paths) {
+            return [];
+        }
+
+        const baseUrl = compilerOptions.baseUrl ?? ".";
+        const resolvedPaths: string[] = [];
+
+        for (const [aliasPattern, targets] of Object.entries(
+            compilerOptions.paths
+        )) {
+            const captures = matchPathPattern(aliasPattern, importPath);
+            if (!captures) {
+                continue;
+            }
+
+            for (const targetPattern of targets) {
+                const resolvedTarget = applyPathPattern(targetPattern, captures);
+                resolvedPaths.push(
+                    path.resolve(this.contextPath, baseUrl, resolvedTarget)
+                );
             }
         }
 
-        return importPath;
+        return resolvedPaths;
     }
+
+    private getCompilerOptions(): TSConfigCompilerOptions | null {
+        if (this.compilerOptions !== undefined) {
+            return this.compilerOptions;
+        }
+
+        const tsconfigPath = path.join(this.contextPath, "tsconfig.json");
+        if (!fs.existsSync(tsconfigPath)) {
+            this.compilerOptions = null;
+            return this.compilerOptions;
+        }
+
+        const tsconfig = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+        if (tsconfig.error) {
+            this.compilerOptions = null;
+            return this.compilerOptions;
+        }
+
+        this.compilerOptions =
+            (tsconfig.config.compilerOptions as TSConfigCompilerOptions | undefined) ??
+            null;
+
+        return this.compilerOptions;
+    }
+}
+
+function matchPathPattern(pattern: string, moduleSpecifier: string): string[] | null {
+    const parts = pattern.split("*").map(escapeRegExp);
+    const regex = new RegExp(`^${parts.join("(.+)")}$`);
+    const match = regex.exec(moduleSpecifier);
+
+    return match ? match.slice(1) : null;
+}
+
+function applyPathPattern(pattern: string, captures: string[]): string {
+    let index = 0;
+    return pattern.replace(/\*/g, () => captures[index++] ?? "");
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

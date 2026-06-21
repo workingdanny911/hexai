@@ -1,5 +1,9 @@
-import { describe, expect, test } from "vitest";
+import * as path from "node:path";
+
 import { ApplicationBuilder } from "@hexaijs/application";
+import * as ts from "typescript";
+import { describe, expect, test } from "vitest";
+
 import { makeContext, useContext } from "./test.js";
 
 describe.sequential("Build Plugin - Application Builder Generation", () => {
@@ -9,6 +13,7 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
     const pathAliasContext = useContext("path-alias-context");
     const queryHandlerContext = useContext("query-handler-context");
     const sameFileContext = useContext("same-file-context");
+    const nodeNextContext = useContext("nodenext-context");
 
     test("generates builder file from decorated handlers", async () => {
         await sampleContext.generate();
@@ -38,8 +43,8 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
             await sampleContext.generate();
 
             sampleContext.expectOutputFileToContain(
-                `import { ${handlerClass} } from '../${handlerFile}'`,
-                `import { ${commandClass} } from '../${commandFile}'`,
+                `import { ${handlerClass} } from '../${handlerFile}.js'`,
+                `import { ${commandClass} } from '../${commandFile}.js'`,
                 `.withCommandHandler(${commandClass}, () => new ${handlerClass}())`
             );
         }
@@ -49,7 +54,7 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
         await sampleContext.generate();
 
         sampleContext.expectOutputFileToContain(
-            "import { UserCreatedEventHandler } from '../user-created.handler'",
+            "import { UserCreatedEventHandler } from '../user-created.handler.js'",
             ".withEventHandler(() => new UserCreatedEventHandler(), 'user-created')"
         );
     });
@@ -72,7 +77,7 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
 
         orderContext.expectOutputFileToContain(
             "export function createApplicationBuilder()",
-            "import { CreateOrderHandler } from '../create-order.handler'",
+            "import { CreateOrderHandler } from '../create-order.handler.js'",
             ".withCommandHandler(CreateOrderCommand, () => new CreateOrderHandler())"
         );
     });
@@ -104,6 +109,11 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
             "message class is not imported and not defined in file",
             /Cannot find "NonExistentCommand" - not imported and not defined in/,
         ],
+        [
+            "invalid-output-module-specifiers-context",
+            "output module specifier style is invalid",
+            /Invalid outputModuleSpecifiers: "cjs". Expected "js" or "extensionless"./,
+        ],
     ])(
         "throws error when %s (%s)",
         async (contextName, _description, expectedError) => {
@@ -129,11 +139,11 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
         await pathAliasContext.generate();
 
         pathAliasContext.expectOutputFileToContain(
-            "import { CreateUserHandler } from '../handlers/create-user.handler'",
-            "import { CreateUserCommand } from '../commands/create-user/request'",
+            "import { CreateUserHandler } from '../handlers/create-user.handler.js'",
+            "import { CreateUserCommand } from '../commands/create-user/request.js'",
             ".withCommandHandler(CreateUserCommand, () => new CreateUserHandler())"
         );
-        pathAliasContext.expectOutputFileNotToContain("@/");
+        pathAliasContext.expectOutputFileNotToContain("@app/");
     });
 
     // Query Handler Tests - verify @QueryHandlerMarker decorator support
@@ -142,8 +152,8 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
         await queryHandlerContext.generate();
 
         queryHandlerContext.expectOutputFileToContain(
-            "import { GetUserHandler } from '../get-user.handler'",
-            "import { GetUserQuery } from '../get-user.query'",
+            "import { GetUserHandler } from '../get-user.handler.js'",
+            "import { GetUserQuery } from '../get-user.query.js'",
             ".withQueryHandler(GetUserQuery, () => new GetUserHandler())"
         );
     });
@@ -152,9 +162,68 @@ describe.sequential("Build Plugin - Application Builder Generation", () => {
         await sameFileContext.generate();
 
         sameFileContext.expectOutputFileToContain(
-            "import { CreateUserHandler } from '../create-user.handler'",
-            "import { CreateUserCommand } from '../create-user.handler'",
+            "import { CreateUserHandler } from '../create-user.handler.js'",
+            "import { CreateUserCommand } from '../create-user.handler.js'",
             ".withCommandHandler(CreateUserCommand, () => new CreateUserHandler())"
         );
     });
+
+    test("supports extensionless generated imports through programmatic opt-out", async () => {
+        await sampleContext.generate({
+            outputModuleSpecifiers: "extensionless",
+        });
+
+        sampleContext.expectOutputFileToContain(
+            "import { CreateUserHandler } from '../create-user.handler'",
+            "import { CreateUserCommand } from '../create-user.command'"
+        );
+        sampleContext.expectOutputFileNotToContain(
+            "import { CreateUserHandler } from '../create-user.handler.js'",
+            "import { CreateUserCommand } from '../create-user.command.js'"
+        );
+    });
+
+    test("generates imports that compile under TypeScript NodeNext", async () => {
+        await nodeNextContext.generate();
+
+        nodeNextContext.expectOutputFileToContain(
+            "import { ApplicationBuilder } from '../application-builder.js'",
+            "import { CreateUserHandler } from '../create-user.handler.js'",
+            "import { CreateUserCommand } from '../create-user.command.js'"
+        );
+
+        const diagnostics = compileTypeScriptProject(
+            path.join(nodeNextContext.path, "tsconfig.json")
+        );
+
+        expect(formatDiagnostics(diagnostics)).toBe("");
+    });
 });
+
+function compileTypeScriptProject(tsconfigPath: string): readonly ts.Diagnostic[] {
+    const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+    if (configFile.error) {
+        return [configFile.error];
+    }
+
+    const parsedConfig = ts.parseJsonConfigFileContent(
+        configFile.config,
+        ts.sys,
+        path.dirname(tsconfigPath)
+    );
+    const program = ts.createProgram(parsedConfig.fileNames, parsedConfig.options);
+
+    return [...parsedConfig.errors, ...ts.getPreEmitDiagnostics(program)];
+}
+
+function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]): string {
+    if (diagnostics.length === 0) {
+        return "";
+    }
+
+    return ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+        getCanonicalFileName: (fileName) => fileName,
+        getCurrentDirectory: ts.sys.getCurrentDirectory,
+        getNewLine: () => ts.sys.newLine,
+    });
+}

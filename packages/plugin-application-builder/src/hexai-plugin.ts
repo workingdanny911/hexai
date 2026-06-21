@@ -1,6 +1,10 @@
-import type { HexaiCliPlugin, CliOption } from "@hexaijs/cli";
 import * as path from "path";
+
+import { validateOutputModuleSpecifiers } from "./config.js";
 import { generateApplicationBuilder } from "./index.js";
+
+import type { CliOption, HexaiCliPlugin } from "@hexaijs/cli";
+import type { OutputModuleSpecifiers } from "./config.js";
 
 /**
  * Configuration for the application-builder plugin.
@@ -13,6 +17,11 @@ export interface ApplicationBuilderPluginConfig {
      * Defaults to "hexai.config.ts".
      */
     configFile?: string;
+    /**
+     * Controls relative module specifiers in generated imports.
+     * Defaults to "js".
+     */
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
 /**
@@ -43,6 +52,11 @@ export const cliPlugin: HexaiCliPlugin<ApplicationBuilderPluginConfig> = {
             flags: "-f, --config-file <name>",
             description: "Config file name to use (default: hexai.config.ts)",
         },
+        {
+            flags: "--output-module-specifiers <style>",
+            description:
+                'Generated relative import style: "js" or "extensionless" (default: js)',
+        },
     ] satisfies CliOption[],
     run: async (
         args: Record<string, unknown>,
@@ -55,13 +69,42 @@ export const cliPlugin: HexaiCliPlugin<ApplicationBuilderPluginConfig> = {
             args.configFile !== undefined
                 ? String(args.configFile)
                 : config.configFile;
+        const outputModuleSpecifiers =
+            args.outputModuleSpecifiers !== undefined
+                ? parseOutputModuleSpecifiers(
+                      String(args.outputModuleSpecifiers),
+                      "--output-module-specifiers"
+                  )
+                : parseOptionalOutputModuleSpecifiers(
+                      config.outputModuleSpecifiers,
+                      "outputModuleSpecifiers"
+                  );
 
         console.log(`Generating application builder for: ${contextPath}`);
 
         await generateApplicationBuilder(contextPath, {
             configFile,
+            outputModuleSpecifiers,
         });
 
         console.log("✓ Application builder generated successfully");
     },
 };
+
+function parseOutputModuleSpecifiers(
+    value: string,
+    path: string
+): OutputModuleSpecifiers {
+    return validateOutputModuleSpecifiers(value.trim().toLowerCase(), path);
+}
+
+function parseOptionalOutputModuleSpecifiers(
+    value: OutputModuleSpecifiers | undefined,
+    path: string
+): OutputModuleSpecifiers | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return validateOutputModuleSpecifiers(value, path);
+}

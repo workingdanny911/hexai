@@ -1,16 +1,26 @@
 import * as fs from "fs";
 import { createRequire } from "node:module";
+
 import * as ts from "typescript";
-import { BuildPluginConfig, RawBuildPluginConfig } from "./config.js";
+
+import { BuildPluginConfig } from "./config.js";
+
+import type {
+    BuildPluginConfigOverrides,
+    RawBuildPluginConfig,
+} from "./config.js";
 
 const require = createRequire(import.meta.url);
 
-export async function loadConfig(configPath: string): Promise<BuildPluginConfig> {
+export async function loadConfig(
+    configPath: string,
+    overrides: BuildPluginConfigOverrides = {}
+): Promise<BuildPluginConfig> {
     const configSource = fs.readFileSync(configPath, "utf-8");
     const transpiledCode = transpileConfigFile(configSource);
     const moduleExports = evaluateConfigModule(transpiledCode);
     const rawConfig = extractConfigFromModule(moduleExports);
-    return BuildPluginConfig.fromRawConfig(rawConfig);
+    return BuildPluginConfig.fromRawConfig(rawConfig, overrides);
 }
 
 function transpileConfigFile(source: string): string {

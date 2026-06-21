@@ -1,6 +1,14 @@
 import * as path from "path";
+
 import { ApplicationBuilderGenerator } from "./application-builder-generator.js";
 import { loadConfig } from "./config-loader.js";
+
+import type { OutputModuleSpecifiers } from "./config.js";
+
+export interface GenerateApplicationBuilderOptions {
+    configFile?: string;
+    outputModuleSpecifiers?: OutputModuleSpecifiers;
+}
 
 // Re-export types for external use
 export type {
@@ -12,17 +20,14 @@ export { HandlerMetadataExtractor } from "./metadata-extractor.js";
 
 export async function generateApplicationBuilder(
     contextPath: string,
-    options: {
-        configFile?: string;
-    } = {}
+    options: GenerateApplicationBuilderOptions = {}
 ): Promise<void> {
-    let configFile = "hexai.config.ts";
-    if (options.configFile) {
-        configFile = options.configFile;
-    }
+    const configFile = options.configFile ?? "hexai.config.ts";
 
     const configPath = path.join(contextPath, configFile);
-    const config = await loadConfig(configPath);
+    const config = await loadConfig(configPath, {
+        outputModuleSpecifiers: options.outputModuleSpecifiers,
+    });
 
     const generator = new ApplicationBuilderGenerator(contextPath, config);
     await generator.generate();

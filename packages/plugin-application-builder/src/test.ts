@@ -5,6 +5,8 @@ import { beforeEach, expect } from "vitest";
 
 import { generateApplicationBuilder } from "./main.js";
 
+import type { GenerateApplicationBuilderOptions } from "./main.js";
+
 const FIXTURES_DIR = path.join(__dirname, "fixtures");
 const GENERATED_DIR = "src/.generated";
 const OUTPUT_FILENAME = "application-builder.ts";
@@ -14,7 +16,9 @@ export interface TestContext {
     readonly path: string;
     readonly outputDir: string;
     readonly outputFile: string;
-    generate(): Promise<void>;
+    generate(
+        options?: Omit<GenerateApplicationBuilderOptions, "configFile">
+    ): Promise<void>;
     cleanUp(): void;
     isOutputFilePresent(): boolean;
     expectOutputFileToExist(): void;
@@ -40,9 +44,10 @@ export function makeContext(name: string): TestContext {
         path: getContextPath(name),
         outputDir: getOutputDir(getContextPath(name)),
         outputFile: getOutputFile(getContextPath(name)),
-        generate() {
+        generate(options = {}) {
             return generateApplicationBuilder(this.path, {
                 configFile: DEFAULT_CONFIG_FILE,
+                ...options,
             });
         },
         cleanUp() {
