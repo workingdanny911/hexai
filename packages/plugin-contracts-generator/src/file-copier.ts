@@ -11,22 +11,34 @@ import {
     toMessageType,
 } from "./domain/index.js";
 import {
+    DependencySymbolSlicer,
+    findLocalImportTypeModuleSpecifier,
+    type RetainedLocalImport,
+} from "./dependency-symbol-slicer.js";
+import {
     hasStrictOutputSelection,
     isContractSelected,
 } from "./contract-selector.js";
-import { BoundaryViolationError, FileReadError, FileWriteError } from "./errors.js";
+import {
+    BoundaryViolationError,
+    FileReadError,
+    FileWriteError,
+    UnsafeDependencySliceError,
+} from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
 import {
     DEFAULT_OUTPUT_MODULE_SPECIFIERS,
     formatRelativePathFromFile,
     formatRelativeTypeScriptFileSpecifier,
 } from "./module-specifier.js";
+import { extractImportBindings } from "./import-analyzer.js";
 
 import type {
     ContractMarkerMetadata,
     ContractMarkerNames,
     ContractOutputSelect,
     DecoratorNames,
+    DependencyStrategy,
     EntryStrategy,
     MessageContractKind,
     MessageType,
@@ -57,6 +69,7 @@ export interface CopyOptions {
     trustedDecoratorSources?: TrustedDecoratorSources;
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
+    dependencyStrategy?: DependencyStrategy;
     select?: ContractOutputSelect;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
@@ -138,13 +151,14 @@ export class FileCopier {
             trustedDecoratorSources,
             includePublicContracts,
             entryStrategy = "graph",
+            dependencyStrategy = "file",
             select,
             outputModuleSpecifiers = DEFAULT_OUTPUT_MODULE_SPECIFIERS,
         } = options;
         const copiedFiles: string[] = [];
         const rewrittenImports = new Map<string, string[]>();
 
-        const { entryContents, usedLocalImports } =
+        const { entryContents, usedLocalImports, retainedLocalImports } =
             await this.preprocessEntryFiles(
                 fileGraph,
                 entryStrategy,
@@ -155,11 +169,24 @@ export class FileCopier {
                 includePublicContracts,
                 responseTypesToInclude,
                 sourceRoot,
+                dependencyStrategy,
                 select
             );
 
+        let slicedDependencyContents: ReadonlyMap<string, string> | undefined;
         if (entryStrategy === "symbols") {
-            this.expandTransitiveDependencies(usedLocalImports, fileGraph);
+            if (dependencyStrategy === "safe-symbols") {
+                slicedDependencyContents = (
+                    await new DependencySymbolSlicer({
+                        fileSystem: this.fs,
+                    }).slice({
+                        fileGraph,
+                        retainedLocalImports,
+                    })
+                ).contents;
+            } else {
+                this.expandTransitiveDependencies(usedLocalImports, fileGraph);
+            }
         }
 
         for (const node of fileGraph.nodes.values()) {
@@ -167,7 +194,8 @@ export class FileCopier {
                 node,
                 entryContents,
                 usedLocalImports,
-                entryStrategy
+                entryStrategy,
+                slicedDependencyContents
             );
 
             if (content === null) {
@@ -513,16 +541,19 @@ export class FileCopier {
         includePublicContracts: boolean | undefined,
         responseTypesToInclude: Map<string, string[]> | undefined,
         sourceRoot: string,
+        dependencyStrategy: DependencyStrategy,
         select: ContractOutputSelect | undefined
     ): Promise<{
         entryContents: Map<string, string>;
         usedLocalImports: Set<string>;
+        retainedLocalImports: RetainedLocalImport[];
     }> {
         const entryContents = new Map<string, string>();
         const usedLocalImports = new Set<string>();
+        const retainedLocalImports: RetainedLocalImport[] = [];
 
         if (entryStrategy !== "symbols") {
-            return { entryContents, usedLocalImports };
+            return { entryContents, usedLocalImports, retainedLocalImports };
         }
 
         const extractionMessageTypes =
@@ -566,6 +597,11 @@ export class FileCopier {
                     responseTypesToInclude?.get(node.absolutePath),
                     select
                 );
+            this.assertSafeSymbolsEntryContent(
+                extractedContent,
+                node.absolutePath,
+                dependencyStrategy
+            );
             entryContents.set(node.absolutePath, extractedContent);
 
             for (const specifier of usedModuleSpecifiers) {
@@ -576,9 +612,100 @@ export class FileCopier {
                     usedLocalImports.add(importInfo.resolvedPath);
                 }
             }
+
+            const retainedImports = this.collectRetainedLocalImports(
+                node,
+                extractedContent,
+                fileGraph.entryPoints
+            );
+            retainedLocalImports.push(...retainedImports);
         }
 
-        return { entryContents, usedLocalImports };
+        return { entryContents, usedLocalImports, retainedLocalImports };
+    }
+
+    private assertSafeSymbolsEntryContent(
+        content: string,
+        filePath: string,
+        dependencyStrategy: DependencyStrategy
+    ): void {
+        if (dependencyStrategy !== "safe-symbols") {
+            return;
+        }
+
+        const sourceFile = ts.createSourceFile(
+            filePath,
+            content,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.TS
+        );
+        const localImportType = findLocalImportTypeModuleSpecifier(sourceFile);
+
+        if (localImportType) {
+            throw new UnsafeDependencySliceError(
+                filePath,
+                `local import type: ${localImportType}`
+            );
+        }
+    }
+
+    private collectRetainedLocalImports(
+        node: FileNode,
+        content: string,
+        entryPoints: ReadonlySet<string>
+    ): RetainedLocalImport[] {
+        const sourceFile = ts.createSourceFile(
+            node.absolutePath,
+            content,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.TS
+        );
+        const retainedImports = new Map<string, RetainedLocalImport>();
+
+        for (const binding of extractImportBindings(sourceFile)) {
+            const importInfo = node.imports.find(
+                (candidate) =>
+                    candidate.moduleSpecifier === binding.moduleSpecifier
+            );
+
+            if (
+                !importInfo?.resolvedPath ||
+                importInfo.isExternal ||
+                entryPoints.has(importInfo.resolvedPath)
+            ) {
+                continue;
+            }
+
+            const existing = retainedImports.get(binding.moduleSpecifier);
+            const importedSymbol = {
+                importedName: binding.importedName,
+                localName: binding.localName,
+                importKind: binding.importKind,
+                isTypeOnly: binding.isTypeOnly,
+            };
+
+            if (existing) {
+                retainedImports.set(binding.moduleSpecifier, {
+                    ...existing,
+                    importedSymbols: [
+                        ...existing.importedSymbols,
+                        importedSymbol,
+                    ],
+                });
+                continue;
+            }
+
+            retainedImports.set(binding.moduleSpecifier, {
+                sourcePath: node.absolutePath,
+                moduleSpecifier: binding.moduleSpecifier,
+                resolvedPath: importInfo.resolvedPath,
+                importedSymbols: [importedSymbol],
+            });
+        }
+
+        return [...retainedImports.values()];
     }
 
     private shouldExtractEntryFile(
@@ -649,7 +776,8 @@ export class FileCopier {
         node: FileNode,
         entryContents: Map<string, string>,
         usedLocalImports: Set<string>,
-        entryStrategy: EntryStrategy
+        entryStrategy: EntryStrategy,
+        slicedDependencyContents: ReadonlyMap<string, string> | undefined
     ): Promise<string | null> {
         const entryContent = entryContents.get(node.absolutePath);
         if (node.isEntryPoint && entryContent !== undefined) {
@@ -665,6 +793,10 @@ export class FileCopier {
 
         const isUnusedDependency =
             entryStrategy === "symbols" && !usedLocalImports.has(node.absolutePath);
+
+        if (entryStrategy === "symbols" && slicedDependencyContents) {
+            return slicedDependencyContents.get(node.absolutePath) ?? null;
+        }
 
         if (isUnusedDependency) {
             return null;

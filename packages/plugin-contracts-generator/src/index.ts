@@ -44,6 +44,7 @@ export type {
     ContractOutputInclude,
     ContractOutputSelect,
     ContractOutputTagSelect,
+    DependencyStrategy,
     EntryStrategy,
     OutputModuleSpecifiers,
     Message,
@@ -113,6 +114,7 @@ export { ConfigLoader, resolveContextEntries, type ContractsConfig } from "./con
 export {
     MessageParserError,
     BoundaryViolationError,
+    UnsafeDependencySliceError,
     ConfigurationError,
     ConfigLoadError,
     FileSystemError,
@@ -164,6 +166,7 @@ import { ContextConfig } from "./context-config.js";
 import type {
     ContractMarkerNames,
     DecoratorNames,
+    DependencyStrategy,
     EntryStrategy,
     MessageType,
     OutputModuleSpecifiers,
@@ -186,6 +189,7 @@ export interface ProcessContextOptions {
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
+    dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     fileSystem?: FileSystem;
     logger?: Logger;
@@ -217,6 +221,7 @@ export async function processContext(
         messageTypes,
         includePublicContracts,
         entryStrategy,
+        dependencyStrategy,
         outputModuleSpecifiers,
         fileSystem = nodeFileSystem,
         logger = noopLogger,
@@ -243,6 +248,7 @@ export async function processContext(
         messageTypes,
         includePublicContracts,
         entryStrategy,
+        dependencyStrategy,
         outputModuleSpecifiers,
         fileSystem,
         logger,

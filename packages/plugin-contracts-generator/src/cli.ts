@@ -9,6 +9,7 @@ import {
     type ContractsConfig,
     resolveContextEntries,
     validateContractOutputs,
+    validateDependencyStrategy,
     validateEntryStrategy,
     validateOutputModuleSpecifiers,
     validateTrustedDecoratorSources,
@@ -24,6 +25,7 @@ import type {
     ContractOutputConfig,
     ContractOutputSelect,
     DecoratorNames,
+    DependencyStrategy,
     EntryStrategy,
     MessageType,
     OutputModuleSpecifiers,
@@ -59,6 +61,11 @@ const CLI_OPTIONS = {
         long: "--entry-strategy",
         requiresValue: true,
     },
+    dependencyStrategy: {
+        short: null,
+        long: "--dependency-strategy",
+        requiresValue: true,
+    },
     outputModuleSpecifiers: {
         short: null,
         long: "--output-module-specifiers",
@@ -77,6 +84,7 @@ interface CliOptions {
     include?: IncludeMode;
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
+    dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     generateMessageRegistry?: boolean;
     dryRun?: boolean;
@@ -91,6 +99,7 @@ export interface RunWithConfigOptions {
     include?: IncludeMode;
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
+    dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     generateMessageRegistry?: boolean;
     dryRun?: boolean;
@@ -110,6 +119,7 @@ export interface ContractsPluginConfig {
     contractMarkerNames?: ContractMarkerNames;
     trustedDecoratorSources?: TrustedDecoratorSources;
     entryStrategy?: EntryStrategy;
+    dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     responseNamingConventions?: ResponseNamingConvention[];
     removeDecorators?: boolean;
@@ -170,6 +180,13 @@ function parseEntryStrategy(value: string): EntryStrategy {
     }
 
     return strategy as EntryStrategy;
+}
+
+function parseDependencyStrategy(value: string): DependencyStrategy {
+    return validateDependencyStrategy(
+        value.trim().toLowerCase() as DependencyStrategy,
+        "--dependency-strategy"
+    );
 }
 
 function parseOutputModuleSpecifiers(value: string): OutputModuleSpecifiers {
@@ -265,6 +282,10 @@ function parseArgs(args: string[]): CliOptions {
             const { value, nextIndex } = extractOptionValue(args, i, "--entry-strategy");
             options.entryStrategy = parseEntryStrategy(value);
             i = nextIndex;
+        } else if (matchesOption(arg, CLI_OPTIONS.dependencyStrategy)) {
+            const { value, nextIndex } = extractOptionValue(args, i, "--dependency-strategy");
+            options.dependencyStrategy = parseDependencyStrategy(value);
+            i = nextIndex;
         } else if (matchesOption(arg, CLI_OPTIONS.outputModuleSpecifiers)) {
             const { value, nextIndex } = extractOptionValue(
                 args,
@@ -313,6 +334,9 @@ Options:
   -m, --message-types <types>   Alias for --messages
   --entry-strategy <strategy>   Entry copy strategy: graph, symbols
                                 Default: symbols
+  --dependency-strategy <strategy>
+                                Dependency copy strategy: file, safe-symbols
+                                Default: file
   --output-module-specifiers <style>
                                 Generated relative module specifiers: js, extensionless
                                 Default: js
@@ -429,6 +453,9 @@ function logGenerationSettings(
     logger.info(`Include mode: ${options.include ?? "all"}`);
     logger.info(
         `Entry strategy: ${options.entryStrategy ?? config.entryStrategy ?? "symbols"}`
+    );
+    logger.info(
+        `Dependency strategy: ${options.dependencyStrategy ?? config.dependencyStrategy}`
     );
     logger.info(
         `Output module specifiers: ${options.outputModuleSpecifiers ?? config.outputModuleSpecifiers}`
@@ -597,6 +624,8 @@ async function generateContracts(
             messageTypes: scope.messageTypes,
             includePublicContracts: scope.includePublicContracts,
             entryStrategy: options.entryStrategy ?? config.entryStrategy,
+            dependencyStrategy:
+                options.dependencyStrategy ?? config.dependencyStrategy,
             outputModuleSpecifiers,
             logger,
         });
@@ -784,6 +813,9 @@ async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<C
             pluginConfig.trustedDecoratorSources
         ),
         entryStrategy: validateEntryStrategy(pluginConfig.entryStrategy),
+        dependencyStrategy: validateDependencyStrategy(
+            pluginConfig.dependencyStrategy
+        ),
         outputModuleSpecifiers: validateOutputModuleSpecifiers(
             pluginConfig.outputModuleSpecifiers
         ),

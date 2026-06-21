@@ -228,6 +228,10 @@ export default {
         // Entry strategy (optional, default: "symbols")
         entryStrategy: "symbols",
 
+        // Dependency strategy (optional, default: "file")
+        // Use "safe-symbols" only when dependency files must be narrowed too.
+        dependencyStrategy: "file",
+
         // Generated relative import/export specifiers (optional, default: "js")
         // Use "extensionless" only for legacy generated packages.
         outputModuleSpecifiers: "js",
@@ -268,6 +272,7 @@ Each matched directory is treated as a context with sensible defaults:
 | `contexts` | Required context definitions or glob patterns |
 | `outputs` | Optional multi-output plans. Omit for single-output CLI mode with `--output-dir` |
 | `entryStrategy` | `symbols` for strict declaration extraction (default), or `graph` for conservative entry file graph copying |
+| `dependencyStrategy` | `file` to copy retained dependency files whole (default), or `safe-symbols` to slice retained dependency files when statically safe |
 | `outputModuleSpecifiers` | Generated relative module specifier style. Defaults to `"js"` for NodeNext/ESM-safe `.js` imports and exports. Use `"extensionless"` only for legacy generated packages |
 | `removeDecorators` | Removes matched contract decorators from generated output by default |
 | `trustedDecoratorSources` | Additional import sources trusted for canonical `Contract*` decorators |
@@ -394,13 +399,21 @@ The generator handles two types of files differently:
 - In `symbols`, unused named specifiers in retained mixed imports are removed when the AST shape is safe to rewrite, and already-exported local function dependencies are preserved without adding a duplicate `export`
 - Response types are included based on naming conventions
 
-**Dependency files** (imported by entry files) are copied entirely:
+**Dependency files** (imported by entry files) are copied according to `dependencyStrategy`.
+
+The default `dependencyStrategy: "file"` copies retained dependency files entirely:
 - Supports barrel files (`export * from './module'`)
 - Resolves NodeNext-style source imports such as `./shared.js` back to TypeScript files such as `shared.ts`, including type-only dependency files
 - Preserves all exports for transitive dependencies
 - Ensures type dependencies remain intact
 
-`symbols` is still an AST-based slicer, not a full TypeScript TypeChecker semantic slicer. Dependency files referenced by retained local imports are copied as whole files; they are not symbol-sliced. With strict output selectors, the generator fails fast with `BoundaryViolationError` if copying would include a marked declaration outside the selected output. Keep public DTO/value-object dependencies boundary-clean and separate from internal implementation modules.
+`dependencyStrategy: "safe-symbols"` is an opt-in mode for `entryStrategy: "symbols"` that slices retained dependency files to the named top-level declarations actually referenced from selected entry declarations. It recursively follows retained named local imports and preserves local declaration closure, including value declarations referenced by `typeof` type queries.
+
+`safe-symbols` is intentionally conservative. It does not silently fall back to full-file copying. If a dependency module contains constructs whose top-level behavior or emitted shape cannot be proven safe to slice, generation throws `UnsafeDependencySliceError` with the dependency file path and reason. Unsafe cases include side-effect-only imports (`import "./setup"`), dynamic imports, local `import("./x").T` types, export declarations/re-exports, class or member decorators, class static blocks, computed class members, static member initializers, enum initializers, unsafe top-level variable initializers, and other top-level statements with possible side effects. Unsupported retained dependency import shapes such as default or namespace imports also fail fast.
+
+`safe-symbols` only applies when `entryStrategy` is `symbols`. `entryStrategy: "graph"` ignores dependency slicing and keeps conservative full-file graph copy semantics.
+
+`symbols` and `safe-symbols` are AST-based slicers, not full TypeScript TypeChecker semantic slicers. With strict output selectors, the default `file` dependency strategy can still fail fast with `BoundaryViolationError` if copying a whole dependency file would include a marked declaration outside the selected output. Use `safe-symbols` when dependency files must also be narrowed, and keep shared DTO/value-object dependencies side-effect-free.
 
 ### Generated Module Specifiers
 
@@ -426,9 +439,11 @@ npx generate-contracts --output-dir packages/contracts/src
 npx generate-contracts -o packages/contracts/src --config ./app.config.ts
 ```
 
-By default, the CLI uses `--include all`, all message types, and `--entry-strategy symbols`. In single-output mode this generates public `@ContractEvent()`, `@ContractCommand()`, and `@ContractQuery()` message contracts plus marked general `@Contract(...)` declarations as a strict public contract surface. Legacy `Public*` markers are still recognized.
+By default, the CLI uses `--include all`, all message types, `--entry-strategy symbols`, and `--dependency-strategy file`. In single-output mode this generates public `@ContractEvent()`, `@ContractCommand()`, and `@ContractQuery()` message contracts plus marked general `@Contract(...)` declarations as a strict public contract surface while preserving full dependency-file copying. Legacy `Public*` markers are still recognized.
 
 Use `--output-module-specifiers js` for the default NodeNext-safe `.js` generated relative imports and exports, or `--output-module-specifiers extensionless` for legacy generated packages that still require extensionless module specifiers.
+
+Use `--dependency-strategy safe-symbols` to opt into fail-fast dependency symbol slicing when `--entry-strategy symbols` is active. Omit it, or pass `--dependency-strategy file`, to keep the default full dependency-file behavior.
 
 | Option | Description |
 |--------|-------------|
@@ -438,6 +453,8 @@ Use `--output-module-specifiers js` for the default NodeNext-safe `.js` generate
 | `--messages <types>` | Recommended message subtype filter. Accepts comma-separated `event`, `command`, and `query` values |
 | `-m, --message-types <types>` | Legacy alias for `--messages`; kept for backwards compatibility |
 | `--entry-strategy <strategy>` | Entry strategy: `symbols` strictly extracts selected declarations (default); `graph` copies selected entry file graphs |
+| `--dependency-strategy <strategy>` | Dependency strategy: `file` copies retained dependency files whole (default); `safe-symbols` slices safe dependency files and fails on unsafe ones |
+| `--output-module-specifiers <style>` | Generated relative module specifier style: `js` (default) or `extensionless` |
 | `--registry` | Generate the root `MessageRegistry` export |
 | `--generate-message-registry` | Legacy verbose alias for `--registry` |
 | `--dry-run` | Print the planned context extraction and file summary without writing files |
@@ -458,6 +475,7 @@ export default {
             config: {
                 contexts: ["packages/*"],
                 entryStrategy: "symbols",
+                dependencyStrategy: "safe-symbols",
                 contractMarkerNames: { contract: "PublicContract" },
             },
         },
@@ -469,6 +487,7 @@ export default {
 pnpm hexai generate-contracts -o packages/contracts/src --registry
 pnpm hexai generate-contracts -o packages/contracts/src --include messages --messages event,command
 pnpm hexai generate-contracts -o packages/contracts/src --entry-strategy graph
+pnpm hexai generate-contracts -o packages/contracts/src --dependency-strategy safe-symbols
 ```
 
 For configured outputs, put `outputs[]` in the plugin config and run without `-o`:
@@ -521,6 +540,9 @@ npx generate-contracts -o packages/contracts/src --include contracts
 
 # Opt into conservative entry file graph copying
 npx generate-contracts -o packages/contracts/src --messages event --entry-strategy graph
+
+# Opt into fail-fast dependency symbol slicing
+npx generate-contracts -o packages/contracts/src --dependency-strategy safe-symbols
 
 # CI freshness check
 npx generate-contracts -o packages/contracts/src --check
@@ -591,6 +613,7 @@ const result = await processContext({
     messageTypes: ["event", "command"],
     includePublicContracts: true,
     entryStrategy: "symbols",
+    dependencyStrategy: "safe-symbols",
     outputModuleSpecifiers: "js",
     responseNamingConventions: [
         { messageSuffix: "Command", responseSuffix: "CommandResult" },
@@ -689,6 +712,7 @@ try {
 
 - `MessageParserError` (base)
   - `BoundaryViolationError`
+  - `UnsafeDependencySliceError`
   - `ConfigurationError` → `ConfigLoadError`
   - `FileSystemError` → `FileNotFoundError`, `FileReadError`, `FileWriteError`
   - `ParseError` → `JsonParseError`
@@ -710,6 +734,7 @@ try {
 | `ContractOutputConfig` | `outputs[]` configuration shape for output-level path, selector, registry, and module specifier settings |
 | `ContractMarkerNames` | Configuration shape for customizing legacy public contract comment marker names |
 | `EntryStrategy` | `symbols` for default strict declaration extraction, or `graph` for entry file graph copy |
+| `DependencyStrategy` | `file` for default full dependency-file copying, or `safe-symbols` for fail-fast dependency symbol slicing |
 | `OutputModuleSpecifiers` | `"js"` for default NodeNext-safe `.js` generated specifiers, or `"extensionless"` for legacy generated specifiers |
 | `MessageRegistry` | Runtime registry for decorated message deserialization |
 | `ConsoleLogger` | Configurable logger for build output |
@@ -718,6 +743,7 @@ try {
 ## Known Limitations
 
 - `entryStrategy: "graph"` may copy unselected declarations from selected entry files because it treats selected files as graph roots. Use the default `symbols` strategy for strict public/internal splits.
+- `dependencyStrategy: "safe-symbols"` is intentionally strict and supports only statically safe dependency modules. Files with side-effect imports, re-exports, dynamic imports, decorators, static blocks, unsafe top-level initializers, or unsupported retained import shapes fail with `UnsafeDependencySliceError`.
 - Generation failures are not fully atomic yet and may leave partial selected output after `BoundaryViolationError`.
 - Decorator namespace imports such as `Contracts.ContractCommand` are not matched.
 - Automatic multi-hop tracing through arbitrary local re-export chains is intentionally not automatic. Use direct named imports from trusted contract packages or a trusted integration configuration.

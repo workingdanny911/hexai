@@ -10,12 +10,14 @@ import type {
     ContractVisibility,
     ContractMarkerNames,
     DecoratorNames,
+    DependencyStrategy,
     EntryStrategy,
     OutputModuleSpecifiers,
     ResponseNamingConvention,
     TrustedDecoratorSources,
 } from "./domain/index.js";
 import {
+    isDependencyStrategy,
     isEntryStrategy,
     isMessageContractKind,
     isOutputModuleSpecifiers,
@@ -36,6 +38,7 @@ export interface ContractsConfig {
     readonly contractMarkerNames: Required<ContractMarkerNames>;
     readonly trustedDecoratorSources?: TrustedDecoratorSources;
     readonly entryStrategy?: EntryStrategy;
+    readonly dependencyStrategy: DependencyStrategy;
     readonly outputModuleSpecifiers: OutputModuleSpecifiers;
     readonly responseNamingConventions?: readonly ResponseNamingConvention[];
     readonly removeDecorators?: boolean;
@@ -51,6 +54,7 @@ interface ApplicationConfig {
         contractMarkerNames?: ContractMarkerNames;
         trustedDecoratorSources?: TrustedDecoratorSources;
         entryStrategy?: EntryStrategy;
+        dependencyStrategy?: DependencyStrategy;
         outputModuleSpecifiers?: OutputModuleSpecifiers;
         responseNamingConventions?: ResponseNamingConvention[];
         removeDecorators?: boolean;
@@ -74,6 +78,23 @@ export function validateEntryStrategy(
 
     throw new ConfigLoadError(
         `Invalid contracts.entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
+    );
+}
+
+export function validateDependencyStrategy(
+    dependencyStrategy: DependencyStrategy | undefined,
+    path = "contracts.dependencyStrategy"
+): DependencyStrategy {
+    if (dependencyStrategy === undefined) {
+        return "file";
+    }
+
+    if (isDependencyStrategy(dependencyStrategy)) {
+        return dependencyStrategy;
+    }
+
+    throw new ConfigLoadError(
+        `Invalid ${path}: "${String(dependencyStrategy)}". Expected "file" or "safe-symbols".`
     );
 }
 
@@ -356,6 +377,9 @@ export class ConfigLoader {
         const entryStrategy = validateEntryStrategy(
             contracts.entryStrategy
         );
+        const dependencyStrategy = validateDependencyStrategy(
+            contracts.dependencyStrategy
+        );
 
         return {
             configDir,
@@ -369,6 +393,7 @@ export class ConfigLoader {
                 contracts.trustedDecoratorSources
             ),
             entryStrategy,
+            dependencyStrategy,
             outputModuleSpecifiers: validateOutputModuleSpecifiers(
                 contracts.outputModuleSpecifiers
             ),

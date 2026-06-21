@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0] - 2026-06-21
+
+### Added
+
+- Added `dependencyStrategy: "file" | "safe-symbols"` and the `--dependency-strategy` CLI/plugin option.
+- Added opt-in safe dependency symbol slicing for `entryStrategy: "symbols"` outputs.
+- Added `UnsafeDependencySliceError` for fail-fast dependency slicing failures with file path and reason context.
+
+### Changed
+
+- `dependencyStrategy: "file"` remains the default and preserves full dependency-file copying.
+- `dependencyStrategy: "safe-symbols"` now slices retained dependency imports to named top-level declarations only when the dependency module is statically safe.
+- Unsafe dependency modules fail loudly instead of falling back to full-file copying. Unsafe cases include side-effect imports, dynamic imports, export declarations, local `import("./x")` types, decorators, static blocks, unsafe top-level initializers, and other top-level side-effect statements.
+- `entryStrategy: "graph"` ignores `safe-symbols` slicing and keeps conservative full-file graph copying semantics.
+
+### Fixed
+
+- Preserved local value declarations referenced by `typeof` type queries during dependency symbol slicing.
+- Skipped dependency slicing for cross-entry references so entry files remain owned by entry extraction.
+
 ## [0.5.1] - 2026-06-19
 
 ### Added

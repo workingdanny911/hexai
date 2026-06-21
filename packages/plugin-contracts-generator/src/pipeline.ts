@@ -13,6 +13,7 @@ import type {
     ContractMarkerNames,
     ContractOutputSelect,
     DecoratorNames,
+    DependencyStrategy,
     DomainEvent,
     EntryStrategy,
     MessageType,
@@ -23,7 +24,7 @@ import type {
     TrustedDecoratorSources,
     TypeDefinition,
 } from "./domain/types.js";
-import { isEntryStrategy } from "./domain/types.js";
+import { isDependencyStrategy, isEntryStrategy } from "./domain/types.js";
 import { type FileSystem, nodeFileSystem } from "./file-system.js";
 import { type Logger, noopLogger } from "./logger.js";
 import { ConfigurationError } from "./errors.js";
@@ -57,6 +58,7 @@ interface PipelineCreateOptions {
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
     entryStrategy?: EntryStrategy;
+    dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 
@@ -93,6 +95,7 @@ export class ContractsPipeline {
     private readonly trustedDecoratorSources?: TrustedDecoratorSources;
     private readonly includePublicContracts?: boolean;
     private readonly entryStrategy: EntryStrategy;
+    private readonly dependencyStrategy: DependencyStrategy;
     private readonly outputModuleSpecifiers: OutputModuleSpecifiers;
 
     private constructor(
@@ -103,6 +106,7 @@ export class ContractsPipeline {
         trustedDecoratorSources?: TrustedDecoratorSources,
         includePublicContracts?: boolean,
         entryStrategy: EntryStrategy = "symbols",
+        dependencyStrategy: DependencyStrategy = "file",
         outputModuleSpecifiers: OutputModuleSpecifiers = "js"
     ) {
         this.messageTypes = messageTypes;
@@ -111,6 +115,7 @@ export class ContractsPipeline {
         this.trustedDecoratorSources = trustedDecoratorSources;
         this.includePublicContracts = includePublicContracts;
         this.entryStrategy = entryStrategy;
+        this.dependencyStrategy = dependencyStrategy;
         this.outputModuleSpecifiers = outputModuleSpecifiers;
     }
 
@@ -120,6 +125,9 @@ export class ContractsPipeline {
         const excludeDependencies = options.excludeDependencies ?? DEFAULT_EXCLUDE_DEPENDENCIES;
         const includePublicContracts = options.includePublicContracts ?? true;
         const entryStrategy = validateEntryStrategy(options.entryStrategy);
+        const dependencyStrategy = validateDependencyStrategy(
+            options.dependencyStrategy
+        );
         const scanner = new Scanner({
             fileSystem,
             decoratorNames: options.decoratorNames,
@@ -158,6 +166,7 @@ export class ContractsPipeline {
             options.trustedDecoratorSources,
             includePublicContracts,
             entryStrategy,
+            dependencyStrategy,
             options.outputModuleSpecifiers ?? "js"
         );
     }
@@ -215,6 +224,7 @@ export class ContractsPipeline {
             removeDecorators,
             this.messageTypes,
             this.entryStrategy,
+            this.dependencyStrategy,
             select,
             outputModuleSpecifiers
         );
@@ -419,6 +429,7 @@ export class ContractsPipeline {
         removeDecorators?: boolean,
         messageTypes?: readonly MessageType[],
         entryStrategy: EntryStrategy = "symbols",
+        dependencyStrategy: DependencyStrategy = this.dependencyStrategy,
         select?: ContractOutputSelect,
         outputModuleSpecifiers: OutputModuleSpecifiers = this.outputModuleSpecifiers
     ): Promise<string[]> {
@@ -440,6 +451,7 @@ export class ContractsPipeline {
             trustedDecoratorSources: this.trustedDecoratorSources,
             includePublicContracts: this.includePublicContracts,
             entryStrategy,
+            dependencyStrategy,
             select,
             outputModuleSpecifiers,
         });
@@ -476,5 +488,21 @@ function validateEntryStrategy(
 
     throw new ConfigurationError(
         `Invalid entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
+    );
+}
+
+function validateDependencyStrategy(
+    dependencyStrategy: DependencyStrategy | undefined
+): DependencyStrategy {
+    if (dependencyStrategy === undefined) {
+        return "file";
+    }
+
+    if (isDependencyStrategy(dependencyStrategy)) {
+        return dependencyStrategy;
+    }
+
+    throw new ConfigurationError(
+        `Invalid dependencyStrategy: "${String(dependencyStrategy)}". Expected "file" or "safe-symbols".`
     );
 }

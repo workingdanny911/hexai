@@ -158,6 +158,59 @@ describe("ConfigLoader", () => {
             );
         });
 
+        it("should accept safe-symbols dependencyStrategy", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-config-"));
+            const configPath = join(root, "application.config.ts");
+            await writeFile(
+                configPath,
+                `export default {
+                    contracts: {
+                        contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                        dependencyStrategy: "safe-symbols"
+                    }
+                };`
+            );
+
+            try {
+                const result = await new ConfigLoader().load(configPath);
+
+                expect(result.dependencyStrategy).toBe("safe-symbols");
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        });
+
+        it("should default missing dependencyStrategy to file", async () => {
+            const configLoader = new ConfigLoader();
+            const configPath = fixtureConfigPath("valid-config");
+
+            const result = await configLoader.load(configPath);
+
+            expect(result.dependencyStrategy).toBe("file");
+        });
+
+        it("should reject invalid dependencyStrategy", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-config-"));
+            const configPath = join(root, "application.config.ts");
+            await writeFile(
+                configPath,
+                `export default {
+                    contracts: {
+                        contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                        dependencyStrategy: "minimal"
+                    }
+                };`
+            );
+
+            try {
+                await expect(new ConfigLoader().load(configPath)).rejects.toThrow(
+                    'Invalid contracts.dependencyStrategy: "minimal". Expected "file" or "safe-symbols".'
+                );
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        });
+
     });
 
     describe("DecoratorNames configuration", () => {

@@ -263,6 +263,8 @@ export type ContractDeclaration =
 
 export type EntryStrategy = 'graph' | 'symbols';
 
+export type DependencyStrategy = 'file' | 'safe-symbols';
+
 export type OutputModuleSpecifiers = 'js' | 'extensionless';
 
 export type ContractOutputInclude = 'all' | 'messages' | 'contracts';
@@ -295,6 +297,11 @@ export const VALID_ENTRY_STRATEGIES: readonly EntryStrategy[] = [
   'symbols',
 ];
 
+export const VALID_DEPENDENCY_STRATEGIES: readonly DependencyStrategy[] = [
+  'file',
+  'safe-symbols',
+];
+
 export const VALID_OUTPUT_MODULE_SPECIFIERS: readonly OutputModuleSpecifiers[] = [
   'js',
   'extensionless',
@@ -304,6 +311,15 @@ export function isEntryStrategy(value: unknown): value is EntryStrategy {
   return (
     typeof value === 'string' &&
     VALID_ENTRY_STRATEGIES.includes(value as EntryStrategy)
+  );
+}
+
+export function isDependencyStrategy(
+  value: unknown
+): value is DependencyStrategy {
+  return (
+    typeof value === 'string' &&
+    VALID_DEPENDENCY_STRATEGIES.includes(value as DependencyStrategy)
   );
 }
 
@@ -404,6 +420,7 @@ export interface Config {
   readonly decoratorNames?: DecoratorNames;
   readonly trustedDecoratorSources?: TrustedDecoratorSources;
   readonly entryStrategy?: EntryStrategy;
+  readonly dependencyStrategy?: DependencyStrategy;
   readonly outputModuleSpecifiers?: OutputModuleSpecifiers;
   readonly responseNamingConventions?: readonly ResponseNamingConvention[];
 }

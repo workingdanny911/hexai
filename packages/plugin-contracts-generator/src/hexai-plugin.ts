@@ -5,8 +5,12 @@ import {
     type IncludeMode,
     type RunWithConfigOptions,
 } from "./cli.js";
-import { validateOutputModuleSpecifiers } from "./config-loader.js";
+import {
+    validateDependencyStrategy,
+    validateOutputModuleSpecifiers,
+} from "./config-loader.js";
 import type {
+    DependencyStrategy,
     EntryStrategy,
     MessageType,
     OutputModuleSpecifiers,
@@ -57,6 +61,13 @@ function parseEntryStrategy(value: string): EntryStrategy {
     }
 
     return strategy as EntryStrategy;
+}
+
+function parseDependencyStrategy(value: string): DependencyStrategy {
+    return validateDependencyStrategy(
+        value.trim().toLowerCase() as DependencyStrategy,
+        "dependencyStrategy"
+    );
 }
 
 function parseOutputModuleSpecifiers(value: string): OutputModuleSpecifiers {
@@ -111,6 +122,10 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
             description: "Entry copy strategy: graph, symbols",
         },
         {
+            flags: "--dependency-strategy <strategy>",
+            description: "Dependency copy strategy: file, safe-symbols",
+        },
+        {
             flags: "--output-module-specifiers <style>",
             description:
                 "Generated relative module specifiers: js, extensionless",
@@ -147,6 +162,9 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
             messageTypes: readMessageTypes(args),
             entryStrategy: args.entryStrategy
                 ? parseEntryStrategy(String(args.entryStrategy))
+                : undefined,
+            dependencyStrategy: args.dependencyStrategy
+                ? parseDependencyStrategy(String(args.dependencyStrategy))
                 : undefined,
             outputModuleSpecifiers: args.outputModuleSpecifiers
                 ? parseOutputModuleSpecifiers(

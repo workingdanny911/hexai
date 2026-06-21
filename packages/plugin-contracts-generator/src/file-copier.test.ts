@@ -6,6 +6,7 @@ import { randomUUID } from "crypto";
 import { FileCopier } from "./file-copier.js";
 import { FileGraphResolver } from "./file-graph-resolver.js";
 import { ContextConfig } from "./context-config.js";
+import { UnsafeDependencySliceError } from "./errors.js";
 
 import type { CopyOptions } from "./file-copier.js";
 
@@ -42,6 +43,20 @@ async function copySingleEntry(
         path.join(outputDir, path.relative(sourceRoot, sourceFile)),
         "utf-8"
     );
+}
+
+async function expectUnsafeDependencySliceError(
+    promise: Promise<unknown>,
+    expected: {
+        readonly filePath: string;
+        readonly reason: string;
+    }
+): Promise<void> {
+    await expect(promise).rejects.toThrow(UnsafeDependencySliceError);
+    await expect(promise).rejects.toMatchObject({
+        filePath: expected.filePath,
+        reason: expect.stringContaining(expected.reason),
+    });
 }
 
 describe("FileCopier", () => {
@@ -874,6 +889,573 @@ export class UserSnapshot {}
 
             expect(copiedContent).toContain("FindUserQuery");
             expect(copiedContent).not.toContain("UserSnapshot");
+        });
+
+        it("should copy full dependency files by default", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+import { UsedShape, UnusedShape } from "./shapes.js";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly shape!: UsedShape;
+}
+`
+            );
+            fs.writeFileSync(
+                path.join(testDir, "shapes.ts"),
+                `export interface UsedShape {
+    readonly id: string;
+}
+
+export interface UnusedShape {
+    readonly unused: string;
+}
+`
+            );
+
+            await copySingleEntry(sourceFile, testDir, outputDir, {
+                entryStrategy: "symbols",
+            });
+
+            const dependencyContent = fs.readFileSync(
+                path.join(outputDir, "shapes.ts"),
+                "utf-8"
+            );
+
+            expect(dependencyContent).toContain("UsedShape");
+            expect(dependencyContent).toContain("UnusedShape");
+        });
+
+        it("should slice dependency files when dependencyStrategy is safe-symbols", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+import { UsedShape, UnusedShape } from "./shapes.js";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly shape!: UsedShape;
+}
+`
+            );
+            fs.writeFileSync(
+                path.join(testDir, "shapes.ts"),
+                `export interface UsedShape {
+    readonly id: string;
+}
+
+export interface UnusedShape {
+    readonly unused: string;
+}
+`
+            );
+
+            await copySingleEntry(sourceFile, testDir, outputDir, {
+                entryStrategy: "symbols",
+                dependencyStrategy: "safe-symbols",
+            });
+
+            const dependencyContent = fs.readFileSync(
+                path.join(outputDir, "shapes.ts"),
+                "utf-8"
+            );
+
+            expect(dependencyContent).toContain("UsedShape");
+            expect(dependencyContent).not.toContain("UnusedShape");
+        });
+
+        it("should reject local import types in extracted entries when dependencyStrategy is safe-symbols", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly nested!: import("./nested.js").NestedShape;
+}
+`
+            );
+            fs.writeFileSync(
+                path.join(testDir, "nested.ts"),
+                `export interface NestedShape {
+    readonly id: string;
+}
+`
+            );
+
+            await expectUnsafeDependencySliceError(
+                copySingleEntry(sourceFile, testDir, outputDir, {
+                    entryStrategy: "symbols",
+                    dependencyStrategy: "safe-symbols",
+                }),
+                {
+                    filePath: sourceFile,
+                    reason: "local import type: ./nested.js",
+                }
+            );
+        });
+
+        it("should preserve local import types in extracted entries when dependencyStrategy is file", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly nested!: import("./nested.js").NestedShape;
+}
+`
+            );
+            fs.writeFileSync(
+                path.join(testDir, "nested.ts"),
+                `export interface NestedShape {
+    readonly id: string;
+}
+`
+            );
+
+            const entryContent = await copySingleEntry(
+                sourceFile,
+                testDir,
+                outputDir,
+                {
+                    entryStrategy: "symbols",
+                    dependencyStrategy: "file",
+                }
+            );
+
+            expect(entryContent).toContain('import("./nested.js").NestedShape');
+        });
+
+        async function expectUnsafeDependencySlice(
+            dependencyContent: string,
+            expectedReason: string,
+            options: {
+                readonly entryImport?: string;
+                readonly entryPropertyType?: string;
+                readonly extraFiles?: Readonly<Record<string, string>>;
+            } = {}
+        ): Promise<void> {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            const entryImport = options.entryImport ?? "{ UsedShape }";
+            const entryPropertyType = options.entryPropertyType ?? "UsedShape";
+
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+import ${entryImport} from "./shapes.js";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly shape!: ${entryPropertyType};
+}
+`
+            );
+            fs.writeFileSync(path.join(testDir, "shapes.ts"), dependencyContent);
+
+            for (const [fileName, content] of Object.entries(
+                options.extraFiles ?? {}
+            )) {
+                fs.writeFileSync(path.join(testDir, fileName), content);
+            }
+
+            await expectUnsafeDependencySliceError(
+                copySingleEntry(sourceFile, testDir, outputDir, {
+                    entryStrategy: "symbols",
+                    dependencyStrategy: "safe-symbols",
+                }),
+                {
+                    filePath: path.join(testDir, "shapes.ts"),
+                    reason: expectedReason,
+                }
+            );
+        }
+
+        it.each([
+            {
+                name: "side-effect import",
+                reason: "side-effect import",
+                dependency: `import "./setup.js";
+
+export interface UsedShape {
+    readonly id: string;
+}
+`,
+                extraFiles: {
+                    "setup.ts": "export const setupLoaded = true;\n",
+                },
+            },
+            {
+                name: "export declaration",
+                reason: "export declaration",
+                dependency: `export { OtherShape } from "./other-shape.js";
+
+export interface UsedShape {
+    readonly id: string;
+}
+`,
+                extraFiles: {
+                    "other-shape.ts": "export interface OtherShape {}\n",
+                },
+            },
+            {
+                name: "dynamic import",
+                reason: "dynamic import",
+                dependency: `export interface UsedShape {
+    readonly id: string;
+}
+
+export async function loadLazyShape() {
+    return import("./lazy-shape.js");
+}
+`,
+            },
+            {
+                name: "local import type",
+                reason: "local import type",
+                dependency: `export interface UsedShape {
+    readonly nested: import("./nested.js").NestedShape;
+}
+`,
+                extraFiles: {
+                    "nested.ts": `export interface NestedShape {
+    readonly id: string;
+}
+`,
+                },
+            },
+            {
+                name: "unsafe top-level variable initializer",
+                reason: "unsafe top-level variable initializer",
+                dependency: `const token = createToken();
+
+function createToken(): string {
+    return "token";
+}
+
+export interface UsedShape {
+    readonly id: typeof token;
+}
+`,
+            },
+            {
+                name: "assignment top-level variable initializer",
+                reason: "unsafe top-level variable initializer",
+                dependency: `const touched = (globalThis.__shapeTouched = true);
+
+export interface UsedShape {
+    readonly id: string;
+}
+`,
+            },
+            {
+                name: "update top-level variable initializer",
+                reason: "unsafe top-level variable initializer",
+                dependency: `let mutationCounter = 0;
+const touched = ++mutationCounter;
+
+export interface UsedShape {
+    readonly id: string;
+}
+`,
+            },
+            {
+                name: "delete top-level variable initializer",
+                reason: "unsafe top-level variable initializer",
+                dependency: `const touched = delete globalThis.__shapeTouched;
+
+export interface UsedShape {
+    readonly id: string;
+}
+`,
+            },
+            {
+                name: "class static block",
+                reason: "class static block",
+                dependency: `export class UsedShape {
+    static {
+        configureShape();
+    }
+
+    readonly id!: string;
+}
+
+function configureShape(): void {}
+`,
+            },
+            {
+                name: "class static member initializer",
+                reason: "class static member initializer",
+                dependency: `export interface UsedShape {
+    readonly id: string;
+}
+
+class UnusedShapeRegistration {
+    static token = registerShape();
+}
+
+function registerShape(): string {
+    return "token";
+}
+`,
+            },
+            {
+                name: "class computed static member name",
+                reason: "class computed member name",
+                dependency: `export interface UsedShape {
+    readonly id: string;
+}
+
+class UnusedShapeRegistration {
+    static [registerShape()](): void {}
+}
+
+function registerShape(): string {
+    return "token";
+}
+`,
+            },
+            {
+                name: "class heritage expression",
+                reason: "class heritage/extends",
+                dependency: `class BaseShape {}
+
+function makeBase(): typeof BaseShape {
+    return BaseShape;
+}
+
+class UnusedShapeRegistration extends makeBase() {}
+
+export interface UsedShape {
+    readonly id: string;
+}
+`,
+            },
+            {
+                name: "class computed member name",
+                reason: "class computed member name",
+                dependency: `export interface UsedShape {
+    readonly id: string;
+}
+
+class UnusedShapeRegistration {
+    [registerShape()](): void {}
+}
+
+function registerShape(): string {
+    return "token";
+}
+`,
+            },
+            {
+                name: "class decorator",
+                reason: "class decorator",
+                dependency: `function shapeMarker(): ClassDecorator {
+    return () => {};
+}
+
+@shapeMarker()
+export class UsedShape {}
+`,
+            },
+            {
+                name: "class member decorator",
+                reason: "class member decorator",
+                dependency: `function shapeField(): PropertyDecorator {
+    return () => {};
+}
+
+export class UsedShape {
+    @shapeField()
+    readonly id!: string;
+}
+`,
+            },
+            {
+                name: "enum initializer",
+                reason: "enum initializer",
+                dependency: `export enum UsedShape {
+    Active = "active",
+}
+`,
+            },
+            {
+                name: "duplicate top-level declaration",
+                reason: "duplicate top-level declaration",
+                dependency: `export interface UsedShape {
+    readonly id: string;
+}
+
+export class UsedShape {}
+`,
+            },
+            {
+                name: "missing required symbol",
+                reason: "missing required symbol",
+                dependency: `export interface OtherShape {
+    readonly id: string;
+}
+`,
+            },
+        ])(
+            "should reject safe-symbols dependency slicing for $name",
+            async ({ dependency, reason, extraFiles }) => {
+                await expectUnsafeDependencySlice(dependency, reason, {
+                    extraFiles,
+                });
+            }
+        );
+
+        it("should report the entry path for unsupported local default imports", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+import UsedShape from "./shapes.js";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly shape!: UsedShape;
+}
+`
+            );
+            fs.writeFileSync(
+                path.join(testDir, "shapes.ts"),
+                `export default interface UsedShape {
+    readonly id: string;
+}
+`
+            );
+
+            await expectUnsafeDependencySliceError(
+                copySingleEntry(sourceFile, testDir, outputDir, {
+                    entryStrategy: "symbols",
+                    dependencyStrategy: "safe-symbols",
+                }),
+                {
+                    filePath: sourceFile,
+                    reason: "unsupported import shape: default import",
+                }
+            );
+        });
+
+        it("should report the entry path for unsupported local namespace imports", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+import * as Shapes from "./shapes.js";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly shape!: Shapes.UsedShape;
+}
+`
+            );
+            fs.writeFileSync(
+                path.join(testDir, "shapes.ts"),
+                `export interface UsedShape {
+    readonly id: string;
+}
+`
+            );
+
+            await expectUnsafeDependencySliceError(
+                copySingleEntry(sourceFile, testDir, outputDir, {
+                    entryStrategy: "symbols",
+                    dependencyStrategy: "safe-symbols",
+                }),
+                {
+                    filePath: sourceFile,
+                    reason: "unsupported import shape: namespace import",
+                }
+            );
+        });
+
+        it("should retain value declarations referenced by type query dependencies", async () => {
+            const testDir = path.join(outputDir, "source");
+            fs.mkdirSync(testDir, { recursive: true });
+
+            const sourceFile = path.join(testDir, "query.ts");
+            fs.writeFileSync(
+                sourceFile,
+                `import { ContractQuery } from "@hexaijs/contracts";
+import { TokenEnvelope } from "./shapes.js";
+
+@ContractQuery()
+export class FindUserQuery {
+    readonly envelope!: TokenEnvelope;
+}
+`
+            );
+            fs.writeFileSync(
+                path.join(testDir, "shapes.ts"),
+                `export const TOKEN = "profile";
+export const TOKEN_KIND = "primary" as const;
+
+export type TokenValue = typeof TOKEN;
+export type TokenKind = typeof TOKEN_KIND;
+
+export interface TokenEnvelope {
+    readonly token: TokenValue;
+    readonly kind: TokenKind;
+}
+
+export interface UnusedShape {
+    readonly unused: string;
+}
+`
+            );
+
+            await copySingleEntry(sourceFile, testDir, outputDir, {
+                entryStrategy: "symbols",
+                dependencyStrategy: "safe-symbols",
+            });
+
+            const dependencyContent = fs.readFileSync(
+                path.join(outputDir, "shapes.ts"),
+                "utf-8"
+            );
+
+            expect(dependencyContent).toContain('export const TOKEN = "profile"');
+            expect(dependencyContent).toContain(
+                'export const TOKEN_KIND = "primary" as const'
+            );
+            expect(dependencyContent).toContain(
+                "export type TokenValue = typeof TOKEN"
+            );
+            expect(dependencyContent).toContain(
+                "export type TokenKind = typeof TOKEN_KIND"
+            );
+            expect(dependencyContent).toContain("export interface TokenEnvelope");
+            expect(dependencyContent).not.toContain("UnusedShape");
         });
     });
 

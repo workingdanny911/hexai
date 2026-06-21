@@ -30,6 +30,24 @@ export class BoundaryViolationError extends MessageParserError {
 }
 
 /**
+ * Error thrown when a dependency cannot be safely sliced by symbol.
+ */
+export class UnsafeDependencySliceError extends MessageParserError {
+    readonly filePath: string;
+    readonly reason: string;
+
+    constructor(filePath: string, reason: string, options?: ErrorOptions) {
+        super(
+            `Unsafe dependency slice in ${filePath}: ${reason}`,
+            options
+        );
+        this.name = "UnsafeDependencySliceError";
+        this.filePath = filePath;
+        this.reason = reason;
+    }
+}
+
+/**
  * Error thrown when loading application.config.ts fails.
  */
 export class ConfigLoadError extends ConfigurationError {

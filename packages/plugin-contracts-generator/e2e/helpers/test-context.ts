@@ -10,6 +10,7 @@ import {
     ContextMessages,
 } from "../../src/index.js";
 import type {
+    DependencyStrategy,
     MessageType,
     OutputModuleSpecifiers,
     ResponseNamingConvention,
@@ -26,6 +27,7 @@ export interface RunParserOptions {
     responseNamingConventions?: readonly ResponseNamingConvention[];
     messageTypes?: MessageType[];
     entryStrategy?: EntryStrategy;
+    dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     removeDecorators?: boolean;
 }
@@ -122,10 +124,12 @@ export class E2ETestContext {
             responseNamingConventions: opts.responseNamingConventions,
             messageTypes: opts.messageTypes,
             entryStrategy: opts.entryStrategy,
+            dependencyStrategy: opts.dependencyStrategy,
             outputModuleSpecifiers: opts.outputModuleSpecifiers,
             removeDecorators: opts.removeDecorators,
         } as Parameters<typeof processContext>[0] & {
             entryStrategy?: EntryStrategy;
+            dependencyStrategy?: DependencyStrategy;
         };
 
         return processContext(processOptions);

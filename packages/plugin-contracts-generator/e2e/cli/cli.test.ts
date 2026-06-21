@@ -278,6 +278,22 @@ export class RebuildInternalIndexCommand {}
             ).rejects.toThrow('Invalid --output-module-specifiers: "cjs"');
         });
 
+        it("should reject invalid --dependency-strategy", async () => {
+            await createConfig(createLectureConfig());
+            const contractsDir = join(outputDir, "contracts");
+
+            await expect(
+                run([
+                    "--config",
+                    configPath,
+                    "-o",
+                    contractsDir,
+                    "--dependency-strategy",
+                    "minimal",
+                ])
+            ).rejects.toThrow('Invalid --dependency-strategy: "minimal"');
+        });
+
         it("should throw error when --output-dir is missing", async () => {
             await createConfig(createLectureConfig());
 
@@ -834,6 +850,100 @@ export class RebuildInternalIndexCommand {}
         });
     });
 
+    describe("--dependency-strategy option", () => {
+        it("should pass safe-symbols dependency slicing from CLI args", async () => {
+            await createConfig({
+                contracts: {
+                    contexts: [
+                        {
+                            name: "safe-symbol-dependency-slicing",
+                            path: join(
+                                fixturesDir,
+                                "safe-symbol-dependency-slicing"
+                            ),
+                        },
+                    ],
+                    removeDecorators: true,
+                },
+            });
+            const contractsDir = join(outputDir, "contracts");
+
+            await run([
+                "--config",
+                configPath,
+                "-o",
+                contractsDir,
+                "--messages=query",
+                "--entry-strategy=symbols",
+                "--dependency-strategy=safe-symbols",
+            ]);
+
+            const dependencyContent = readFileSync(
+                join(
+                    contractsDir,
+                    "safe-symbol-dependency-slicing",
+                    "profile-dependencies.ts"
+                ),
+                "utf-8"
+            );
+            expect(dependencyContent).toContain("export interface UsedProfile");
+            expect(dependencyContent).not.toContain("UnusedProfile");
+            expect(dependencyContent).not.toContain("unusedProfileLabel");
+        });
+
+        it("should surface unsafe dependency slice errors from CLI args", async () => {
+            const projectDir = join(outputDir, "unsafe-safe-symbols-project");
+            const sourceDir = join(projectDir, "src");
+            await mkdir(sourceDir, { recursive: true });
+            await writeFile(
+                join(sourceDir, "query.ts"),
+                `
+import { ContractQuery } from "@hexaijs/contracts/decorators";
+import { UsedShape } from "./shapes.js";
+
+@ContractQuery()
+export class FindShapeQuery {
+    readonly shape!: UsedShape;
+}
+`
+            );
+            await writeFile(
+                join(sourceDir, "shapes.ts"),
+                `
+import "./register-shapes.js";
+
+export interface UsedShape {
+    readonly id: string;
+}
+`
+            );
+            await writeFile(join(sourceDir, "register-shapes.ts"), "");
+            await createConfig({
+                contracts: {
+                    contexts: [
+                        {
+                            name: "unsafe-safe-symbols",
+                            path: projectDir,
+                        },
+                    ],
+                },
+            });
+            const contractsDir = join(outputDir, "contracts");
+
+            await expect(
+                run([
+                    "--config",
+                    configPath,
+                    "-o",
+                    contractsDir,
+                    "--messages=query",
+                    "--entry-strategy=symbols",
+                    "--dependency-strategy=safe-symbols",
+                ])
+            ).rejects.toThrow(/shapes\.ts.*side-effect import/s);
+        });
+    });
+
     describe("--generate-message-registry option", () => {
         it("should not generate index.ts by default", async () => {
             await createConfig(createLectureConfig());
@@ -1145,6 +1255,43 @@ describe("runWithConfig E2E", () => {
             expect(rootRegistryContent).not.toContain("./lecture/index.js");
         });
 
+        it("should pass dependencyStrategy from plugin args", async () => {
+            const contractsDir = join(outputDir, "plugin-contracts");
+
+            await cliPlugin.run(
+                {
+                    outputDir: contractsDir,
+                    messages: "query",
+                    entryStrategy: "symbols",
+                    dependencyStrategy: "safe-symbols",
+                },
+                {
+                    contexts: [
+                        {
+                            name: "safe-symbol-dependency-slicing",
+                            path: join(
+                                fixturesDir,
+                                "safe-symbol-dependency-slicing"
+                            ),
+                        },
+                    ],
+                    removeDecorators: true,
+                }
+            );
+
+            const dependencyContent = readFileSync(
+                join(
+                    contractsDir,
+                    "safe-symbol-dependency-slicing",
+                    "profile-dependencies.ts"
+                ),
+                "utf-8"
+            );
+            expect(dependencyContent).toContain("export interface UsedProfile");
+            expect(dependencyContent).not.toContain("UnusedProfile");
+            expect(dependencyContent).not.toContain("unusedProfileLabel");
+        });
+
         it("should reject invalid plugin outputModuleSpecifiers args", async () => {
             await expect(
                 cliPlugin.run(
@@ -1162,6 +1309,25 @@ describe("runWithConfig E2E", () => {
                     }
                 )
             ).rejects.toThrow('Invalid outputModuleSpecifiers: "cjs"');
+        });
+
+        it("should reject invalid plugin dependencyStrategy args", async () => {
+            await expect(
+                cliPlugin.run(
+                    {
+                        outputDir: join(outputDir, "plugin-contracts"),
+                        dependencyStrategy: "minimal",
+                    },
+                    {
+                        contexts: [
+                            {
+                                name: "lecture",
+                                path: join(fixturesDir, "lecture"),
+                            },
+                        ],
+                    }
+                )
+            ).rejects.toThrow('Invalid dependencyStrategy: "minimal"');
         });
     });
 

@@ -4,9 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ContextConfig } from "./context-config.js";
-import { BoundaryViolationError, ConfigurationError } from "./errors.js";
+import {
+    BoundaryViolationError,
+    ConfigurationError,
+    UnsafeDependencySliceError,
+} from "./errors.js";
 import { ContractsPipeline } from "./pipeline.js";
-import type { EntryStrategy } from "./domain/types.js";
+import type { DependencyStrategy, EntryStrategy } from "./domain/types.js";
 import type { Logger } from "./logger.js";
 
 describe("ContractsPipeline", () => {
@@ -31,6 +35,398 @@ describe("ContractsPipeline", () => {
                     entryStrategy: "file" as EntryStrategy,
                 })
             ).toThrow('Invalid entryStrategy: "file"');
+        });
+    });
+
+    describe("dependencyStrategy validation", () => {
+        it("should throw ConfigurationError for invalid programmatic dependencyStrategy", () => {
+            expect(() =>
+                ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "lecture",
+                        "/tmp/lecture"
+                    ),
+                    dependencyStrategy: "minimal" as DependencyStrategy,
+                })
+            ).toThrow(ConfigurationError);
+
+            expect(() =>
+                ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "lecture",
+                        "/tmp/lecture"
+                    ),
+                    dependencyStrategy: "minimal" as DependencyStrategy,
+                })
+            ).toThrow('Invalid dependencyStrategy: "minimal"');
+        });
+    });
+
+    describe("safe-symbol dependency slicing", () => {
+        async function createSafeSymbolsProject(): Promise<{
+            root: string;
+            sourceDir: string;
+            outputDir: string;
+            cleanup(): Promise<void>;
+        }> {
+            const root = await mkdtemp(join(tmpdir(), "contracts-pipeline-"));
+            const sourceDir = join(root, "src");
+            const outputDir = join(root, "contracts");
+            await mkdir(sourceDir, { recursive: true });
+            await writeFile(
+                join(sourceDir, "profile-query.ts"),
+                `
+import { ContractQuery } from "@hexaijs/contracts/decorators";
+import { QueryBase, UsedProfile, buildProfileLabel, UnusedProfile } from "./profile-dependencies.js";
+import type { TypeOnlyShape } from "./type-only-shape.js";
+
+@ContractQuery()
+export class GetProfileQuery extends QueryBase {
+    readonly profile!: UsedProfile;
+    readonly typeOnly!: TypeOnlyShape;
+
+    static label(profile: UsedProfile): string {
+        return buildProfileLabel(profile);
+    }
+}
+`
+            );
+            await writeFile(
+                join(sourceDir, "profile-dependencies.ts"),
+                `
+import { formatProfileId, unusedFormat } from "./transitive-formatters.js";
+
+interface ProfileMetadata {
+    readonly prefix: string;
+}
+
+const localPrefix = "profile";
+
+export abstract class QueryBase {
+    readonly queryId = formatProfileId("root");
+}
+
+export interface UsedProfile extends ProfileMetadata {
+    readonly id: string;
+}
+
+export function buildProfileLabel(profile: UsedProfile): string {
+    return localPrefix + ":" + formatProfileId(profile.id);
+}
+
+export interface UnusedProfile {
+    readonly id: string;
+}
+
+export function unusedProfileLabel(profile: UnusedProfile): string {
+    return unusedFormat(profile.id);
+}
+`
+            );
+            await writeFile(
+                join(sourceDir, "transitive-formatters.ts"),
+                `
+export function formatProfileId(id: string): string {
+    return "profile-" + id;
+}
+
+export function unusedFormat(value: string): string {
+    return "unused-" + value;
+}
+`
+            );
+            await writeFile(
+                join(sourceDir, "type-only-shape.ts"),
+                `
+export interface TypeOnlyShape {
+    readonly shapeId: string;
+}
+
+export interface UnusedTypeOnlyShape {
+    readonly unusedId: string;
+}
+`
+            );
+
+            return {
+                root,
+                sourceDir,
+                outputDir,
+                cleanup: () => rm(root, { recursive: true, force: true }),
+            };
+        }
+
+        async function readGenerated(
+            outputDir: string,
+            fileName: string,
+            contextName = "profiles"
+        ): Promise<string> {
+            return readFile(join(outputDir, contextName, fileName), "utf-8");
+        }
+
+        it("should slice dependency files to retained runtime and type symbols when dependencyStrategy is safe-symbols", async () => {
+            const project = await createSafeSymbolsProject();
+
+            try {
+                await ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "profiles",
+                        project.sourceDir
+                    ),
+                    dependencyStrategy: "safe-symbols",
+                }).execute({
+                    contextName: "profiles",
+                    sourceDir: project.sourceDir,
+                    outputDir: project.outputDir,
+                });
+
+                const entryContent = await readGenerated(
+                    project.outputDir,
+                    "profile-query.ts"
+                );
+                const dependencyContent = await readGenerated(
+                    project.outputDir,
+                    "profile-dependencies.ts"
+                );
+                const transitiveContent = await readGenerated(
+                    project.outputDir,
+                    "transitive-formatters.ts"
+                );
+                const typeOnlyContent = await readGenerated(
+                    project.outputDir,
+                    "type-only-shape.ts"
+                );
+
+                expect(entryContent).toContain(
+                    'from "./profile-dependencies.js"'
+                );
+                expect(entryContent).toContain(
+                    'from "./type-only-shape.js"'
+                );
+                expect(entryContent).not.toContain("UnusedProfile");
+                expect(dependencyContent).toContain("export abstract class QueryBase");
+                expect(dependencyContent).toContain("interface ProfileMetadata");
+                expect(dependencyContent).toContain("const localPrefix");
+                expect(dependencyContent).toContain("export interface UsedProfile");
+                expect(dependencyContent).toContain("export function buildProfileLabel");
+                expect(dependencyContent).toContain(
+                    'from "./transitive-formatters.js"'
+                );
+                expect(dependencyContent).not.toContain("UnusedProfile");
+                expect(dependencyContent).not.toContain("unusedProfileLabel");
+                expect(dependencyContent).not.toContain("unusedFormat");
+                expect(transitiveContent).toContain("export function formatProfileId");
+                expect(transitiveContent).not.toContain("unusedFormat");
+                expect(typeOnlyContent).toContain("export interface TypeOnlyShape");
+                expect(typeOnlyContent).not.toContain("UnusedTypeOnlyShape");
+            } finally {
+                await project.cleanup();
+            }
+        });
+
+        it("should keep full dependency file behavior by default with symbols entryStrategy", async () => {
+            const project = await createSafeSymbolsProject();
+
+            try {
+                await ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "profiles",
+                        project.sourceDir
+                    ),
+                }).execute({
+                    contextName: "profiles",
+                    sourceDir: project.sourceDir,
+                    outputDir: project.outputDir,
+                });
+
+                const dependencyContent = await readGenerated(
+                    project.outputDir,
+                    "profile-dependencies.ts"
+                );
+                const transitiveContent = await readGenerated(
+                    project.outputDir,
+                    "transitive-formatters.ts"
+                );
+
+                expect(dependencyContent).toContain("UnusedProfile");
+                expect(dependencyContent).toContain("unusedProfileLabel");
+                expect(transitiveContent).toContain("unusedFormat");
+            } finally {
+                await project.cleanup();
+            }
+        });
+
+        it("should ignore safe-symbols slicing in graph mode", async () => {
+            const project = await createSafeSymbolsProject();
+            await writeFile(
+                join(project.sourceDir, "profile-dependencies.ts"),
+                (await readFile(
+                    join(project.sourceDir, "profile-dependencies.ts"),
+                    "utf-8"
+                )) + `
+registerGraphModeDependency();
+
+function registerGraphModeDependency(): void {}
+`
+            );
+
+            try {
+                await ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "profiles",
+                        project.sourceDir
+                    ),
+                    entryStrategy: "graph",
+                    dependencyStrategy: "safe-symbols",
+                }).execute({
+                    contextName: "profiles",
+                    sourceDir: project.sourceDir,
+                    outputDir: project.outputDir,
+                });
+
+                const entryContent = await readGenerated(
+                    project.outputDir,
+                    "profile-query.ts"
+                );
+                const dependencyContent = await readGenerated(
+                    project.outputDir,
+                    "profile-dependencies.ts"
+                );
+
+                expect(entryContent).toContain("UnusedProfile");
+                expect(dependencyContent).toContain("unusedProfileLabel");
+                expect(dependencyContent).toContain(
+                    "registerGraphModeDependency()"
+                );
+            } finally {
+                await project.cleanup();
+            }
+        });
+
+        it("should not slice entry point files imported by other extracted entries", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-pipeline-"));
+            const sourceDir = join(root, "src");
+            const outputDir = join(root, "contracts");
+            await mkdir(sourceDir, { recursive: true });
+            await writeFile(
+                join(sourceDir, "a-query.ts"),
+                `
+import { ContractQuery } from "@hexaijs/contracts/decorators";
+import { SharedShape } from "./b-query.js";
+
+@ContractQuery()
+export class AQuery {
+    readonly shared!: SharedShape;
+}
+`
+            );
+            await writeFile(
+                join(sourceDir, "b-query.ts"),
+                `
+import { ContractQuery } from "@hexaijs/contracts/decorators";
+
+export interface SharedShape {
+    readonly id: string;
+}
+
+@ContractQuery()
+export class BQuery {
+    readonly shared!: SharedShape;
+}
+`
+            );
+
+            try {
+                await ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "cross-entry",
+                        sourceDir
+                    ),
+                    dependencyStrategy: "safe-symbols",
+                }).execute({
+                    contextName: "cross-entry",
+                    sourceDir,
+                    outputDir,
+                });
+
+                const aQueryContent = await readGenerated(
+                    outputDir,
+                    "a-query.ts",
+                    "cross-entry"
+                );
+                const bQueryContent = await readGenerated(
+                    outputDir,
+                    "b-query.ts",
+                    "cross-entry"
+                );
+
+                expect(aQueryContent).toContain('from "./b-query.js"');
+                expect(bQueryContent).toContain("export interface SharedShape");
+                expect(bQueryContent).toContain("export class BQuery");
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        });
+
+        it("should reject safe-symbols dependency slicing when top-level side effects are present", async () => {
+            const project = await createSafeSymbolsProject();
+            await writeFile(
+                join(project.sourceDir, "profile-dependencies.ts"),
+                `
+import { formatProfileId, unusedFormat } from "./transitive-formatters.js";
+
+registerProfileDependency();
+
+function registerProfileDependency(): void {}
+
+export abstract class QueryBase {
+    readonly queryId = formatProfileId("root");
+}
+
+export interface UsedProfile {
+    readonly id: string;
+}
+
+export function buildProfileLabel(profile: UsedProfile): string {
+    return formatProfileId(profile.id);
+}
+
+export interface UnusedProfile {
+    readonly id: string;
+}
+
+export function unusedProfileLabel(profile: UnusedProfile): string {
+    return unusedFormat(profile.id);
+}
+`
+            );
+
+            try {
+                const execution = ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "profiles",
+                        project.sourceDir
+                    ),
+                    dependencyStrategy: "safe-symbols",
+                }).execute({
+                    contextName: "profiles",
+                    sourceDir: project.sourceDir,
+                    outputDir: project.outputDir,
+                });
+
+                await expect(execution).rejects.toThrow(
+                    UnsafeDependencySliceError
+                );
+                await expect(execution).rejects.toMatchObject({
+                    filePath: join(
+                        project.sourceDir,
+                        "profile-dependencies.ts"
+                    ),
+                    reason: expect.stringContaining("top-level statement"),
+                });
+            } finally {
+                await project.cleanup();
+            }
         });
     });
 
@@ -257,29 +653,138 @@ export interface QAInternalShape {
             );
 
             try {
-                let thrown: unknown;
-                try {
-                    await ContractsPipeline.create({
+                const execution = ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "reference-data",
+                        sourceDir
+                    ),
+                    trustedDecoratorSources: ["./contract-markers"],
+                }).execute({
+                    contextName: "reference-data",
+                    sourceDir,
+                    outputDir,
+                    removeDecorators: true,
+                    select: { visibility: ["public"] },
+                });
+
+                await expect(execution).rejects.toThrow(BoundaryViolationError);
+                await expect(execution).rejects.toThrow(
+                    /QAInternalShape.*visibility=internal/
+                );
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        });
+
+        it("should pass strict public selection when safe slicing removes an unused internal marked dependency declaration", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-pipeline-"));
+            const sourceDir = join(root, "src");
+            const outputDir = join(root, "contracts");
+            await mkdir(sourceDir, { recursive: true });
+            await writeFile(
+                join(sourceDir, "public-query.ts"),
+                `
+import { ContractQuery } from "@hexaijs/contracts/decorators";
+import { PublicDependencyShape } from "./dependency-shapes.js";
+
+@ContractQuery()
+export class GetPublicDependencyQuery {
+    readonly shape!: PublicDependencyShape;
+}
+`
+            );
+            await writeFile(
+                join(sourceDir, "dependency-shapes.ts"),
+                `
+export interface PublicDependencyShape {
+    readonly id: string;
+}
+
+// @Contract({ kind: "shape", visibility: "internal" })
+export interface InternalDependencyShape {
+    readonly secret: string;
+}
+`
+            );
+
+            try {
+                await ContractsPipeline.create({
+                    contextConfig: ContextConfig.createSync(
+                        "reference-data",
+                        sourceDir
+                    ),
+                    dependencyStrategy: "safe-symbols",
+                }).execute({
+                    contextName: "reference-data",
+                    sourceDir,
+                    outputDir,
+                    removeDecorators: true,
+                    select: { visibility: ["public"] },
+                });
+
+                const content = await readFile(
+                    join(outputDir, "reference-data", "dependency-shapes.ts"),
+                    "utf-8"
+                );
+
+                expect(content).toContain("PublicDependencyShape");
+                expect(content).not.toContain("InternalDependencyShape");
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        });
+
+        it("should reject unsafe safe-symbols dependencies before strict public selection checks", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-pipeline-"));
+            const sourceDir = join(root, "src");
+            const outputDir = join(root, "contracts");
+            await mkdir(sourceDir, { recursive: true });
+            await writeFile(
+                join(sourceDir, "public-query.ts"),
+                `
+import { ContractQuery } from "@hexaijs/contracts/decorators";
+import { PublicDependencyShape } from "./dependency-shapes.js";
+
+@ContractQuery()
+export class GetPublicDependencyQuery {
+    readonly shape!: PublicDependencyShape;
+}
+`
+            );
+            await writeFile(
+                join(sourceDir, "dependency-shapes.ts"),
+                `
+registerDependencyShapes();
+
+function registerDependencyShapes(): void {}
+
+export interface PublicDependencyShape {
+    readonly id: string;
+}
+
+// @Contract({ kind: "shape", visibility: "internal" })
+export interface InternalDependencyShape {
+    readonly secret: string;
+}
+`
+            );
+
+            try {
+                await expect(
+                    ContractsPipeline.create({
                         contextConfig: ContextConfig.createSync(
                             "reference-data",
                             sourceDir
                         ),
-                        trustedDecoratorSources: ["./contract-markers"],
+                        dependencyStrategy: "safe-symbols",
                     }).execute({
                         contextName: "reference-data",
                         sourceDir,
                         outputDir,
                         removeDecorators: true,
                         select: { visibility: ["public"] },
-                    });
-                } catch (error) {
-                    thrown = error;
-                }
-
-                expect(thrown).toBeInstanceOf(BoundaryViolationError);
-                expect((thrown as Error).message).toMatch(
-                    /QAInternalShape.*visibility=internal/
-                );
+                    })
+                ).rejects.toThrow(UnsafeDependencySliceError);
             } finally {
                 await rm(root, { recursive: true, force: true });
             }
