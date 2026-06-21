@@ -140,44 +140,13 @@ describe("E2E: PublicContract comment markers", () => {
         });
     });
 
-    describe("graph entry strategy", () => {
-        const ctx = new E2ETestContext("public-contract");
-
-        beforeAll(async () => {
-            await ctx.setup();
-            await ctx.runParser({
-                entryStrategy: "graph",
-            });
-        });
-
-        afterAll(async () => {
-            await ctx.teardown();
-        });
-
-        it("should copy the full PublicContract entry file when explicitly requested", async () => {
-            await expectFileContains(
-                ctx.getOutputFile("public-contract/contracts.ts"),
-                [
-                    "InternalProfileRecord",
-                    "deriveDisplayName",
-                    "DEFAULT_STATUS",
-                    "Factory",
-                    "Status",
-                    "InternalProjection",
-                ]
-            );
-        });
-    });
-
-    describe("symbols entry strategy", () => {
+    describe("strict entry symbol extraction", () => {
         const ctx = new E2ETestContext("public-contract");
         let result: ProcessContextResult;
 
         beforeAll(async () => {
             await ctx.setup();
-            result = await ctx.runParser({
-                entryStrategy: "symbols",
-            });
+            result = await ctx.runParser();
         });
 
         afterAll(async () => {
@@ -214,13 +183,12 @@ describe("E2E: PublicContract comment markers", () => {
     });
 
     describe("removeDecorators output", () => {
-        it("should remove PublicContract decorators and decorator imports in graph mode", async () => {
+        it("should remove PublicContract decorators and decorator imports", async () => {
             const ctx = new E2ETestContext("public-contract");
             await ctx.setup();
 
             try {
                 await ctx.runParser({
-                    entryStrategy: "graph",
                     removeDecorators: true,
                 });
 
@@ -236,35 +204,12 @@ describe("E2E: PublicContract comment markers", () => {
             }
         });
 
-        it("should remove PublicContract decorators and decorator imports in symbols mode", async () => {
+        it("should compile output after preserving class implementation", async () => {
             const ctx = new E2ETestContext("public-contract");
             await ctx.setup();
 
             try {
                 await ctx.runParser({
-                    entryStrategy: "symbols",
-                    removeDecorators: true,
-                });
-
-                await expectFileNotContains(
-                    ctx.getOutputFile("public-contract/contracts.ts"),
-                    [
-                        "@PublicContract",
-                        "@hexaijs/contracts/decorators",
-                    ]
-                );
-            } finally {
-                await ctx.teardown();
-            }
-        });
-
-        it("should compile symbols output after preserving class implementation", async () => {
-            const ctx = new E2ETestContext("public-contract");
-            await ctx.setup();
-
-            try {
-                await ctx.runParser({
-                    entryStrategy: "symbols",
                     removeDecorators: true,
                 });
 

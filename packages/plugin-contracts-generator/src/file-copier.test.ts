@@ -6,7 +6,7 @@ import { randomUUID } from "crypto";
 import { FileCopier } from "./file-copier.js";
 import { FileGraphResolver } from "./file-graph-resolver.js";
 import { ContextConfig } from "./context-config.js";
-import { UnsafeDependencySliceError } from "./errors.js";
+import { ConfigurationError, UnsafeDependencySliceError } from "./errors.js";
 
 import type { CopyOptions } from "./file-copier.js";
 
@@ -77,6 +77,37 @@ describe("FileCopier", () => {
         if (fs.existsSync(outputDir)) {
             fs.rmSync(outputDir, { recursive: true });
         }
+    });
+
+    describe("removed entryStrategy validation", () => {
+        it("should reject stale entryStrategy options", async () => {
+            const copier = new FileCopier();
+
+            await expect(
+                copier.copyFiles({
+                    sourceRoot: fixtureRoot,
+                    outputDir,
+                    fileGraph: {
+                        nodes: new Map(),
+                        entryPoints: new Set(),
+                        excludedPaths: new Set(),
+                    },
+                    entryStrategy: "graph",
+                } as unknown as CopyOptions)
+            ).rejects.toThrow(ConfigurationError);
+            await expect(
+                copier.copyFiles({
+                    sourceRoot: fixtureRoot,
+                    outputDir,
+                    fileGraph: {
+                        nodes: new Map(),
+                        entryPoints: new Set(),
+                        excludedPaths: new Set(),
+                    },
+                    entryStrategy: "graph",
+                } as unknown as CopyOptions)
+            ).rejects.toThrow("entryStrategy has been removed");
+        });
     });
 
     describe("basic file copying", () => {
@@ -548,10 +579,8 @@ export class CreateUserCommand {}
             expect(copiedContent).not.toContain("PublicCommand");
             expect(copiedContent).not.toMatch(/\bPublicEvent\b/);
             expect(copiedContent).not.toContain("PublicQuery");
-            expect(copiedContent).toContain("PublicEventOptions");
-            expect(copiedContent).toContain(
-                "@hexaijs/contracts"
-            );
+            expect(copiedContent).not.toContain("PublicEventOptions");
+            expect(copiedContent).not.toContain("@hexaijs/contracts");
         });
 
         it("should remove direct ContractCommand decorator and import", async () => {
@@ -622,9 +651,9 @@ export class UserCreated {}
                 `import { ContractCommand as CommandMarker } from "@hexaijs/contracts";
 
 @CommandMarker()
-export class CreateUserCommand {}
-
-export const markerReference = CommandMarker;
+export class CreateUserCommand {
+    static markerReference = CommandMarker;
+}
 `
             );
 
@@ -640,7 +669,7 @@ export const markerReference = CommandMarker;
                 "ContractCommand as CommandMarker"
             );
             expect(copiedContent).toContain(
-                "export const markerReference = CommandMarker"
+                "static markerReference = CommandMarker"
             );
         });
 
@@ -767,12 +796,13 @@ export type UserProjection = {
             fs.writeFileSync(
                 sourceFile,
                 `/**
- * @Contract is a documentation tag here, not a marker call.
+ * Contract snapshot marker follows.
  */
-export interface ContractDocs {}
-
 // @Contract({ kind: "snapshot" })
-export interface UserSnapshot {}
+export interface UserSnapshot {
+    /** @Contract is a documentation tag here, not a marker call. */
+    readonly id: string;
+}
 `
             );
 
@@ -787,7 +817,6 @@ export interface UserSnapshot {}
                 "@Contract is a documentation tag here"
             );
             expect(copiedContent).not.toContain('@Contract({ kind: "snapshot" })');
-            expect(copiedContent).toContain("export interface ContractDocs");
             expect(copiedContent).toContain("export interface UserSnapshot");
         });
 
@@ -798,8 +827,10 @@ export interface UserSnapshot {}
             const sourceFile = path.join(testDir, "command.ts");
             fs.writeFileSync(
                 sourceFile,
-                `import { ContractCommand } from "other-contracts";
+                `import { Contract } from "@hexaijs/contracts";
+import { ContractCommand } from "other-contracts";
 
+@Contract({ kind: "command" })
 @ContractCommand()
 export class CreateUserCommand {}
 `
@@ -820,7 +851,7 @@ export class CreateUserCommand {}
         });
     });
 
-    describe("symbols entry strategy", () => {
+    describe("strict entry symbol extraction", () => {
         it("should extract ContractCommand, generic custom Contract, and comment marker declarations", async () => {
             const testDir = path.join(outputDir, "source");
             fs.mkdirSync(testDir, { recursive: true });
@@ -848,7 +879,6 @@ class InternalHelper {}
                 testDir,
                 outputDir,
                 {
-                    entryStrategy: "symbols",
                     includePublicContracts: true,
                 }
             );
@@ -881,7 +911,6 @@ export class UserSnapshot {}
                 testDir,
                 outputDir,
                 {
-                    entryStrategy: "symbols",
                     messageTypes: ["query"],
                     includePublicContracts: false,
                 }
@@ -891,7 +920,7 @@ export class UserSnapshot {}
             expect(copiedContent).not.toContain("UserSnapshot");
         });
 
-        it("should copy full dependency files by default", async () => {
+        it("should copy full dependency files when dependencyStrategy is file", async () => {
             const testDir = path.join(outputDir, "source");
             fs.mkdirSync(testDir, { recursive: true });
 
@@ -920,7 +949,7 @@ export interface UnusedShape {
             );
 
             await copySingleEntry(sourceFile, testDir, outputDir, {
-                entryStrategy: "symbols",
+                dependencyStrategy: "file",
             });
 
             const dependencyContent = fs.readFileSync(
@@ -961,7 +990,6 @@ export interface UnusedShape {
             );
 
             await copySingleEntry(sourceFile, testDir, outputDir, {
-                entryStrategy: "symbols",
                 dependencyStrategy: "safe-symbols",
             });
 
@@ -999,7 +1027,6 @@ export class FindUserQuery {
 
             await expectUnsafeDependencySliceError(
                 copySingleEntry(sourceFile, testDir, outputDir, {
-                    entryStrategy: "symbols",
                     dependencyStrategy: "safe-symbols",
                 }),
                 {
@@ -1037,7 +1064,6 @@ export class FindUserQuery {
                 testDir,
                 outputDir,
                 {
-                    entryStrategy: "symbols",
                     dependencyStrategy: "file",
                 }
             );
@@ -1082,7 +1108,6 @@ export class FindUserQuery {
 
             await expectUnsafeDependencySliceError(
                 copySingleEntry(sourceFile, testDir, outputDir, {
-                    entryStrategy: "symbols",
                     dependencyStrategy: "safe-symbols",
                 }),
                 {
@@ -1353,7 +1378,6 @@ export class FindUserQuery {
 
             await expectUnsafeDependencySliceError(
                 copySingleEntry(sourceFile, testDir, outputDir, {
-                    entryStrategy: "symbols",
                     dependencyStrategy: "safe-symbols",
                 }),
                 {
@@ -1389,7 +1413,6 @@ export class FindUserQuery {
 
             await expectUnsafeDependencySliceError(
                 copySingleEntry(sourceFile, testDir, outputDir, {
-                    entryStrategy: "symbols",
                     dependencyStrategy: "safe-symbols",
                 }),
                 {
@@ -1435,7 +1458,6 @@ export interface UnusedShape {
             );
 
             await copySingleEntry(sourceFile, testDir, outputDir, {
-                entryStrategy: "symbols",
                 dependencyStrategy: "safe-symbols",
             });
 
@@ -1548,7 +1570,12 @@ export interface UnusedShape {
             const sourceFile = path.join(testDir, "command.ts");
             fs.writeFileSync(
                 sourceFile,
-                `export class CreateUserCommand {}
+                `import { ContractCommand } from "@hexaijs/contracts/decorators";
+
+@ContractCommand()
+export class CreateUserCommand {
+    readonly result!: CreateUserResult;
+}
 
 type CreateUserResult = {
     userId: string;
@@ -1589,7 +1616,12 @@ type CreateUserResult = {
             const sourceFile = path.join(testDir, "query.ts");
             fs.writeFileSync(
                 sourceFile,
-                `export class GetUserQuery {}
+                `import { ContractQuery } from "@hexaijs/contracts/decorators";
+
+@ContractQuery()
+export class GetUserQuery {
+    readonly result!: GetUserResult;
+}
 
 interface GetUserResult {
     name: string;
@@ -1631,7 +1663,12 @@ interface GetUserResult {
             const sourceFile = path.join(testDir, "command.ts");
             fs.writeFileSync(
                 sourceFile,
-                `export class CreateUserCommand {}
+                `import { ContractCommand } from "@hexaijs/contracts/decorators";
+
+@ContractCommand()
+export class CreateUserCommand {
+    readonly result!: CreateUserResult;
+}
 
 export type CreateUserResult = {
     userId: string;

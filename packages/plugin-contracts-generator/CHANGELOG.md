@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0] - 2026-06-21
+
+### Changed
+
+- Removed `entryStrategy` from the public config, CLI, plugin, and programmatic APIs. Entry files now always use strict symbol extraction.
+- Changed the default `dependencyStrategy` to `"safe-symbols"` for fail-fast dependency slicing by default.
+- Kept `dependencyStrategy: "file"` as an explicit compatibility mode for full dependency-file copying.
+- Shared dependency files outside the current context source root are copied whole in `safe-symbols` mode to avoid cross-context slice overwrites.
+
+### Fixed
+
+- Ignored trusted decorator-only local barrels during dependency collection when `removeDecorators: true`, so safe dependency slicing does not reject decorator helper re-exports that will not be emitted.
+- Rejected stale `entryStrategy` config and `--entry-strategy` CLI usage with an explicit removal error.
+
 ## [0.6.0] - 2026-06-21
 
 ### Added

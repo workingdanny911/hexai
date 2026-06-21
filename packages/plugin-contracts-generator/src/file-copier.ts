@@ -23,6 +23,7 @@ import {
     BoundaryViolationError,
     FileReadError,
     FileWriteError,
+    ConfigurationError,
     UnsafeDependencySliceError,
 } from "./errors.js";
 import { FileSystem, nodeFileSystem } from "./file-system.js";
@@ -39,7 +40,6 @@ import type {
     ContractOutputSelect,
     DecoratorNames,
     DependencyStrategy,
-    EntryStrategy,
     MessageContractKind,
     MessageType,
     OutputModuleSpecifiers,
@@ -68,7 +68,6 @@ export interface CopyOptions {
     contractMarkerNames?: ContractMarkerNames;
     trustedDecoratorSources?: TrustedDecoratorSources;
     includePublicContracts?: boolean;
-    entryStrategy?: EntryStrategy;
     dependencyStrategy?: DependencyStrategy;
     select?: ContractOutputSelect;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
@@ -136,6 +135,8 @@ export class FileCopier {
     }
 
     async copyFiles(options: CopyOptions): Promise<CopyResult> {
+        this.assertNoRemovedEntryStrategy(options);
+
         const {
             sourceRoot,
             outputDir,
@@ -150,8 +151,7 @@ export class FileCopier {
             contractMarkerNames,
             trustedDecoratorSources,
             includePublicContracts,
-            entryStrategy = "graph",
-            dependencyStrategy = "file",
+            dependencyStrategy = "safe-symbols",
             select,
             outputModuleSpecifiers = DEFAULT_OUTPUT_MODULE_SPECIFIERS,
         } = options;
@@ -161,12 +161,12 @@ export class FileCopier {
         const { entryContents, usedLocalImports, retainedLocalImports } =
             await this.preprocessEntryFiles(
                 fileGraph,
-                entryStrategy,
                 messageTypes,
                 decoratorNames,
                 contractMarkerNames,
                 trustedDecoratorSources,
                 includePublicContracts,
+                removeDecorators,
                 responseTypesToInclude,
                 sourceRoot,
                 dependencyStrategy,
@@ -174,19 +174,32 @@ export class FileCopier {
             );
 
         let slicedDependencyContents: ReadonlyMap<string, string> | undefined;
-        if (entryStrategy === "symbols") {
-            if (dependencyStrategy === "safe-symbols") {
-                slicedDependencyContents = (
-                    await new DependencySymbolSlicer({
-                        fileSystem: this.fs,
-                    }).slice({
-                        fileGraph,
-                        retainedLocalImports,
-                    })
-                ).contents;
-            } else {
-                this.expandTransitiveDependencies(usedLocalImports, fileGraph);
+        let wholeFileDependencyPaths: Set<string> | undefined;
+        if (dependencyStrategy === "safe-symbols") {
+            const outsideSourceRootPaths =
+                this.collectOutsideSourceRootPaths(fileGraph);
+            const {
+                sliceableRetainedImports,
+                wholeFileDependencyPaths: retainedWholeFileDependencyPaths,
+            } = this.partitionRetainedLocalImports(
+                retainedLocalImports,
+                outsideSourceRootPaths
+            );
+            const sliceResult = await new DependencySymbolSlicer({
+                fileSystem: this.fs,
+            }).slice({
+                fileGraph,
+                retainedLocalImports: sliceableRetainedImports,
+                wholeFileDependencyPaths: outsideSourceRootPaths,
+            });
+            wholeFileDependencyPaths = retainedWholeFileDependencyPaths;
+            for (const retainedImport of sliceResult.wholeFileRetainedImports) {
+                wholeFileDependencyPaths.add(retainedImport.resolvedPath);
             }
+            this.expandTransitiveDependencies(wholeFileDependencyPaths, fileGraph);
+            slicedDependencyContents = sliceResult.contents;
+        } else {
+            this.expandTransitiveDependencies(usedLocalImports, fileGraph);
         }
 
         for (const node of fileGraph.nodes.values()) {
@@ -194,7 +207,7 @@ export class FileCopier {
                 node,
                 entryContents,
                 usedLocalImports,
-                entryStrategy,
+                wholeFileDependencyPaths,
                 slicedDependencyContents
             );
 
@@ -252,6 +265,14 @@ export class FileCopier {
         }
 
         return { copiedFiles, rewrittenImports };
+    }
+
+    private assertNoRemovedEntryStrategy(options: CopyOptions): void {
+        if (Object.prototype.hasOwnProperty.call(options, "entryStrategy")) {
+            throw new ConfigurationError(
+                "entryStrategy has been removed. Strict symbol entry extraction is always used."
+            );
+        }
     }
 
     private shouldSkipTrustedDecoratorHelperFile(
@@ -533,12 +554,12 @@ export class FileCopier {
 
     private async preprocessEntryFiles(
         fileGraph: FileGraph,
-        entryStrategy: EntryStrategy,
         messageTypes: readonly MessageType[] | undefined,
         decoratorNames: DecoratorNames | undefined,
         contractMarkerNames: ContractMarkerNames | undefined,
         trustedDecoratorSources: TrustedDecoratorSources | undefined,
         includePublicContracts: boolean | undefined,
+        removeDecorators: boolean | undefined,
         responseTypesToInclude: Map<string, string[]> | undefined,
         sourceRoot: string,
         dependencyStrategy: DependencyStrategy,
@@ -551,10 +572,6 @@ export class FileCopier {
         const entryContents = new Map<string, string>();
         const usedLocalImports = new Set<string>();
         const retainedLocalImports: RetainedLocalImport[] = [];
-
-        if (entryStrategy !== "symbols") {
-            return { entryContents, usedLocalImports, retainedLocalImports };
-        }
 
         const extractionMessageTypes =
             messageTypes ?? (["event", "command", "query"] as const);
@@ -585,7 +602,7 @@ export class FileCopier {
                 continue;
             }
 
-            const { content: extractedContent, usedModuleSpecifiers } =
+            const { content: extractedContent } =
                 this.extractSymbolsFromEntry(
                     rawContent,
                     node.absolutePath,
@@ -597,27 +614,30 @@ export class FileCopier {
                     responseTypesToInclude?.get(node.absolutePath),
                     select
                 );
+            const dependencyContent = removeDecorators
+                ? this.removeContractDecorators(
+                    extractedContent,
+                    node.absolutePath,
+                    decoratorNames,
+                    contractMarkerNames,
+                    trustedDecoratorSources
+                ).content
+                : extractedContent;
             this.assertSafeSymbolsEntryContent(
-                extractedContent,
+                dependencyContent,
                 node.absolutePath,
                 dependencyStrategy
             );
             entryContents.set(node.absolutePath, extractedContent);
 
-            for (const specifier of usedModuleSpecifiers) {
-                const importInfo = node.imports.find(
-                    (i) => i.moduleSpecifier === specifier
-                );
-                if (importInfo?.resolvedPath && !importInfo.isExternal) {
-                    usedLocalImports.add(importInfo.resolvedPath);
-                }
-            }
-
             const retainedImports = this.collectRetainedLocalImports(
                 node,
-                extractedContent,
+                dependencyContent,
                 fileGraph.entryPoints
             );
+            for (const retainedImport of retainedImports) {
+                usedLocalImports.add(retainedImport.resolvedPath);
+            }
             retainedLocalImports.push(...retainedImports);
         }
 
@@ -772,37 +792,73 @@ export class FileCopier {
         }
     }
 
+    private collectOutsideSourceRootPaths(fileGraph: FileGraph): ReadonlySet<string> {
+        const outsideSourceRootPaths = new Set<string>();
+
+        for (const node of fileGraph.nodes.values()) {
+            if (this.isOutsideSourceRoot(node)) {
+                outsideSourceRootPaths.add(node.absolutePath);
+            }
+        }
+
+        return outsideSourceRootPaths;
+    }
+
+    private partitionRetainedLocalImports(
+        retainedLocalImports: readonly RetainedLocalImport[],
+        wholeFileDependencyPaths: ReadonlySet<string>
+    ): {
+        sliceableRetainedImports: RetainedLocalImport[];
+        wholeFileDependencyPaths: Set<string>;
+    } {
+        const sliceableRetainedImports: RetainedLocalImport[] = [];
+        const retainedWholeFileDependencyPaths = new Set<string>();
+
+        for (const retainedImport of retainedLocalImports) {
+            if (wholeFileDependencyPaths.has(retainedImport.resolvedPath)) {
+                retainedWholeFileDependencyPaths.add(retainedImport.resolvedPath);
+                continue;
+            }
+
+            sliceableRetainedImports.push(retainedImport);
+        }
+
+        return {
+            sliceableRetainedImports,
+            wholeFileDependencyPaths: retainedWholeFileDependencyPaths,
+        };
+    }
+
     private async resolveNodeContent(
         node: FileNode,
         entryContents: Map<string, string>,
         usedLocalImports: Set<string>,
-        entryStrategy: EntryStrategy,
+        wholeFileDependencyPaths: ReadonlySet<string> | undefined,
         slicedDependencyContents: ReadonlyMap<string, string> | undefined
     ): Promise<string | null> {
         const entryContent = entryContents.get(node.absolutePath);
-        if (node.isEntryPoint && entryContent !== undefined) {
-            return entryContent;
-        }
-
         if (node.isEntryPoint) {
-            return (
-                entryContent ??
-                (await this.readFileContent(node.absolutePath))
-            );
+            return entryContent ?? null;
         }
 
-        const isUnusedDependency =
-            entryStrategy === "symbols" && !usedLocalImports.has(node.absolutePath);
+        if (wholeFileDependencyPaths?.has(node.absolutePath)) {
+            return await this.readFileContent(node.absolutePath);
+        }
 
-        if (entryStrategy === "symbols" && slicedDependencyContents) {
+        if (slicedDependencyContents) {
             return slicedDependencyContents.get(node.absolutePath) ?? null;
         }
 
-        if (isUnusedDependency) {
+        if (!usedLocalImports.has(node.absolutePath)) {
             return null;
         }
 
         return await this.readFileContent(node.absolutePath);
+    }
+
+    private isOutsideSourceRoot(node: FileNode): boolean {
+        const normalizedRelativePath = node.relativePath.replace(/\\/g, "/");
+        return normalizedRelativePath.startsWith("../");
     }
 
     private applyTransformations(

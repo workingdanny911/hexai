@@ -21,7 +21,7 @@ describe("E2E: Dependency Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["query"],
-                entryStrategy: "symbols",
+                dependencyStrategy: "file",
             });
         });
 
@@ -57,7 +57,7 @@ describe("E2E: Dependency Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["query"],
-                entryStrategy: "symbols",
+                dependencyStrategy: "file",
             });
         });
 
@@ -93,7 +93,7 @@ describe("E2E: Dependency Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["query"],
-                entryStrategy: "symbols",
+                dependencyStrategy: "file",
             });
         });
 
@@ -115,7 +115,7 @@ describe("E2E: Dependency Extraction", () => {
             await ctx.setup();
             await ctx.runParser({
                 messageTypes: ["query"],
-                entryStrategy: "symbols",
+                dependencyStrategy: "file",
             });
         });
 

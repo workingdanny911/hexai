@@ -16,8 +16,6 @@ import type {
     ResponseNamingConvention,
 } from "../../src/domain/types.js";
 
-export type EntryStrategy = "graph" | "symbols";
-
 export interface RunParserOptions {
     contextName?: string;
     path?: string;
@@ -26,7 +24,6 @@ export interface RunParserOptions {
     tsconfigPath?: string;
     responseNamingConventions?: readonly ResponseNamingConvention[];
     messageTypes?: MessageType[];
-    entryStrategy?: EntryStrategy;
     dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     removeDecorators?: boolean;
@@ -123,14 +120,10 @@ export class E2ETestContext {
             tsconfigPath: opts.tsconfigPath,
             responseNamingConventions: opts.responseNamingConventions,
             messageTypes: opts.messageTypes,
-            entryStrategy: opts.entryStrategy,
             dependencyStrategy: opts.dependencyStrategy,
             outputModuleSpecifiers: opts.outputModuleSpecifiers,
             removeDecorators: opts.removeDecorators,
-        } as Parameters<typeof processContext>[0] & {
-            entryStrategy?: EntryStrategy;
-            dependencyStrategy?: DependencyStrategy;
-        };
+        } satisfies Parameters<typeof processContext>[0];
 
         return processContext(processOptions);
     }

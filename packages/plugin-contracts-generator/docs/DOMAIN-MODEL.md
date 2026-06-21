@@ -334,7 +334,7 @@ Import information used by a class.
 
 **Note:** Importing a Class with `import type` will break `instanceof` at runtime
 
-In `entryStrategy: "symbols"`, import filtering operates on the original entry-file AST rather than this simplified `ClassImport` shape alone. That keeps practical TypeScript import forms intact when selected declarations need them:
+Entry import filtering operates on the original entry-file AST rather than this simplified `ClassImport` shape alone. That keeps practical TypeScript import forms intact when selected declarations need them:
 
 - default imports
 - namespace imports
@@ -343,7 +343,7 @@ In `entryStrategy: "symbols"`, import filtering operates on the original entry-f
 - type-only default imports
 - qualified type references such as `Types.User` and `Types.Inner.User`
 
-With the default `dependencyStrategy: "file"`, the strategy still models dependency traversal at file granularity after an import is retained. Referenced local dependency files are copied whole; they are not represented as symbol-sliced `TypeDefinition` subsets. With `dependencyStrategy: "safe-symbols"`, retained named local imports are handed to the dependency symbol slicer, which emits only required top-level declarations when the dependency file is statically safe.
+With the default `dependencyStrategy: "safe-symbols"`, retained named local imports are handed to the dependency symbol slicer, which emits only required top-level declarations when the dependency file is statically safe. With `dependencyStrategy: "file"`, the strategy models dependency traversal at file granularity after an import is retained. Referenced local dependency files are copied whole; they are not represented as symbol-sliced `TypeDefinition` subsets.
 
 ### 7. SourceFile
 
@@ -412,37 +412,24 @@ const DEFAULT_CONTRACT_MARKER_NAMES: Required<ContractMarkerNames> = {
 
 The marker is searched as a class decorator and in leading line, block, or JSDoc comments before `class`, `interface`, `type`, and `enum` declarations. Interface, type alias, and enum declarations are comment marker only.
 
-### 11. EntryStrategy
+### 11. DependencyStrategy
 
-Controls how selected entry files become generated output.
-
-```typescript
-type EntryStrategy = "graph" | "symbols";
-```
-
-- `symbols` is the default. It emits selected message declarations and marked general contract declarations with minimal entry-file dependencies, while preserving retained default, namespace, aliased, mixed, type-only default, and qualified-reference import shapes.
-- `graph` is the conservative copy strategy. It copies selected entry files and their dependency graphs, preserving runtime dependencies when explicitly requested.
-- Under `graph`, message filters select graph roots and registry entries only. A selected entry file can still be copied whole with other declarations from the same file, and the pipeline logs a warning when filters are used. Use `symbols` when strict filtering is required.
-- `symbols` is AST-based and does not use the TypeScript TypeChecker as a semantic slicer. It owns selected entry-file declarations; dependency files are controlled separately by `DependencyStrategy`.
-
-### 12. DependencyStrategy
-
-Controls how local dependency files retained by `entryStrategy: "symbols"` become generated output.
+Controls how local dependency files retained by strict entry extraction become generated output.
 
 ```typescript
 type DependencyStrategy = "file" | "safe-symbols";
 ```
 
-- `file` is the default. It copies retained dependency files whole, preserving existing barrel-file and transitive graph behavior.
-- `safe-symbols` is opt-in. It slices retained dependency files to named top-level declarations and their local declaration closure when the dependency module is statically safe.
-- `safe-symbols` applies only under `entryStrategy: "symbols"`. `entryStrategy: "graph"` ignores dependency symbol slicing and keeps full-file graph copying.
+- `safe-symbols` is the default. It slices retained dependency files to named top-level declarations and their local declaration closure when the dependency module is statically safe.
+- `file` is an explicit compatibility mode. It copies retained dependency files whole, preserving existing barrel-file and transitive graph behavior.
+- Dependency files outside the current context source root are copied whole in `safe-symbols` mode to avoid cross-context shared-file slice overwrites.
 - `safe-symbols` does not silently fall back to `file`. Unsafe dependency modules throw `UnsafeDependencySliceError` with the file path and reason.
 
 The slicer accepts named local imports, named aliases, type-only named imports, local top-level declaration closure, transitive named local imports, and value declarations referenced by `typeof` type queries.
 
 Rejected unsafe shapes include side-effect-only imports, default or namespace imports that must be retained, dynamic imports, local import types such as `import("./types").T`, export declarations/re-exports, decorated classes or class members, class static blocks, computed class members, static member initializers, enum initializers, unsafe top-level variable initializers, arbitrary top-level statements, duplicate top-level declaration names, and missing required symbols.
 
-### 13. ResponseNamingConvention
+### 12. ResponseNamingConvention
 
 Defines naming patterns for matching response types to messages.
 

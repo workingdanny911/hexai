@@ -5,7 +5,9 @@ import {
     ContractCommand,
     ContractEvent,
     ContractQuery,
+    ConfigurationError,
     PublicContract,
+    processContext,
     type ContractCommandOptions,
     type ContractDeclaration,
     type ContractEventOptions,
@@ -81,5 +83,25 @@ describe("plugin package decorator exports", () => {
         expect(messageType).toBe("command");
         expect(decoratorNames.command).toBe("ContractCommand");
         expect(declaration.declarationKind).toBe("interface");
+    });
+
+    it("should reject removed entryStrategy in processContext options", async () => {
+        await expect(
+            processContext({
+                contextName: "orders",
+                path: "/tmp/orders",
+                outputDir: "/tmp/contracts",
+                entryStrategy: "graph",
+            } as unknown as Parameters<typeof processContext>[0])
+        ).rejects.toThrow(ConfigurationError);
+
+        await expect(
+            processContext({
+                contextName: "orders",
+                path: "/tmp/orders",
+                outputDir: "/tmp/contracts",
+                entryStrategy: "graph",
+            } as unknown as Parameters<typeof processContext>[0])
+        ).rejects.toThrow("entryStrategy has been removed");
     });
 });

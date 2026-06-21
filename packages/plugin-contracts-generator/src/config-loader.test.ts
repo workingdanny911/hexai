@@ -146,7 +146,7 @@ describe("ConfigLoader", () => {
             );
         });
 
-        it("should throw ConfigLoadError for invalid entryStrategy", async () => {
+        it("should throw ConfigLoadError when removed entryStrategy is configured", async () => {
             const configLoader = new ConfigLoader();
             const configPath = fixtureConfigPath("invalid-entry-strategy");
 
@@ -154,7 +154,7 @@ describe("ConfigLoader", () => {
                 ConfigLoadError
             );
             await expect(configLoader.load(configPath)).rejects.toThrow(
-                'Invalid contracts.entryStrategy: "file"'
+                "contracts.entryStrategy has been removed"
             );
         });
 
@@ -180,13 +180,35 @@ describe("ConfigLoader", () => {
             }
         });
 
-        it("should default missing dependencyStrategy to file", async () => {
+        it("should default missing dependencyStrategy to safe-symbols", async () => {
             const configLoader = new ConfigLoader();
             const configPath = fixtureConfigPath("valid-config");
 
             const result = await configLoader.load(configPath);
 
-            expect(result.dependencyStrategy).toBe("file");
+            expect(result.dependencyStrategy).toBe("safe-symbols");
+        });
+
+        it("should accept file dependencyStrategy as explicit legacy mode", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-config-"));
+            const configPath = join(root, "application.config.ts");
+            await writeFile(
+                configPath,
+                `export default {
+                    contracts: {
+                        contexts: [{ name: "orders", path: ".", sourceDir: "." }],
+                        dependencyStrategy: "file"
+                    }
+                };`
+            );
+
+            try {
+                const result = await new ConfigLoader().load(configPath);
+
+                expect(result.dependencyStrategy).toBe("file");
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
         });
 
         it("should reject invalid dependencyStrategy", async () => {

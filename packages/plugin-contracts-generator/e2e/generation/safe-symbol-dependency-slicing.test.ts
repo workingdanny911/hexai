@@ -13,8 +13,6 @@ describe("E2E: Safe Symbol Dependency Slicing", () => {
         await ctx.setup();
         await ctx.runParser({
             messageTypes: ["query"],
-            entryStrategy: "symbols",
-            dependencyStrategy: "safe-symbols",
             removeDecorators: true,
         });
     });

@@ -16,13 +16,9 @@ src/
 ├── domain/               # Core type definitions
 │   ├── types.ts
 │   └── index.ts
-│
-├── # Infrastructure
 ├── file-system.ts        # FileSystem abstraction interface
 ├── logger.ts             # Logger interface and ConsoleLogger
 ├── pipeline.ts           # ContractsPipeline orchestrator
-│
-├── # Core Modules
 ├── scanner.ts            # Find public contract entry files
 ├── parser.ts             # Extract messages and public contract metadata from AST
 ├── contract-decorator-matcher.ts # Source-aware Contract/Public marker matching
@@ -52,10 +48,10 @@ The generator keeps discovery, semantic selection, strategy choice, and emission
 
 1. **Scan** (`Scanner`): find candidate entry files by text markers. `messageTypes` narrows message decorator patterns; `includePublicContracts` controls general contract marker discovery.
 2. **Parse** (`Parser`): validate AST shapes and extract message metadata, response type definitions, and general contract metadata through `ContractDecoratorMatcher`.
-3. **Selection** (`ContractsPipeline`, `contract-selector.ts`): choose selected messages and selected general contracts by `visibility`, `kind`, `messageKinds`, `include`, and `tags`. Under the opt-in `entryStrategy: "graph"`, those selections become graph root files; filters limit only graph roots and later `MessageRegistry` entries.
-4. **EntryStrategy** (`FileCopier`): `symbols` is the default and performs strict extraction of selected entry declarations, import-shape-aware filtering, and minimal local dependency expansion. `graph` copies selected entry files and their dependency graphs when explicitly requested.
-5. **DependencyStrategy** (`FileCopier`, `DependencySymbolSlicer`): `file` is the default and copies retained dependency files whole. `safe-symbols` is an opt-in mode under `entryStrategy: "symbols"` that slices statically safe dependency files to retained named declarations and fails fast on unsafe dependency modules.
-6. **Emit** (`FileCopier`, barrel export, optional `RegistryGenerator`): write copied/extracted files, remove markers when configured, add missing `export` modifiers for selected response/public contract declarations, generate context barrels, and optionally generate a registry for selected messages only.
+3. **Selection** (`ContractsPipeline`, `contract-selector.ts`): choose selected messages and selected general contracts by `visibility`, `kind`, `messageKinds`, `include`, and `tags`.
+4. **Entry extraction** (`FileCopier`): always performs strict extraction of selected entry declarations, import-shape-aware filtering, and minimal local dependency expansion.
+5. **DependencyStrategy** (`FileCopier`, `DependencySymbolSlicer`): `safe-symbols` is the default and slices statically safe dependency files to retained named declarations. `file` is an explicit compatibility mode that copies retained dependency files whole.
+6. **Emit** (`FileCopier`, barrel export, optional `RegistryGenerator`): write extracted files, remove markers when configured, add missing `export` modifiers for selected response/public contract declarations, generate context barrels, and optionally generate a registry for selected messages only.
 
 ### 1. Contract Markers
 
@@ -324,8 +320,7 @@ interface CopyOptions {
   pathAliasRewrites?: Map<string, string>  // e.g., Map([['@libera/', '@/']])
   removeDecorators?: boolean               // Remove message decorators from generated output
   messageTypes?: MessageType[]             // Message types to extract ('event' | 'command' | 'query')
-  entryStrategy?: EntryStrategy            // 'symbols' default, or 'graph' for entry file graph copying
-  dependencyStrategy?: DependencyStrategy  // 'file' default, or 'safe-symbols' for safe dependency slicing
+  dependencyStrategy?: DependencyStrategy  // 'safe-symbols' default, or 'file' compatibility mode
   decoratorNames?: DecoratorNames          // Decorator names for each messageType
   contractMarkerNames?: ContractMarkerNames // Comment marker names for general contracts
   includePublicContracts?: boolean          // Include marked general contracts
@@ -350,11 +345,10 @@ class FileCopier {
 
 | File Type | Processing Method | Reason |
 |-----------|-------------------|--------|
-| **Selected entry files with `graph` strategy** | Full module copy + dependency graph copy | Preserve runtime validation/domain dependencies for generated contracts |
-| **Filtered entry files with `graph` strategy** | Root selection + full copy of selected entry files | Message/output filters select graph roots and registry entries only; selected files can still include other declarations and trigger a warning |
-| **Entry files with `symbols` strategy** | Symbol extraction + import filtering | Strictly include selected message types and marked general contract declarations |
-| **Dependency files with `file` strategy** | Full module copy | Default behavior; simplification, automatic barrel file support, and maximum compatibility |
-| **Dependency files with `safe-symbols` strategy** | Fail-fast symbol slicing | Narrow dependency files to retained named top-level declarations when the module is statically safe |
+| **Entry files** | Symbol extraction + import filtering | Strictly include selected message types and marked general contract declarations |
+| **Dependency files with `safe-symbols` strategy** | Fail-fast symbol slicing | Default behavior; narrow dependency files to retained named top-level declarations when the module is statically safe |
+| **Dependency files outside the context source root** | Full module copy | Avoid cross-context shared-file slice overwrites while preserving boundary checks |
+| **Dependency files with `file` strategy** | Full module copy | Compatibility mode for barrel-heavy or otherwise unsafe dependency modules |
 
 **Entry File Symbol Extraction (`extractSymbolsFromEntry()`)**:
 1. Extract message classes matching `messageTypes`
@@ -377,11 +371,11 @@ class FileCopier {
 - Retains type-only default imports.
 - Preserves already-exported local function dependencies without adding a duplicate `export`.
 
-This is direct AST expansion for selected entry files. It is not TypeChecker-based semantic slicing. With the default `dependencyStrategy: "file"`, local dependency files reached through retained imports are copied as whole files through the FileGraph. With strict output selectors, that full-file copy fails fast with `BoundaryViolationError` if a copied file contains a marked declaration outside the selection. Keep shared DTO/value-object dependencies boundary-clean and separate from internal implementation modules.
+This is direct AST expansion for selected entry files. It is not TypeChecker-based semantic slicing. Local dependency files are controlled separately by `DependencyStrategy`. Keep shared DTO/value-object dependencies boundary-clean and separate from internal implementation modules.
 
 **Dependency Symbol Slicing (`DependencySymbolSlicer`)**:
 
-`dependencyStrategy: "safe-symbols"` applies only when `entryStrategy` is `symbols`. It takes the retained local imports from extracted entry files, follows named imports recursively through dependency files, and emits only the required top-level declarations plus their local declaration closure.
+`dependencyStrategy: "safe-symbols"` is the default. It takes the retained local imports from extracted entry files, follows named imports recursively through dependency files, and emits only the required top-level declarations plus their local declaration closure.
 
 Supported retained dependency shapes:
 - Named imports and aliases, for example `import { UserId as DomainUserId } from "./types"`.
@@ -400,7 +394,7 @@ Unsafe dependency modules do not fall back to full-file copying. They throw `Uns
 - Top-level statements and variable initializers containing calls, `new`, tagged templates, `await`, `yield`, `delete`, assignments, or increment/decrement operators.
 - Duplicate top-level declaration names or missing required symbols.
 
-`entryStrategy: "graph"` ignores `safe-symbols` and keeps conservative full-file graph copying.
+Use `dependencyStrategy: "file"` when a migration needs full-file dependency copying for local barrels, default/namespace dependency imports, or other modules intentionally rejected by `safe-symbols`.
 
 **Additional Features**:
 - **Excluded file import removal**: Automatically removes import/export statements referencing files in `FileGraph.excludedPaths`
@@ -410,9 +404,7 @@ Unsafe dependency modules do not fall back to full-file copying. They throw `Uns
 - **Unsafe dependency slice guard**: Throws `UnsafeDependencySliceError` for `safe-symbols` dependency files whose top-level behavior is not safe to slice
 - **Public contract output**: Includes marked `class`, `interface`, `type`, and `enum` declarations in generated contracts output without adding them to `MessageRegistry`
 - **Missing export repair**: Adds `export` to selected response types and selected public contracts when the source declaration is not exported
-- **Transitive dependency tracking**: Includes dependencies of dependencies via FileGraph-based BFS, not just direct imports from entry files
-
-**Known limitation**: `graph` strategy may copy unselected declarations from selected entry files because the whole selected file is copied. The pipeline emits a warning when `graph` is combined with strict output selection. Use `symbols` for strict public/internal output splits.
+- **Transitive dependency tracking**: Includes dependencies of dependencies through safe symbol recursion or file-mode FileGraph expansion, not just direct imports from entry files
 
 ---
 
@@ -475,7 +467,6 @@ interface ContractsConfig {
   readonly decoratorNames: Required<DecoratorNames>
   readonly contractMarkerNames: Required<ContractMarkerNames>
   readonly trustedDecoratorSources?: readonly string[]
-  readonly entryStrategy?: EntryStrategy
   readonly dependencyStrategy: DependencyStrategy
   readonly outputModuleSpecifiers: OutputModuleSpecifiers
   readonly responseNamingConventions?: readonly ResponseNamingConvention[]
@@ -537,9 +528,8 @@ Options:
   --include <all|messages|contracts>    Contract categories to generate (default: all)
   --messages <event,command,query>      Message subtype filter (default: event,command,query)
   -m, --message-types <types>           Legacy alias for --messages
-  --entry-strategy <graph|symbols>      Entry strategy (default: symbols)
   --dependency-strategy <file|safe-symbols>
-                                        Dependency strategy (default: file)
+                                        Dependency strategy (default: safe-symbols)
   --output-module-specifiers <js|extensionless>
                                         Generated relative module specifier style
   --registry                            Generate MessageRegistry export
@@ -549,7 +539,7 @@ Options:
   -h, --help                            Show this help message
 ```
 
-The default scope is `--include all` with `--entry-strategy symbols` and `--dependency-strategy file`, which emits selected decorated public messages and marked general contract declarations as a strict public contract surface while copying retained dependency files whole. `--include messages` selects only decorated message contracts. `--include contracts` selects only general contract declarations. The `--messages` filter applies only to message subtypes and does not filter general contracts. Use `--entry-strategy graph` when conservative entry file graph copying is required. Under `graph`, filters select graph roots and registry entries only, and the pipeline logs a warning because selected entry files can still be copied whole with other declarations from the same file. Use `--dependency-strategy safe-symbols` only with `symbols` when retained dependency files must also be narrowed; unsafe dependencies throw `UnsafeDependencySliceError` instead of falling back to whole-file copying. Registry generation includes selected decorated messages only.
+The default scope is `--include all` with strict entry symbol extraction and `--dependency-strategy safe-symbols`, which emits selected decorated public messages and marked general contract declarations as a strict public contract surface while slicing retained dependency files when statically safe. `--include messages` selects only decorated message contracts. `--include contracts` selects only general contract declarations. The `--messages` filter applies only to message subtypes and does not filter general contracts. Use `--dependency-strategy file` when a migration requires full dependency-file copying. Unsafe dependency modules in the default mode throw `UnsafeDependencySliceError` instead of falling back to whole-file copying. Registry generation includes selected decorated messages only.
 
 **Programmatic API**:
 ```typescript
@@ -578,7 +568,6 @@ export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
     { flags: "--include <scope>", description: "Generate all, messages, or contracts" },
     { flags: "--messages <types>", description: "Filter message subtypes" },
     { flags: "-m, --message-types <types>", description: "Legacy alias for --messages" },
-    { flags: "--entry-strategy <strategy>", description: "Entry strategy: graph or symbols" },
     { flags: "--dependency-strategy <strategy>", description: "Dependency strategy: file or safe-symbols" },
     { flags: "--output-module-specifiers <style>", description: "Generated relative module specifier style" },
     { flags: "--registry", description: "Generate message registry" },
@@ -597,8 +586,7 @@ pnpm hexai generate-contracts -o packages/contracts/src --dry-run
 pnpm hexai generate-contracts -o packages/contracts/src --registry
 pnpm hexai generate-contracts -o packages/contracts/src --include messages --messages event,command
 pnpm hexai generate-contracts -o packages/contracts/src --include contracts
-pnpm hexai generate-contracts -o packages/contracts/src --entry-strategy symbols
-pnpm hexai generate-contracts -o packages/contracts/src --dependency-strategy safe-symbols
+pnpm hexai generate-contracts -o packages/contracts/src --dependency-strategy file
 pnpm hexai generate-contracts -o packages/contracts/src --check
 ```
 
@@ -623,8 +611,7 @@ interface ProcessContextOptions {
   logger?: Logger                   // Logger instance (default: noopLogger)
   messageTypes?: MessageType[]      // Message types to extract ('event' | 'command' | 'query')
   includePublicContracts?: boolean  // Include marked general contracts
-  entryStrategy?: EntryStrategy     // 'symbols' default, or 'graph' for entry file graph copying
-  dependencyStrategy?: DependencyStrategy // 'file' default, or 'safe-symbols' for safe dependency slicing
+  dependencyStrategy?: DependencyStrategy // 'safe-symbols' default, or 'file' compatibility mode
   outputModuleSpecifiers?: OutputModuleSpecifiers // 'js' default, or 'extensionless'
   removeDecorators?: boolean        // Remove message decorators from output
   responseNamingConventions?: readonly ResponseNamingConvention[]  // Patterns for matching response types
@@ -762,7 +749,6 @@ class ContractsPipeline {
     trustedDecoratorSources?: readonly string[]
     messageTypes?: MessageType[]
     includePublicContracts?: boolean
-    entryStrategy?: EntryStrategy
     dependencyStrategy?: DependencyStrategy
     outputModuleSpecifiers?: OutputModuleSpecifiers
     responseNamingConventions?: readonly ResponseNamingConvention[]
@@ -790,7 +776,6 @@ class ContractsPipeline {
     responseTypesToInclude?: Map<string, string[]>,
     removeDecorators?: boolean,
     messageTypes?: readonly MessageType[],
-    entryStrategy?: EntryStrategy,
     dependencyStrategy?: DependencyStrategy,
     select?: ContractOutputSelect,
     outputModuleSpecifiers?: OutputModuleSpecifiers
@@ -1030,7 +1015,7 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 │  ─────────────                                                                 │
 │  application.config.ts → ContractsConfig                                       │
 │  (contexts, path aliases, marker names, outputs/select,                        │
-│   entryStrategy, dependencyStrategy, module specifiers, ...)                   │
+│   dependencyStrategy, module specifiers, removeDecorators, ...)                │
 └───────────────────────────────────┬───────────────────────────────────────────┘
                                     │
                     ┌───────────────┴───────────────┐
@@ -1074,26 +1059,21 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 │  4. ENTRY + DEPENDENCY STRATEGY + EMIT (FileCopier)                            │
 │  ──────────────────────────────────────────────────                            │
 │                                                                                │
-│  Strategy choice                                                               │
-│   - graph: copy selected entry files and dependency graphs                     │
-│   - graph + filters: filters select roots and registry entries only            │
-│   - symbols: explicit strict extraction of selected message and                │
-│     general contract declarations                                              │
-│                                                                                │
-│  symbols-only dependency narrowing                                             │
+│  Entry extraction                                                              │
+│   - Always strict: selected message and general contract declarations          │
 │   - Expand selected entry declarations through AST references                  │
+│                                                                                │
+│  Dependency handling                                                           │
 │   - Preserve retained import shapes: default, namespace, aliases,              │
 │     mixed, type-only default, and qualified namespace refs                     │
-│   - Recursively copy files reached through retained local imports via          │
-│     FileGraph-based BFS                                                        │
-│   - dependencyStrategy=file: copy retained dependencies whole                  │
 │   - dependencyStrategy=safe-symbols: slice safe dependency files               │
 │     to retained named declarations; fail on unsafe modules                     │
+│   - dependencyStrategy=file: copy retained dependencies whole                  │
+│   - shared deps outside sourceRoot: copy whole to avoid slice overwrites       │
 │                                                                                │
 │  Emit                                                                          │
-│   - graph: copy selected entries and all resolved dependencies                 │
-│   - symbols + file: emit extracted entries plus whole deps                     │
-│   - symbols + safe-symbols: emit extracted entries plus sliced deps            │
+│   - safe-symbols: emit extracted entries plus sliced safe deps                 │
+│   - file: emit extracted entries plus whole deps                               │
 │   - Common post-processing: decorator removal, export repair, aliases          │
 │                                                                                │
 │  Output: copiedFiles[]                                                         │
@@ -1106,8 +1086,6 @@ export { UseCaseRequest, BaseRequest } from "@libera/common/request";
 │  Generate index.ts based on copiedFiles                                        │
 │  (Based on actually copied files, not FileGraph)                               │
 └────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                    └───────────────┴───────────────┘
                                     │
                                     ▼
                         ┌───────────────────────┐
@@ -1203,7 +1181,7 @@ ExtractionResult, ExtractionError, ExtractionWarning, Config
 Dependency, DependencyKind, ImportSource
 MessageBase, MessageType, ContractDeclaration, ContractKind, ContractVisibility
 ContractOutputConfig, ContractOutputSelect, PublicContract, PublicContractDeclarationKind
-EntryStrategy, DependencyStrategy, OutputModuleSpecifiers
+DependencyStrategy, OutputModuleSpecifiers
 
 // Type Variants
 PrimitiveType, ArrayType, ObjectType, UnionType, IntersectionType
@@ -1303,10 +1281,10 @@ processContext(options: ProcessContextOptions): Promise<ProcessContextResult>
 ### CLI
 ```bash
 # Standalone CLI
-generate-contracts -o <output-dir> [--config <path>] [--include all|messages|contracts] [--messages event,command,query] [--entry-strategy graph|symbols] [--dependency-strategy file|safe-symbols] [--registry] [--dry-run] [--check]
+generate-contracts -o <output-dir> [--config <path>] [--include all|messages|contracts] [--messages event,command,query] [--dependency-strategy file|safe-symbols] [--registry] [--dry-run] [--check]
 
 # hexai CLI plugin
-pnpm hexai generate-contracts -o <output-dir> [--include all|messages|contracts] [--messages event,command,query] [--entry-strategy graph|symbols] [--dependency-strategy file|safe-symbols] [--registry] [--dry-run] [--check]
+pnpm hexai generate-contracts -o <output-dir> [--include all|messages|contracts] [--messages event,command,query] [--dependency-strategy file|safe-symbols] [--registry] [--dry-run] [--check]
 ```
 
 Legacy aliases remain supported: `-m, --message-types` maps to `--messages`, and `--generate-message-registry` maps to `--registry`.

@@ -3,9 +3,9 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
-  "description": "Collect domain events and commands from bounded contexts and generate frontend-compatible contracts package",
+  "description": "Extract events, commands, queries, and public contracts from bounded contexts into frontend-compatible TypeScript packages",
   "license": "MIT",
   "author": "Sangwoo Hyun <wkdny.hyun@gmail.com>",
   "contributors": [
@@ -53,13 +53,18 @@
     "build": "tsgo -p tsconfig.build.json"
   },
   "dependencies": {
-    "@hexaijs/contracts": "workspace:^",
+    "@hexaijs/contracts": "^0.3.0",
     "glob": "^10.3.0",
     "minimatch": "^9.0.0"
   },
   "peerDependencies": {
     "@hexaijs/cli": "^0.2.0",
     "typescript": "^5.0.0 || ^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@hexaijs/cli": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@hexaijs/cli": "workspace:^",

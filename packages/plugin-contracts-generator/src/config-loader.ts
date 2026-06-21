@@ -11,14 +11,12 @@ import type {
     ContractMarkerNames,
     DecoratorNames,
     DependencyStrategy,
-    EntryStrategy,
     OutputModuleSpecifiers,
     ResponseNamingConvention,
     TrustedDecoratorSources,
 } from "./domain/index.js";
 import {
     isDependencyStrategy,
-    isEntryStrategy,
     isMessageContractKind,
     isOutputModuleSpecifiers,
     mergeContractMarkerNames,
@@ -37,7 +35,6 @@ export interface ContractsConfig {
     readonly decoratorNames: Required<DecoratorNames>;
     readonly contractMarkerNames: Required<ContractMarkerNames>;
     readonly trustedDecoratorSources?: TrustedDecoratorSources;
-    readonly entryStrategy?: EntryStrategy;
     readonly dependencyStrategy: DependencyStrategy;
     readonly outputModuleSpecifiers: OutputModuleSpecifiers;
     readonly responseNamingConventions?: readonly ResponseNamingConvention[];
@@ -53,7 +50,6 @@ interface ApplicationConfig {
         decoratorNames?: DecoratorNames;
         contractMarkerNames?: ContractMarkerNames;
         trustedDecoratorSources?: TrustedDecoratorSources;
-        entryStrategy?: EntryStrategy;
         dependencyStrategy?: DependencyStrategy;
         outputModuleSpecifiers?: OutputModuleSpecifiers;
         responseNamingConventions?: ResponseNamingConvention[];
@@ -65,28 +61,12 @@ export interface ConfigLoaderOptions {
     fileSystem?: FileSystem;
 }
 
-export function validateEntryStrategy(
-    entryStrategy: EntryStrategy | undefined
-): EntryStrategy | undefined {
-    if (entryStrategy === undefined) {
-        return undefined;
-    }
-
-    if (isEntryStrategy(entryStrategy)) {
-        return entryStrategy;
-    }
-
-    throw new ConfigLoadError(
-        `Invalid contracts.entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
-    );
-}
-
 export function validateDependencyStrategy(
     dependencyStrategy: DependencyStrategy | undefined,
     path = "contracts.dependencyStrategy"
 ): DependencyStrategy {
     if (dependencyStrategy === undefined) {
-        return "file";
+        return "safe-symbols";
     }
 
     if (isDependencyStrategy(dependencyStrategy)) {
@@ -364,6 +344,12 @@ export class ConfigLoader {
             throw new ConfigLoadError("Missing 'contracts.contexts' in config");
         }
 
+        if (Object.prototype.hasOwnProperty.call(contracts, "entryStrategy")) {
+            throw new ConfigLoadError(
+                "contracts.entryStrategy has been removed. Strict symbol entry extraction is always used."
+            );
+        }
+
         const contexts = await resolveContextEntries(contracts.contexts, configDir, this.fs);
 
         if (contexts.length === 0) {
@@ -373,9 +359,6 @@ export class ConfigLoader {
         const decoratorNames = mergeDecoratorNames(contracts.decoratorNames);
         const contractMarkerNames = mergeContractMarkerNames(
             contracts.contractMarkerNames
-        );
-        const entryStrategy = validateEntryStrategy(
-            contracts.entryStrategy
         );
         const dependencyStrategy = validateDependencyStrategy(
             contracts.dependencyStrategy
@@ -392,7 +375,6 @@ export class ConfigLoader {
             trustedDecoratorSources: validateTrustedDecoratorSources(
                 contracts.trustedDecoratorSources
             ),
-            entryStrategy,
             dependencyStrategy,
             outputModuleSpecifiers: validateOutputModuleSpecifiers(
                 contracts.outputModuleSpecifiers

@@ -10,20 +10,19 @@ import {
     UnsafeDependencySliceError,
 } from "./errors.js";
 import { ContractsPipeline } from "./pipeline.js";
-import type { DependencyStrategy, EntryStrategy } from "./domain/types.js";
-import type { Logger } from "./logger.js";
+import type { DependencyStrategy } from "./domain/types.js";
 
 describe("ContractsPipeline", () => {
-    describe("entryStrategy validation", () => {
-        it("should throw ConfigurationError for invalid programmatic entryStrategy", () => {
+    describe("removed entryStrategy validation", () => {
+        it("should throw ConfigurationError for stale programmatic entryStrategy", () => {
             expect(() =>
                 ContractsPipeline.create({
                     contextConfig: ContextConfig.createSync(
                         "lecture",
                         "/tmp/lecture"
                     ),
-                    entryStrategy: "file" as EntryStrategy,
-                })
+                    entryStrategy: "graph",
+                } as unknown as Parameters<typeof ContractsPipeline.create>[0])
             ).toThrow(ConfigurationError);
 
             expect(() =>
@@ -32,9 +31,9 @@ describe("ContractsPipeline", () => {
                         "lecture",
                         "/tmp/lecture"
                     ),
-                    entryStrategy: "file" as EntryStrategy,
-                })
-            ).toThrow('Invalid entryStrategy: "file"');
+                    entryStrategy: "graph",
+                } as unknown as Parameters<typeof ContractsPipeline.create>[0])
+            ).toThrow("entryStrategy has been removed");
         });
     });
 
@@ -164,7 +163,7 @@ export interface UnusedTypeOnlyShape {
             return readFile(join(outputDir, contextName, fileName), "utf-8");
         }
 
-        it("should slice dependency files to retained runtime and type symbols when dependencyStrategy is safe-symbols", async () => {
+        it("should slice dependency files to retained runtime and type symbols by default", async () => {
             const project = await createSafeSymbolsProject();
 
             try {
@@ -173,7 +172,6 @@ export interface UnusedTypeOnlyShape {
                         "profiles",
                         project.sourceDir
                     ),
-                    dependencyStrategy: "safe-symbols",
                 }).execute({
                     contextName: "profiles",
                     sourceDir: project.sourceDir,
@@ -224,7 +222,7 @@ export interface UnusedTypeOnlyShape {
             }
         });
 
-        it("should keep full dependency file behavior by default with symbols entryStrategy", async () => {
+        it("should keep full dependency file behavior when dependencyStrategy is file", async () => {
             const project = await createSafeSymbolsProject();
 
             try {
@@ -233,6 +231,7 @@ export interface UnusedTypeOnlyShape {
                         "profiles",
                         project.sourceDir
                     ),
+                    dependencyStrategy: "file",
                 }).execute({
                     contextName: "profiles",
                     sourceDir: project.sourceDir,
@@ -256,17 +255,54 @@ export interface UnusedTypeOnlyShape {
             }
         });
 
-        it("should ignore safe-symbols slicing in graph mode", async () => {
-            const project = await createSafeSymbolsProject();
+        it("should copy outside-source-root shared dependencies whole before safe slicing", async () => {
+            const root = await mkdtemp(join(tmpdir(), "contracts-pipeline-"));
+            const sourceDir = join(root, "contexts", "profiles");
+            const sharedDir = join(root, "contexts", "shared");
+            const outputDir = join(root, "contracts");
+            await mkdir(sourceDir, { recursive: true });
+            await mkdir(sharedDir, { recursive: true });
             await writeFile(
-                join(project.sourceDir, "profile-dependencies.ts"),
-                (await readFile(
-                    join(project.sourceDir, "profile-dependencies.ts"),
-                    "utf-8"
-                )) + `
-registerGraphModeDependency();
+                join(sourceDir, "profile-query.ts"),
+                `
+import { ContractQuery } from "@hexaijs/contracts/decorators";
+import { SharedShape } from "../shared/shared-shape.js";
 
-function registerGraphModeDependency(): void {}
+@ContractQuery()
+export class GetProfileQuery {
+    readonly shared!: SharedShape;
+}
+`
+            );
+            await writeFile(
+                join(sharedDir, "shared-shape.ts"),
+                `
+import "./setup.js";
+import { SharedToken } from "./shared-token.js";
+
+export interface SharedShape {
+    readonly token: SharedToken;
+}
+
+export interface UnusedSharedShape {
+    readonly unused: string;
+}
+`
+            );
+            await writeFile(
+                join(sharedDir, "shared-token.ts"),
+                `
+export interface SharedToken {
+    readonly id: string;
+}
+`
+            );
+            await writeFile(
+                join(sharedDir, "setup.ts"),
+                `
+registerSharedContracts();
+
+function registerSharedContracts(): void {}
 `
             );
 
@@ -274,32 +310,33 @@ function registerGraphModeDependency(): void {}
                 await ContractsPipeline.create({
                     contextConfig: ContextConfig.createSync(
                         "profiles",
-                        project.sourceDir
+                        sourceDir
                     ),
-                    entryStrategy: "graph",
-                    dependencyStrategy: "safe-symbols",
                 }).execute({
                     contextName: "profiles",
-                    sourceDir: project.sourceDir,
-                    outputDir: project.outputDir,
+                    sourceDir,
+                    outputDir,
                 });
 
-                const entryContent = await readGenerated(
-                    project.outputDir,
-                    "profile-query.ts"
+                const sharedShapeContent = await readFile(
+                    join(outputDir, "shared", "shared-shape.ts"),
+                    "utf-8"
                 );
-                const dependencyContent = await readGenerated(
-                    project.outputDir,
-                    "profile-dependencies.ts"
+                const setupContent = await readFile(
+                    join(outputDir, "shared", "setup.ts"),
+                    "utf-8"
+                );
+                const tokenContent = await readFile(
+                    join(outputDir, "shared", "shared-token.ts"),
+                    "utf-8"
                 );
 
-                expect(entryContent).toContain("UnusedProfile");
-                expect(dependencyContent).toContain("unusedProfileLabel");
-                expect(dependencyContent).toContain(
-                    "registerGraphModeDependency()"
-                );
+                expect(sharedShapeContent).toContain('import "./setup.js"');
+                expect(sharedShapeContent).toContain("UnusedSharedShape");
+                expect(setupContent).toContain("registerSharedContracts()");
+                expect(tokenContent).toContain("export interface SharedToken");
             } finally {
-                await project.cleanup();
+                await rm(root, { recursive: true, force: true });
             }
         });
 
@@ -540,43 +577,6 @@ export class RebuildInternalIndexCommand {}
             }
         });
 
-        it("should warn and fail fast when graph strategy would leak unselected declarations", async () => {
-            const project = await createTempProject();
-            const warnings: string[] = [];
-            const logger: Logger = {
-                debug: () => {},
-                info: () => {},
-                warn: (message) => warnings.push(message),
-                error: () => {},
-            };
-
-            try {
-                await expect(
-                    ContractsPipeline.create({
-                        contextConfig: ContextConfig.createSync(
-                            "catalog",
-                            project.sourceDir
-                        ),
-                        entryStrategy: "graph",
-                        logger,
-                    }).execute({
-                        contextName: "catalog",
-                        sourceDir: project.sourceDir,
-                        outputDir: project.outputDir,
-                        select: { visibility: ["public"] },
-                    })
-                ).rejects.toThrow(BoundaryViolationError);
-
-                expect(warnings).toContainEqual(
-                    expect.stringContaining(
-                        "Use entryStrategy 'symbols' for strict public/internal output splits"
-                    )
-                );
-            } finally {
-                await project.cleanup();
-            }
-        });
-
         it("should pass trusted decorator sources through scanner, parser, and copier", async () => {
             const root = await mkdtemp(join(tmpdir(), "contracts-pipeline-"));
             const sourceDir = join(root, "src");
@@ -658,6 +658,7 @@ export interface QAInternalShape {
                         "reference-data",
                         sourceDir
                     ),
+                    dependencyStrategy: "file",
                     trustedDecoratorSources: ["./contract-markers"],
                 }).execute({
                     contextName: "reference-data",

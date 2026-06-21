@@ -778,28 +778,6 @@ export class RebuildInternalIndexCommand {}
             expect(content).not.toContain("export interface SomeUnrelatedType");
         });
 
-        it("should keep graph-copy semantics when --entry-strategy=graph and --messages=event", async () => {
-            await createConfig(createSymbolExtractionConfig());
-            const contractsDir = join(outputDir, "contracts");
-            await run([
-                "--config",
-                configPath,
-                "-o",
-                contractsDir,
-                "--messages=event",
-                "--entry-strategy=graph",
-            ]);
-
-            const content = readFileSync(
-                join(contractsDir, "symbol-extraction", "mixed-messages.ts"),
-                "utf-8"
-            );
-            expect(content).toContain("export class UserRegistered");
-            expect(content).toContain("export class RegisterUser");
-            expect(content).toContain("export class RegisterUserHandler");
-            expect(content).toContain("export interface SomeUnrelatedType");
-        });
-
         it("should extract only commands when --messages command", async () => {
             await createConfig(createLectureConfig());
             const contractsDir = join(outputDir, "contracts");
@@ -821,32 +799,11 @@ export class RebuildInternalIndexCommand {}
         });
     });
 
-    describe("--entry-strategy option", () => {
-        it("should accept --entry-strategy=symbols and extract marked PublicContract symbols only", async () => {
-            await createConfig(createMessagesAndPublicContractsConfig());
-            const contractsDir = join(outputDir, "contracts");
-            await run([
-                "--config",
-                configPath,
-                "-o",
-                contractsDir,
-                "--entry-strategy=symbols",
-            ]);
-
-            const content = readFileSync(
-                join(contractsDir, "public-contract", "contracts.ts"),
-                "utf-8"
+    describe("removed --entry-strategy option", () => {
+        it("should reject stale --entry-strategy usage", async () => {
+            await expect(run(["--entry-strategy=symbols"])).rejects.toThrow(
+                "--entry-strategy has been removed"
             );
-            expect(content).toContain("export interface PublicProfile");
-            expect(content).toContain("export type PublicUserId");
-            expect(content).toContain("export class PublicProjection");
-            expect(content).toContain("export enum PublicStatus");
-            expect(content).toContain("deriveDisplayName");
-            expect(content).toContain("DEFAULT_STATUS");
-            expect(content).toContain("Status.Active");
-            expect(content).toContain("Factory.create()");
-            expect(content).not.toContain("InternalProfileRecord");
-            expect(content).not.toContain("InternalProjection");
         });
     });
 
@@ -874,7 +831,6 @@ export class RebuildInternalIndexCommand {}
                 "-o",
                 contractsDir,
                 "--messages=query",
-                "--entry-strategy=symbols",
                 "--dependency-strategy=safe-symbols",
             ]);
 
@@ -891,7 +847,7 @@ export class RebuildInternalIndexCommand {}
             expect(dependencyContent).not.toContain("unusedProfileLabel");
         });
 
-        it("should surface unsafe dependency slice errors from CLI args", async () => {
+        it("should surface unsafe dependency slice errors by default", async () => {
             const projectDir = join(outputDir, "unsafe-safe-symbols-project");
             const sourceDir = join(projectDir, "src");
             await mkdir(sourceDir, { recursive: true });
@@ -937,8 +893,6 @@ export interface UsedShape {
                     "-o",
                     contractsDir,
                     "--messages=query",
-                    "--entry-strategy=symbols",
-                    "--dependency-strategy=safe-symbols",
                 ])
             ).rejects.toThrow(/shapes\.ts.*side-effect import/s);
         });
@@ -1262,7 +1216,6 @@ describe("runWithConfig E2E", () => {
                 {
                     outputDir: contractsDir,
                     messages: "query",
-                    entryStrategy: "symbols",
                     dependencyStrategy: "safe-symbols",
                 },
                 {
@@ -1436,6 +1389,13 @@ export class CreateUserCommand {}
             await expectInvalidPluginConfig(
                 { trustedDecoratorSources: ["@app/contracts", 42] },
                 "Invalid contracts.trustedDecoratorSources: expected string array"
+            );
+        });
+
+        it("should reject removed plugin entryStrategy config", async () => {
+            await expectInvalidPluginConfig(
+                { entryStrategy: "symbols" },
+                "entryStrategy has been removed"
             );
         });
 

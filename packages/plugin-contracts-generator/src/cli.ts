@@ -10,7 +10,6 @@ import {
     resolveContextEntries,
     validateContractOutputs,
     validateDependencyStrategy,
-    validateEntryStrategy,
     validateOutputModuleSpecifiers,
     validateTrustedDecoratorSources,
 } from "./config-loader.js";
@@ -26,7 +25,6 @@ import type {
     ContractOutputSelect,
     DecoratorNames,
     DependencyStrategy,
-    EntryStrategy,
     MessageType,
     OutputModuleSpecifiers,
     ResponseNamingConvention,
@@ -45,7 +43,6 @@ const VALID_INCLUDE_MODES: readonly IncludeMode[] = [
     "messages",
     "contracts",
 ];
-const VALID_ENTRY_STRATEGIES: readonly EntryStrategy[] = ["graph", "symbols"];
 const CHECK_DIFF_LIST_LIMIT = 20;
 
 export type IncludeMode = "all" | "messages" | "contracts";
@@ -56,11 +53,6 @@ const CLI_OPTIONS = {
     include: { short: null, long: "--include", requiresValue: true },
     messages: { short: null, long: "--messages", requiresValue: true },
     messageTypes: { short: "-m", long: "--message-types", requiresValue: true },
-    entryStrategy: {
-        short: null,
-        long: "--entry-strategy",
-        requiresValue: true,
-    },
     dependencyStrategy: {
         short: null,
         long: "--dependency-strategy",
@@ -83,7 +75,6 @@ interface CliOptions {
     outputDir?: string;
     include?: IncludeMode;
     messageTypes?: MessageType[];
-    entryStrategy?: EntryStrategy;
     dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     generateMessageRegistry?: boolean;
@@ -98,7 +89,6 @@ export interface RunWithConfigOptions {
     outputDir?: string;
     include?: IncludeMode;
     messageTypes?: MessageType[];
-    entryStrategy?: EntryStrategy;
     dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     generateMessageRegistry?: boolean;
@@ -118,7 +108,6 @@ export interface ContractsPluginConfig {
     decoratorNames?: DecoratorNames;
     contractMarkerNames?: ContractMarkerNames;
     trustedDecoratorSources?: TrustedDecoratorSources;
-    entryStrategy?: EntryStrategy;
     dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     responseNamingConventions?: ResponseNamingConvention[];
@@ -168,18 +157,6 @@ function parseIncludeMode(value: string): IncludeMode {
     }
 
     return mode as IncludeMode;
-}
-
-function parseEntryStrategy(value: string): EntryStrategy {
-    const strategy = value.trim().toLowerCase();
-    if (!VALID_ENTRY_STRATEGIES.includes(strategy as EntryStrategy)) {
-        throw new Error(
-            `Invalid entry strategy: ${value}. ` +
-            `Valid strategies are: ${VALID_ENTRY_STRATEGIES.join(", ")}`
-        );
-    }
-
-    return strategy as EntryStrategy;
 }
 
 function parseDependencyStrategy(value: string): DependencyStrategy {
@@ -278,10 +255,10 @@ function parseArgs(args: string[]): CliOptions {
             const { value, nextIndex } = extractOptionValue(args, i, "--message-types");
             options.messageTypes = parseMessageTypes(value);
             i = nextIndex;
-        } else if (matchesOption(arg, CLI_OPTIONS.entryStrategy)) {
-            const { value, nextIndex } = extractOptionValue(args, i, "--entry-strategy");
-            options.entryStrategy = parseEntryStrategy(value);
-            i = nextIndex;
+        } else if (arg === "--entry-strategy" || arg.startsWith("--entry-strategy=")) {
+            throw new Error(
+                "--entry-strategy has been removed. Strict symbol entry extraction is always used."
+            );
         } else if (matchesOption(arg, CLI_OPTIONS.dependencyStrategy)) {
             const { value, nextIndex } = extractOptionValue(args, i, "--dependency-strategy");
             options.dependencyStrategy = parseDependencyStrategy(value);
@@ -332,11 +309,9 @@ Options:
                                 Valid types: ${VALID_MESSAGE_TYPES.join(", ")}
                                 Default: all types
   -m, --message-types <types>   Alias for --messages
-  --entry-strategy <strategy>   Entry copy strategy: graph, symbols
-                                Default: symbols
   --dependency-strategy <strategy>
                                 Dependency copy strategy: file, safe-symbols
-                                Default: file
+                                Default: safe-symbols
   --output-module-specifiers <style>
                                 Generated relative module specifiers: js, extensionless
                                 Default: js
@@ -451,9 +426,6 @@ function logGenerationSettings(
         }
     }
     logger.info(`Include mode: ${options.include ?? "all"}`);
-    logger.info(
-        `Entry strategy: ${options.entryStrategy ?? config.entryStrategy ?? "symbols"}`
-    );
     logger.info(
         `Dependency strategy: ${options.dependencyStrategy ?? config.dependencyStrategy}`
     );
@@ -623,7 +595,6 @@ async function generateContracts(
             trustedDecoratorSources: config.trustedDecoratorSources,
             messageTypes: scope.messageTypes,
             includePublicContracts: scope.includePublicContracts,
-            entryStrategy: options.entryStrategy ?? config.entryStrategy,
             dependencyStrategy:
                 options.dependencyStrategy ?? config.dependencyStrategy,
             outputModuleSpecifiers,
@@ -793,6 +764,12 @@ export async function run(args: string[]): Promise<void> {
  * Converts plugin config to internal ContractsConfig format.
  */
 async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<ContractsConfig> {
+    if (Object.prototype.hasOwnProperty.call(pluginConfig, "entryStrategy")) {
+        throw new Error(
+            "entryStrategy has been removed. Strict symbol entry extraction is always used."
+        );
+    }
+
     const contexts = await resolveContextEntries(
         pluginConfig.contexts,
         process.cwd(),
@@ -812,7 +789,6 @@ async function toContractsConfig(pluginConfig: ContractsPluginConfig): Promise<C
         trustedDecoratorSources: validateTrustedDecoratorSources(
             pluginConfig.trustedDecoratorSources
         ),
-        entryStrategy: validateEntryStrategy(pluginConfig.entryStrategy),
         dependencyStrategy: validateDependencyStrategy(
             pluginConfig.dependencyStrategy
         ),

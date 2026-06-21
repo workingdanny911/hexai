@@ -28,10 +28,12 @@ export interface DependencySymbolSlicerOptions {
 export interface DependencySliceRequest {
     readonly fileGraph: FileGraph;
     readonly retainedLocalImports: readonly RetainedLocalImport[];
+    readonly wholeFileDependencyPaths?: ReadonlySet<string>;
 }
 
 export interface DependencySliceResult {
     readonly contents: ReadonlyMap<string, string>;
+    readonly wholeFileRetainedImports: readonly RetainedLocalImport[];
 }
 
 interface TopLevelDeclaration {
@@ -98,15 +100,20 @@ function getImportTypeModuleSpecifier(
 export class DependencySymbolSlicer {
     private readonly fs: FileSystem;
     private readonly contents = new Map<string, string>();
+    private readonly wholeFileRetainedImports = new Map<string, RetainedLocalImport>();
     private readonly requiredSymbolsByFile = new Map<string, Set<string>>();
     private readonly pendingFiles: string[] = [];
     private readonly processedSignatures = new Map<string, string>();
+    private wholeFileDependencyPaths: ReadonlySet<string> = new Set();
 
     constructor(options: DependencySymbolSlicerOptions) {
         this.fs = options.fileSystem;
     }
 
     async slice(request: DependencySliceRequest): Promise<DependencySliceResult> {
+        this.wholeFileDependencyPaths =
+            request.wholeFileDependencyPaths ?? new Set();
+
         for (const retainedImport of request.retainedLocalImports) {
             this.enqueueRetainedImport(retainedImport);
         }
@@ -118,10 +125,21 @@ export class DependencySymbolSlicer {
 
         return {
             contents: this.contents,
+            wholeFileRetainedImports: [
+                ...this.wholeFileRetainedImports.values(),
+            ],
         };
     }
 
     private enqueueRetainedImport(retainedImport: RetainedLocalImport): void {
+        if (this.wholeFileDependencyPaths.has(retainedImport.resolvedPath)) {
+            this.wholeFileRetainedImports.set(
+                retainedImport.resolvedPath,
+                retainedImport
+            );
+            return;
+        }
+
         const namedSymbols = retainedImport.importedSymbols.filter(
             (symbol) => symbol.importKind === "named"
         );

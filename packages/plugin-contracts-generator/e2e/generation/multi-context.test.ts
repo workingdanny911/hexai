@@ -127,7 +127,10 @@ describe("E2E: Multi-Context", () => {
         it("inventory types.ts should contain inventory-specific types", async () => {
             await expectFileContains(
                 ctx.getOutputFile("inventory", "types.ts"),
-                ["export type WarehouseId", "export type StockLevel"]
+                [
+                    "export type WarehouseId",
+                    "export type StockAdjustmentReason",
+                ]
             );
         });
     });

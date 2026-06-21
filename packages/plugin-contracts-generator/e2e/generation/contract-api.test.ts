@@ -192,7 +192,6 @@ describe("E2E: Contract API", () => {
                             path: ctx.getFixtureDir(),
                         },
                     ],
-                    entryStrategy: "symbols",
                     removeDecorators: true,
                     outputs: [
                         {

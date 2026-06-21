@@ -4,10 +4,7 @@ import { Parser } from "./parser.js";
 import { FileGraphResolver, type FileGraph } from "./file-graph-resolver.js";
 import { FileCopier } from "./file-copier.js";
 import { ContextConfig } from "./context-config.js";
-import {
-    hasStrictOutputSelection,
-    isContractSelected,
-} from "./contract-selector.js";
+import { isContractSelected } from "./contract-selector.js";
 import type {
     Command,
     ContractMarkerNames,
@@ -15,7 +12,6 @@ import type {
     DecoratorNames,
     DependencyStrategy,
     DomainEvent,
-    EntryStrategy,
     MessageType,
     OutputModuleSpecifiers,
     PublicContract,
@@ -24,7 +20,7 @@ import type {
     TrustedDecoratorSources,
     TypeDefinition,
 } from "./domain/types.js";
-import { isDependencyStrategy, isEntryStrategy } from "./domain/types.js";
+import { isDependencyStrategy } from "./domain/types.js";
 import { type FileSystem, nodeFileSystem } from "./file-system.js";
 import { type Logger, noopLogger } from "./logger.js";
 import { ConfigurationError } from "./errors.js";
@@ -57,7 +53,6 @@ interface PipelineCreateOptions {
     trustedDecoratorSources?: TrustedDecoratorSources;
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
-    entryStrategy?: EntryStrategy;
     dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
@@ -94,7 +89,6 @@ export class ContractsPipeline {
     private readonly contractMarkerNames?: ContractMarkerNames;
     private readonly trustedDecoratorSources?: TrustedDecoratorSources;
     private readonly includePublicContracts?: boolean;
-    private readonly entryStrategy: EntryStrategy;
     private readonly dependencyStrategy: DependencyStrategy;
     private readonly outputModuleSpecifiers: OutputModuleSpecifiers;
 
@@ -105,8 +99,7 @@ export class ContractsPipeline {
         contractMarkerNames?: ContractMarkerNames,
         trustedDecoratorSources?: TrustedDecoratorSources,
         includePublicContracts?: boolean,
-        entryStrategy: EntryStrategy = "symbols",
-        dependencyStrategy: DependencyStrategy = "file",
+        dependencyStrategy: DependencyStrategy = "safe-symbols",
         outputModuleSpecifiers: OutputModuleSpecifiers = "js"
     ) {
         this.messageTypes = messageTypes;
@@ -114,17 +107,17 @@ export class ContractsPipeline {
         this.contractMarkerNames = contractMarkerNames;
         this.trustedDecoratorSources = trustedDecoratorSources;
         this.includePublicContracts = includePublicContracts;
-        this.entryStrategy = entryStrategy;
         this.dependencyStrategy = dependencyStrategy;
         this.outputModuleSpecifiers = outputModuleSpecifiers;
     }
 
     static create(options: PipelineCreateOptions): ContractsPipeline {
+        assertNoRemovedEntryStrategy(options);
+
         const fileSystem = options.fileSystem ?? nodeFileSystem;
         const logger = options.logger ?? noopLogger;
         const excludeDependencies = options.excludeDependencies ?? DEFAULT_EXCLUDE_DEPENDENCIES;
         const includePublicContracts = options.includePublicContracts ?? true;
-        const entryStrategy = validateEntryStrategy(options.entryStrategy);
         const dependencyStrategy = validateDependencyStrategy(
             options.dependencyStrategy
         );
@@ -165,7 +158,6 @@ export class ContractsPipeline {
             options.contractMarkerNames,
             options.trustedDecoratorSources,
             includePublicContracts,
-            entryStrategy,
             dependencyStrategy,
             options.outputModuleSpecifiers ?? "js"
         );
@@ -190,20 +182,6 @@ export class ContractsPipeline {
         this.deps.logger.info(`Processing context: ${contextName}`);
         this.deps.logger.debug(`  Source: ${sourceDir}`);
         this.deps.logger.debug(`  Output: ${contextOutputDir}`);
-        if (
-            this.entryStrategy === "graph" &&
-            this.messageTypes !== undefined &&
-            this.messageTypes.length > 0
-        ) {
-            this.deps.logger.warn(
-                "Message type filters limit graph root selection only when entryStrategy is 'graph'; entire selected entry files and dependencies may still be copied. Use entryStrategy 'symbols' to extract selected declarations only."
-            );
-        }
-        if (this.entryStrategy === "graph" && hasStrictOutputSelection(select)) {
-            this.deps.logger.warn(
-                "Output selection with entryStrategy 'graph' limits graph root selection only; full selected files and dependency files may still expose unselected declarations. Use entryStrategy 'symbols' for strict public/internal output splits."
-            );
-        }
 
         const candidateFiles = await this.scan(sourceDir);
         const parsedMessages = await this.parse(candidateFiles, sourceDir);
@@ -223,7 +201,6 @@ export class ContractsPipeline {
             responseTypesToInclude,
             removeDecorators,
             this.messageTypes,
-            this.entryStrategy,
             this.dependencyStrategy,
             select,
             outputModuleSpecifiers
@@ -428,7 +405,6 @@ export class ContractsPipeline {
         responseTypesToInclude?: Map<string, string[]>,
         removeDecorators?: boolean,
         messageTypes?: readonly MessageType[],
-        entryStrategy: EntryStrategy = "symbols",
         dependencyStrategy: DependencyStrategy = this.dependencyStrategy,
         select?: ContractOutputSelect,
         outputModuleSpecifiers: OutputModuleSpecifiers = this.outputModuleSpecifiers
@@ -450,7 +426,6 @@ export class ContractsPipeline {
             contractMarkerNames: this.contractMarkerNames,
             trustedDecoratorSources: this.trustedDecoratorSources,
             includePublicContracts: this.includePublicContracts,
-            entryStrategy,
             dependencyStrategy,
             select,
             outputModuleSpecifiers,
@@ -475,27 +450,19 @@ export class ContractsPipeline {
     }
 }
 
-function validateEntryStrategy(
-    entryStrategy: EntryStrategy | undefined
-): EntryStrategy {
-    if (entryStrategy === undefined) {
-        return "symbols";
+function assertNoRemovedEntryStrategy(options: object): void {
+    if (Object.prototype.hasOwnProperty.call(options, "entryStrategy")) {
+        throw new ConfigurationError(
+            "entryStrategy has been removed. Strict symbol entry extraction is always used."
+        );
     }
-
-    if (isEntryStrategy(entryStrategy)) {
-        return entryStrategy;
-    }
-
-    throw new ConfigurationError(
-        `Invalid entryStrategy: "${String(entryStrategy)}". Expected "graph" or "symbols".`
-    );
 }
 
 function validateDependencyStrategy(
     dependencyStrategy: DependencyStrategy | undefined
 ): DependencyStrategy {
     if (dependencyStrategy === undefined) {
-        return "file";
+        return "safe-symbols";
     }
 
     if (isDependencyStrategy(dependencyStrategy)) {

@@ -10,7 +10,6 @@ describe("Runtime: Contract API generated output", () => {
     beforeAll(async () => {
         await ctx.setup();
         result = await ctx.runParser({
-            entryStrategy: "symbols",
             removeDecorators: true,
         });
     });
@@ -69,4 +68,3 @@ describe("Runtime: Contract API generated output", () => {
         expect(snapshot.items).toEqual(["sku-1", "sku-2"]);
     });
 });
-

@@ -24,6 +24,7 @@ describe("E2E: Barrel Import (Directory Import Resolution)", () => {
         await ctx.setup();
         await ctx.runParser({
             messageTypes: ["command"],
+            dependencyStrategy: "file",
         });
     });
 
@@ -35,6 +36,7 @@ describe("E2E: Barrel Import (Directory Import Resolution)", () => {
         it("should extract CreateUserCommand", async () => {
             const result = await ctx.runParser({
                 messageTypes: ["command"],
+                dependencyStrategy: "file",
             });
             expectCommand(result, "CreateUserCommand");
         });

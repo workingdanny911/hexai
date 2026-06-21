@@ -45,7 +45,6 @@ export type {
     ContractOutputSelect,
     ContractOutputTagSelect,
     DependencyStrategy,
-    EntryStrategy,
     OutputModuleSpecifiers,
     Message,
     MessageType,
@@ -145,6 +144,7 @@ export {
 import { type FileSystem, nodeFileSystem } from "./file-system.js";
 import { type Logger, noopLogger } from "./logger.js";
 import { ContractsPipeline } from "./pipeline.js";
+import { ConfigurationError } from "./errors.js";
 
 export type { FileSystem, FileStats } from "./file-system.js";
 export { nodeFileSystem } from "./file-system.js";
@@ -167,7 +167,6 @@ import type {
     ContractMarkerNames,
     DecoratorNames,
     DependencyStrategy,
-    EntryStrategy,
     MessageType,
     OutputModuleSpecifiers,
     ResponseNamingConvention,
@@ -188,7 +187,6 @@ export interface ProcessContextOptions {
     removeDecorators?: boolean;
     messageTypes?: MessageType[];
     includePublicContracts?: boolean;
-    entryStrategy?: EntryStrategy;
     dependencyStrategy?: DependencyStrategy;
     outputModuleSpecifiers?: OutputModuleSpecifiers;
     fileSystem?: FileSystem;
@@ -206,6 +204,12 @@ export interface ProcessContextResult {
 export async function processContext(
     options: ProcessContextOptions
 ): Promise<ProcessContextResult> {
+    if (Object.prototype.hasOwnProperty.call(options, "entryStrategy")) {
+        throw new ConfigurationError(
+            "entryStrategy has been removed. Strict symbol entry extraction is always used."
+        );
+    }
+
     const {
         contextName,
         path: contextPath,
@@ -220,7 +224,6 @@ export async function processContext(
         removeDecorators,
         messageTypes,
         includePublicContracts,
-        entryStrategy,
         dependencyStrategy,
         outputModuleSpecifiers,
         fileSystem = nodeFileSystem,
@@ -247,7 +250,6 @@ export async function processContext(
         trustedDecoratorSources,
         messageTypes,
         includePublicContracts,
-        entryStrategy,
         dependencyStrategy,
         outputModuleSpecifiers,
         fileSystem,
