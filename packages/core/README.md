@@ -67,6 +67,8 @@ const command = new CreateOrderCommand(
 );
 ```
 
+Object payloads are shallow-copied before being stored and frozen inside the message. This keeps message payloads immutable without freezing caller-owned objects. Nested object identity is preserved.
+
 #### Serialization
 
 Messages provide two serialization methods:

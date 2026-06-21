@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.4] - 2026-06-22
+
+### Changed
+
+- `Message` now shallow-copies object payloads before freezing them, so caller-owned payload objects remain mutable while message payloads stay immutable.
+- `DomainEvent` now explicitly exposes the `(payload, options?)` constructor and forwards to `Message`.
+
 ## [0.9.2] - 2026-03-20
 
 ### Added

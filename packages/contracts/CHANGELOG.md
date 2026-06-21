@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.1] - 2026-06-22
+
+### Changed
+
+- `Command` and `Query` now explicitly expose the `(payload, options?)` constructor and forward to `Message`.
+
 ## [0.3.0] - 2026-06-01
 
 ### Added

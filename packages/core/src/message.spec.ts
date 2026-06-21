@@ -59,6 +59,39 @@ describe("Message", () => {
             }).toThrow();
         });
 
+        it("should copy object payload before freezing it", () => {
+            const nested = { count: 1 };
+            const originalPayload = { foo: "bar", nested };
+
+            const message = new Message(originalPayload);
+            const payload = message.getPayload();
+
+            expect(payload).not.toBe(originalPayload);
+            expect(payload.nested).toBe(nested);
+            expect(Object.isFrozen(originalPayload)).toBe(false);
+            expect(Object.isFrozen(payload)).toBe(true);
+
+            originalPayload.foo = "mutated";
+            expect(payload.foo).toBe("bar");
+        });
+
+        it("should shallow copy array payload containers", () => {
+            const nested = { id: "nested" };
+            const originalPayload = [nested];
+
+            const message = new Message(originalPayload);
+            const payload = message.getPayload();
+
+            expect(Array.isArray(payload)).toBe(true);
+            expect(payload).not.toBe(originalPayload);
+            expect(payload[0]).toBe(nested);
+            expect(Object.isFrozen(originalPayload)).toBe(false);
+            expect(Object.isFrozen(payload)).toBe(true);
+
+            originalPayload.push({ id: "added" });
+            expect(payload).toHaveLength(1);
+        });
+
         it("setHeader should use structural sharing (payload reference unchanged)", () => {
             const originalPayload = { foo: "bar" };
             const message = new Message(originalPayload);

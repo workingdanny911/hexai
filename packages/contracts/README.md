@@ -43,6 +43,8 @@ class GetOrderQuery extends Query<
 
 `Command` and `Query` extend `Message<Payload>` from `@hexaijs/core`, adding a phantom `ResultType` property for TypeScript type inference.
 
+Both constructors accept `(payload, options?)` and forward to `Message`, so custom headers can be passed with `MessageOptions`.
+
 ### Decorators (`@hexaijs/contracts/decorators`)
 
 Pure no-op markers used by `@hexaijs/plugin-contracts-generator` for static analysis. They have no runtime effect.

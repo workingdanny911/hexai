@@ -1,3 +1,4 @@
+import _ from "lodash";
 import { v4 as uuid } from "uuid";
 
 type Version = string | number | undefined;
@@ -32,6 +33,7 @@ export interface MessageOptions {
 
 export class Message<Payload = any> {
     protected headers!: MessageHeaders;
+    protected readonly payload: Payload;
 
     public static getSchemaVersion(): Version {
         return (this as any).schemaVersion ?? undefined;
@@ -73,16 +75,14 @@ export class Message<Payload = any> {
         return headers as MessageHeaders;
     }
 
-    constructor(
-        protected readonly payload: Payload,
-        options?: MessageOptions
-    ) {
+    constructor(payload: Payload, options?: MessageOptions) {
+        this.payload = clonePayload(payload);
         this.headers = Object.freeze(
             (this.constructor as any).mergeHeaders(options?.headers ?? {})
         );
 
-        if (payload && typeof payload === "object") {
-            Object.freeze(payload);
+        if (this.payload && typeof this.payload === "object") {
+            Object.freeze(this.payload);
         }
     }
 
@@ -204,6 +204,14 @@ export type MessageClass<T extends Message = Message> = {
     from: (rawPayload: any, header?: MessageHeaders) => T;
     new (...args: any[]): T;
 };
+
+function clonePayload<Payload>(payload: Payload): Payload {
+    if (!payload || typeof payload !== "object") {
+        return payload;
+    }
+
+    return _.clone(payload);
+}
 
 function generateHeaderFor(
     cls: MessageClass,
