@@ -4,7 +4,12 @@ import _ from "lodash";
 
 import { Propagation } from "@hexaijs/core";
 import { IsolationLevel } from "./types.js";
-import { DefaultPostgresUnitOfWork } from "./postgres-unit-of-work.js";
+import {
+    createTransactionResourceKey,
+    DefaultPostgresUnitOfWork,
+    TransactionAbortedError,
+    UnsupportedNestedTransactionCapabilityError,
+} from "./postgres-unit-of-work.js";
 import {
     newClient,
     useClient,
@@ -83,6 +88,38 @@ describe("PostgresUnitOfWork", () => {
 
     async function expectRecordCount(count: number): Promise<void> {
         expect(await verificationRepo.count()).toBe(count);
+    }
+
+    async function expectRollbackHookFailure(
+        promise: Promise<unknown>,
+        cause: unknown,
+        hookFailure: unknown
+    ): Promise<void> {
+        let error: unknown;
+        try {
+            await promise;
+        } catch (e) {
+            error = e;
+        }
+
+        expect(error).toBeInstanceOf(AggregateError);
+        expect((error as AggregateError).errors).toEqual([hookFailure]);
+        expect((error as AggregateError).cause).toBe(cause);
+    }
+
+    async function expectTransactionAborted(
+        promise: Promise<unknown>,
+        cause: unknown
+    ): Promise<void> {
+        let error: unknown;
+        try {
+            await promise;
+        } catch (e) {
+            error = e;
+        }
+
+        expect(error).toBeInstanceOf(TransactionAbortedError);
+        expect((error as Error).cause).toBe(cause);
     }
 
     async function runFailingTransaction(
@@ -231,11 +268,26 @@ describe("PostgresUnitOfWork", () => {
         });
 
         test("rolls back entire transaction when nested operation fails", async () => {
-            await uow.wrap(async (client) => {
-                await insertRecord(client, 1);
+            const nestedFailure = new Error("nested failure");
 
-                await runFailingNestedTransaction(async () => {});
-            });
+            await expectTransactionAborted(
+                uow.wrap(async (client) => {
+                    await insertRecord(client, 1);
+
+                    try {
+                        await uow.wrap(
+                            async () => {
+                                throw nestedFailure;
+                            },
+                            { propagation: Propagation.EXISTING }
+                        );
+                    } catch {
+                        // no commit-prevention marker: root finalization must
+                        // not let this look like a successful transaction.
+                    }
+                }),
+                nestedFailure
+            );
 
             await expectRecordCount(0);
         });
@@ -964,6 +1016,344 @@ describe("PostgresUnitOfWork", () => {
                     expect(e).toBeInstanceOf(AggregateError);
                     expect((e as AggregateError).cause).toBeUndefined();
                 }
+            });
+        });
+    });
+
+    describe("transaction capabilities", () => {
+        describe("commit prevention", () => {
+            test("rolls back while preserving the callback result", async () => {
+                const cause = new Error("event handler failed");
+                const result = { error: cause };
+                let beforeCommitCalled = false;
+                let afterRollbackCalled = false;
+
+                await expect(
+                    uow.scope(async () => {
+                        uow.beforeCommit(() => { beforeCommitCalled = true; });
+                        uow.afterRollback(() => { afterRollbackCalled = true; });
+
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+                        expect(uow.isCommitPrevented()).toBe(false);
+                        uow.preventCommit(cause);
+                        expect(uow.isCommitPrevented()).toBe(true);
+                        return result;
+                    })
+                ).resolves.toBe(result);
+
+                expect(beforeCommitCalled).toBe(false);
+                expect(afterRollbackCalled).toBe(true);
+                await expectRecordNotExists(1);
+            });
+
+            test("keeps the first commit-prevention cause when the rollback hook fails", async () => {
+                const firstCause = new Error("first failure");
+                const secondCause = new Error("second failure");
+                const hookFailure = new Error("rollback hook failed");
+
+                await expectRollbackHookFailure(
+                    uow.scope(async () => {
+                        uow.afterRollback(() => { throw hookFailure; });
+                        uow.preventCommit(firstCause);
+                        uow.preventCommit(secondCause);
+                    }),
+                    firstCause,
+                    hookFailure
+                );
+            });
+
+            test("throws outside a transaction scope", () => {
+                expect(() => uow.preventCommit()).toThrow(
+                    /outside of a transaction scope/
+                );
+                expect(() => uow.isCommitPrevented()).toThrow(
+                    /outside of a transaction scope/
+                );
+            });
+
+            test("rejects commit-prevention access inside a nested savepoint", async () => {
+                await uow.scope(async () => {
+                    await expect(
+                        uow.scope(
+                            async () => {
+                                uow.preventCommit();
+                            },
+                            { propagation: Propagation.NESTED }
+                        )
+                    ).rejects.toBeInstanceOf(
+                        UnsupportedNestedTransactionCapabilityError
+                    );
+                });
+            });
+
+            test("rolls back while preserving an error result from a nested existing-scope failure", async () => {
+                const nestedFailure = new Error("nested failure");
+                const result = { error: nestedFailure };
+
+                await expect(
+                    uow.scope(async () => {
+                        await uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        });
+
+                        try {
+                            await uow.scope(async () => {
+                                await uow.withClient(async (client) => {
+                                    await insertRecord(client, 2);
+                                });
+                                throw nestedFailure;
+                            });
+                        } catch (error) {
+                            expect(error).toBe(nestedFailure);
+                            uow.preventCommit(nestedFailure);
+                            return result;
+                        }
+                    })
+                ).resolves.toBe(result);
+
+                await expectRecordCount(0);
+            });
+
+            test("throws when an aborted transaction returns without commit prevention", async () => {
+                const nestedFailure = new Error("nested failure");
+
+                await expectTransactionAborted(
+                    uow.scope(async () => {
+                        try {
+                            await uow.scope(async () => {
+                                await uow.withClient(async (client) => {
+                                    await insertRecord(client, 1);
+                                });
+                                throw nestedFailure;
+                            });
+                        } catch {
+                            return { ok: true };
+                        }
+                    }),
+                    nestedFailure
+                );
+
+                await expectRecordCount(0);
+            });
+
+            test("uses the nested failure as the rollback cause when commit prevention also applies", async () => {
+                const preventCause = new Error("event handler failed");
+                const nestedFailure = new Error("nested failure");
+                const hookFailure = new Error("rollback hook failed");
+
+                await expectRollbackHookFailure(
+                    uow.scope(async () => {
+                        uow.afterRollback(() => { throw hookFailure; });
+                        uow.preventCommit(preventCause);
+
+                        try {
+                            await uow.scope(async () => {
+                                await uow.withClient(async (client) => {
+                                    await insertRecord(client, 1);
+                                });
+                                throw nestedFailure;
+                            });
+                        } catch {
+                            // The database transaction is already aborted, so
+                            // that cause is more useful than the explicit
+                            // commit-prevention cause if rollback finalization
+                            // itself fails.
+                        }
+                    }),
+                    nestedFailure,
+                    hookFailure
+                );
+
+                await expectRecordCount(0);
+            });
+
+            test("keeps the first swallowed existing-scope failure as the rollback cause", async () => {
+                const firstFailure = new Error("first nested failure");
+                const secondFailure = new Error("second nested failure");
+                const hookFailure = new Error("rollback hook failed");
+
+                await expectRollbackHookFailure(
+                    uow.scope(async () => {
+                        uow.afterRollback(() => { throw hookFailure; });
+
+                        try {
+                            await uow.scope(async () => {
+                                throw firstFailure;
+                            });
+                        } catch {
+                            uow.preventCommit(firstFailure);
+                        }
+
+                        try {
+                            await uow.scope(async () => {
+                                throw secondFailure;
+                            });
+                        } catch {
+                            // expected
+                        }
+                    }),
+                    firstFailure,
+                    hookFailure
+                );
+            });
+
+            test("uses the commit-prevention cause when the rollback hook fails", async () => {
+                const preventCause = new Error("event handler failed");
+                const hookFailure = new Error("rollback hook failed");
+
+                await expectRollbackHookFailure(
+                    uow.scope(async () => {
+                        uow.afterRollback(() => { throw hookFailure; });
+                        uow.preventCommit(preventCause);
+                    }),
+                    preventCause,
+                    hookFailure
+                );
+            });
+
+            test("uses the swallowed failure cause when the rollback hook fails", async () => {
+                const nestedFailure = new Error("nested failure");
+                const hookFailure = new Error("rollback hook failed");
+
+                await expectRollbackHookFailure(
+                    uow.scope(async () => {
+                        uow.afterRollback(() => { throw hookFailure; });
+
+                        try {
+                            await uow.scope(async () => {
+                                await uow.withClient(async (client) => {
+                                    await insertRecord(client, 1);
+                                });
+                                throw nestedFailure;
+                            });
+                        } catch {
+                            uow.preventCommit(nestedFailure);
+                        }
+                    }),
+                    nestedFailure,
+                    hookFailure
+                );
+
+                await expectRecordCount(0);
+            });
+        });
+
+        describe("transaction-local resources", () => {
+            type BufferedValues = { values: string[] };
+            const valuesKey =
+                createTransactionResourceKey<BufferedValues>("values");
+
+            test("reuses a resource within the current root transaction", async () => {
+                let created = 0;
+
+                await uow.scope(async () => {
+                    const first = uow.getOrCreateTransactionResource(
+                        valuesKey,
+                        () => {
+                            created++;
+                            return { values: [] };
+                        }
+                    );
+                    first.values.push("first");
+
+                    const second = uow.getOrCreateTransactionResource(
+                        valuesKey,
+                        () => {
+                            created++;
+                            return { values: ["new"] };
+                        }
+                    );
+
+                    expect(second).toBe(first);
+                    expect(second.values).toEqual(["first"]);
+                });
+
+                expect(created).toBe(1);
+            });
+
+            test("keeps Propagation.NEW resources isolated from the parent transaction", async () => {
+                await uow.scope(async () => {
+                    uow.setTransactionResource(valuesKey, {
+                        values: ["outer"],
+                    });
+
+                    await uow.scope(
+                        async () => {
+                            expect(
+                                uow.getTransactionResource(valuesKey)
+                            ).toBeUndefined();
+
+                            uow.setTransactionResource(valuesKey, {
+                                values: ["inner"],
+                            });
+                            expect(
+                                uow.getTransactionResource(valuesKey)?.values
+                            ).toEqual(["inner"]);
+                        },
+                        { propagation: Propagation.NEW }
+                    );
+
+                    expect(
+                        uow.getTransactionResource(valuesKey)?.values
+                    ).toEqual(["outer"]);
+                });
+            });
+
+            test("rejects resource access inside a nested savepoint", async () => {
+                await uow.scope(async () => {
+                    await expect(
+                        uow.scope(
+                            async () => {
+                                uow.getTransactionResource(valuesKey);
+                            },
+                            { propagation: Propagation.NESTED }
+                        )
+                    ).rejects.toBeInstanceOf(
+                        UnsupportedNestedTransactionCapabilityError
+                    );
+                });
+            });
+
+            test("keeps parent resources usable after nested savepoint rejection", async () => {
+                await uow.scope(async () => {
+                    const parentResource = { values: ["outer"] };
+                    uow.setTransactionResource(valuesKey, parentResource);
+
+                    await expect(
+                        uow.scope(
+                            async () => {
+                                uow.getTransactionResource(valuesKey);
+                            },
+                            { propagation: Propagation.NESTED }
+                        )
+                    ).rejects.toBeInstanceOf(
+                        UnsupportedNestedTransactionCapabilityError
+                    );
+
+                    expect(uow.getTransactionResource(valuesKey)).toBe(
+                        parentResource
+                    );
+                    parentResource.values.push("after-rejection");
+                    expect(
+                        uow.getTransactionResource(valuesKey)?.values
+                    ).toEqual(["outer", "after-rejection"]);
+                });
+            });
+
+            test("throws outside a transaction scope", () => {
+                expect(() => uow.getTransactionResource(valuesKey)).toThrow(
+                    /outside of a transaction scope/
+                );
+                expect(() =>
+                    uow.getOrCreateTransactionResource(valuesKey, () => ({
+                        values: [],
+                    }))
+                ).toThrow(/outside of a transaction scope/);
+                expect(() =>
+                    uow.setTransactionResource(valuesKey, { values: [] })
+                ).toThrow(/outside of a transaction scope/);
             });
         });
     });

@@ -231,6 +231,82 @@ await unitOfWork.scope(async () => {
 - `Propagation.NESTED` scopes maintain their own independent hook registries
 - Calling hook registration methods outside a `scope()` throws an error
 
+### Postgres Transaction Capabilities
+
+`DefaultPostgresUnitOfWork` also provides Postgres-local transaction
+capabilities for advanced coordination inside a transaction. These capabilities
+are intentionally separate from the base `PostgresUnitOfWork` interface so
+callers can depend only on the features they need.
+
+#### CommitControl
+
+Use `CommitControl` when a transaction must roll back while preserving the
+callback's return value. This is useful for value-based error contracts, such as
+returning an error result instead of throwing.
+
+```typescript
+import {
+    CommitControl,
+    createPostgresUnitOfWork,
+} from "@hexaijs/postgres";
+
+const unitOfWork = createPostgresUnitOfWork(pool);
+const commitControl = unitOfWork as typeof unitOfWork & CommitControl;
+
+const result = await unitOfWork.scope(async () => {
+    const result = await handleCommand();
+
+    if (result.isError()) {
+        commitControl.preventCommit(result.error);
+    }
+
+    return result;
+});
+```
+
+`preventCommit()` marks the root transaction as non-committable. The scope still
+returns normally, but the transaction rolls back during finalization.
+
+If an `EXISTING` nested scope throws and the root scope catches that error, the
+root scope must either rethrow or call `preventCommit()`. Otherwise,
+`DefaultPostgresUnitOfWork` rejects root finalization with
+`TransactionAbortedError` to prevent accidentally committing a transaction that
+was already aborted.
+
+`CommitControl` is not available inside `Propagation.NESTED` savepoints because
+savepoints do not own the root transaction outcome.
+
+#### TransactionResourceAware
+
+Use `TransactionResourceAware` to store transaction-local resources without
+threading them through every call. Resources are cleared when the transaction
+commits or rolls back.
+
+```typescript
+import { DomainEvent } from "@hexaijs/core";
+import {
+    TransactionResourceAware,
+    createTransactionResourceKey,
+} from "@hexaijs/postgres";
+
+const eventsKey = createTransactionResourceKey<DomainEvent[]>(
+    "buffered-domain-events"
+);
+const resources = unitOfWork as typeof unitOfWork & TransactionResourceAware;
+
+await unitOfWork.scope(async () => {
+    const events = resources.getOrCreateTransactionResource(
+        eventsKey,
+        () => []
+    );
+
+    events.push(...aggregate.flushEvents());
+});
+```
+
+Transaction resources are root-transaction scoped and are not available inside
+`Propagation.NESTED` savepoints.
+
 ### Isolation Levels
 
 Configure transaction isolation levels when stricter guarantees are needed:
@@ -663,6 +739,11 @@ await uow.scope(async () => {
 | `PostgresUnitOfWork` | Interface extending UnitOfWork with `withClient()` method |
 | `DefaultPostgresUnitOfWork` | Default implementation of PostgresUnitOfWork with transaction management |
 | `PostgresUnitOfWorkForTesting` | Test-specific PostgresUnitOfWork that runs inside external transaction |
+| `CommitControl` | Postgres-local capability for marking the current transaction as rollback-only while preserving the callback result |
+| `TransactionResourceAware` | Postgres-local capability for transaction-scoped resources |
+| `createTransactionResourceKey` | Creates typed keys for transaction-scoped resources |
+| `TransactionAbortedError` | Error thrown when an aborted root transaction would otherwise finalize normally |
+| `UnsupportedNestedTransactionCapabilityError` | Error thrown when root-only transaction capabilities are used inside a nested savepoint |
 | `PostgresEventStore` | Event store implementation with batch insert support |
 | `PostgresConfig` | Immutable configuration with builder pattern |
 | `postgresConfig` | Config spec for `defineConfig` integration |

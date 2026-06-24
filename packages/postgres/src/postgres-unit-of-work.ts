@@ -17,12 +17,65 @@ import type {
     UnitOfWork,
 } from "@hexaijs/core";
 
+declare const transactionResourceKeyBrand: unique symbol;
+
+export interface TransactionResourceKey<T> {
+    readonly symbol: symbol;
+    readonly description: string;
+    readonly [transactionResourceKeyBrand]?: (value: T) => T;
+}
+
+export function createTransactionResourceKey<T>(
+    description: string
+): TransactionResourceKey<T> {
+    return {
+        symbol: Symbol(description),
+        description,
+    };
+}
+
+export interface CommitControl {
+    preventCommit(cause?: unknown): void;
+    isCommitPrevented(): boolean;
+}
+
+export interface TransactionResourceAware {
+    getTransactionResource<T>(
+        key: TransactionResourceKey<T>
+    ): T | undefined;
+    getOrCreateTransactionResource<T>(
+        key: TransactionResourceKey<T>,
+        factory: () => T
+    ): T;
+    setTransactionResource<T>(
+        key: TransactionResourceKey<T>,
+        value: T
+    ): void;
+}
+
+export class TransactionAbortedError extends Error {
+    constructor(cause?: unknown) {
+        super("Transaction was already aborted before root scope completed", {
+            cause,
+        });
+        this.name = "TransactionAbortedError";
+    }
+}
+
+export class UnsupportedNestedTransactionCapabilityError extends Error {
+    constructor(operation: string = "Transaction capabilities") {
+        super(`${operation} is not supported inside nested savepoints`);
+        this.name = "UnsupportedNestedTransactionCapabilityError";
+    }
+}
+
 export interface PostgresUnitOfWork
     extends UnitOfWork<pg.ClientBase, PostgresTransactionOptions> {
     withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T>;
 }
 
-export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
+export class DefaultPostgresUnitOfWork
+    implements PostgresUnitOfWork, CommitControl, TransactionResourceAware {
     private static wrapDeprecationEmitted = false;
     private transactionStorage = new AsyncLocalStorage<PostgresTransaction>();
 
@@ -91,6 +144,41 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
         tx.addAfterRollbackHook(hook);
     }
 
+    preventCommit(cause?: unknown): void {
+        const tx = this.getRequiredTransaction("preventCommit");
+        tx.preventCommit(cause);
+    }
+
+    isCommitPrevented(): boolean {
+        const tx = this.getRequiredTransaction("isCommitPrevented");
+        return tx.isCommitPrevented();
+    }
+
+    getTransactionResource<T>(
+        key: TransactionResourceKey<T>
+    ): T | undefined {
+        const tx = this.getRequiredTransaction("getTransactionResource");
+        return tx.getResource(key);
+    }
+
+    getOrCreateTransactionResource<T>(
+        key: TransactionResourceKey<T>,
+        factory: () => T
+    ): T {
+        const tx = this.getRequiredTransaction(
+            "getOrCreateTransactionResource"
+        );
+        return tx.getOrCreateResource(key, factory);
+    }
+
+    setTransactionResource<T>(
+        key: TransactionResourceKey<T>,
+        value: T
+    ): void {
+        const tx = this.getRequiredTransaction("setTransactionResource");
+        tx.setResource(key, value);
+    }
+
     async withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T> {
         const currentTransaction = this.getCurrentTransaction();
 
@@ -112,11 +200,11 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
         return this.transactionStorage.getStore() ?? null;
     }
 
-    private getRequiredTransaction(hookName: string): PostgresTransaction {
+    private getRequiredTransaction(operation: string): PostgresTransaction {
         const tx = this.getCurrentTransaction();
         if (!tx) {
             throw new Error(
-                `Cannot register ${hookName} hook outside of a transaction scope`
+                `Cannot use ${operation} outside of a transaction scope`
             );
         }
         return tx;
@@ -158,13 +246,17 @@ class PostgresTransaction {
     private startPromise: Promise<void> | null = null;
     private closed = false;
     private abortError?: Error;
+    private commitPrevented = false;
+    private commitPreventionCause?: unknown;
 
     private nestingDepth = 0;
+    private nestedSavepointDepth = 0;
     private options!: PostgresTransactionOptions;
 
     private client!: pg.ClientBase;
     private savepoints: Savepoint[] = [];
     private hooks = new TransactionHooks();
+    private resources = new Map<symbol, unknown>();
 
     constructor(
         private clientFactory: ClientFactory,
@@ -186,6 +278,45 @@ class PostgresTransaction {
         this.hooks.addAfterRollback(hook);
     }
 
+    public preventCommit(cause?: unknown): void {
+        this.assertNotInNestedSavepoint("preventCommit()");
+        if (!this.commitPrevented) {
+            this.commitPrevented = true;
+            this.commitPreventionCause = cause;
+        }
+    }
+
+    public isCommitPrevented(): boolean {
+        this.assertNotInNestedSavepoint("isCommitPrevented()");
+        return this.commitPrevented;
+    }
+
+    public getResource<T>(
+        key: TransactionResourceKey<T>
+    ): T | undefined {
+        this.assertNotInNestedSavepoint("Transaction resources");
+        return this.resources.get(key.symbol) as T | undefined;
+    }
+
+    public getOrCreateResource<T>(
+        key: TransactionResourceKey<T>,
+        factory: () => T
+    ): T {
+        this.assertNotInNestedSavepoint("Transaction resources");
+        if (!this.resources.has(key.symbol)) {
+            this.resources.set(key.symbol, factory());
+        }
+        return this.resources.get(key.symbol) as T;
+    }
+
+    public setResource<T>(
+        key: TransactionResourceKey<T>,
+        value: T
+    ): void {
+        this.assertNotInNestedSavepoint("Transaction resources");
+        this.resources.set(key.symbol, value);
+    }
+
     public async execute<T>(
         fn: (client: pg.ClientBase) => Promise<T>,
         options: PostgresTransactionOptions
@@ -196,7 +327,7 @@ class PostgresTransaction {
         const executor = this.resolveExecutor(options.propagation);
         return executor === this
             ? this.runWithLifecycle(fn)
-            : executor.execute(fn, options);
+            : this.runNestedSavepoint(() => executor.execute(fn, options));
     }
 
     public async executeScope<T>(
@@ -208,7 +339,7 @@ class PostgresTransaction {
         if (this.nestingDepth > 0 && options.propagation === Propagation.NESTED) {
             await this.ensureStarted();
             const savepoint = this.createSavepoint();
-            return savepoint.execute(() => fn());
+            return this.runNestedSavepoint(() => savepoint.execute(() => fn()));
         }
 
         return this.runScopedLifecycle(fn);
@@ -266,62 +397,85 @@ class PostgresTransaction {
     private async runWithLifecycle<T>(
         fn: (client: pg.ClientBase) => Promise<T>
     ): Promise<T> {
+        this.nestingDepth++;
+        let callbackFailed = false;
+        let callbackFailure: unknown;
         try {
-            return await this.executeWithNesting(fn);
+            return await fn(this.client);
         } catch (e) {
             console.error(`Transaction aborting, error in transaction:`);
             console.error(e);
             this.markAsAborted(e as Error);
+            callbackFailed = true;
+            callbackFailure = e;
             throw e;
         } finally {
-            await this.finalizeIfRoot();
+            this.nestingDepth--;
+            await this.finalizeAfterCallback(callbackFailed, callbackFailure);
         }
     }
 
     private async runScopedLifecycle<T>(fn: () => Promise<T>): Promise<T> {
         this.nestingDepth++;
+        let callbackFailed = false;
+        let callbackFailure: unknown;
         try {
             return await fn();
         } catch (e) {
             this.markAsAborted(e as Error);
+            callbackFailed = true;
+            callbackFailure = e;
             throw e;
         } finally {
             this.nestingDepth--;
-            await this.finalizeIfRoot();
-        }
-    }
-
-    private async executeWithNesting<T>(
-        fn: (client: pg.ClientBase) => Promise<T>
-    ): Promise<T> {
-        this.nestingDepth++;
-        try {
-            return await fn(this.client);
-        } finally {
-            this.nestingDepth--;
+            await this.finalizeAfterCallback(callbackFailed, callbackFailure);
         }
     }
 
     private markAsAborted(error: Error): void {
-        this.abortError = error;
+        if (!this.abortError) {
+            this.abortError = error;
+        }
     }
 
-    private async finalizeIfRoot(): Promise<void> {
-        if (this.nestingDepth === 0) {
-            if (!this.startPromise || !this.client) return;
-
-            if (this.isAborted()) {
-                await this.hooks.executeRollback(
-                    () => this.rollback(),
-                    this.abortError
-                );
-            } else if (!this.closed) {
-                await this.hooks.executeCommit(
-                    () => this.commit(),
-                    () => this.rollback()
-                );
-            }
+    private async finalizeAfterCallback(
+        callbackFailed: boolean,
+        callbackFailure: unknown
+    ): Promise<void> {
+        if (this.nestingDepth !== 0) {
+            return;
         }
+
+        if (callbackFailed) {
+            await this.hooks.executeRollback(
+                () => this.rollback(),
+                callbackFailure
+            );
+            return;
+        }
+
+        if (this.isAborted() && !this.commitPrevented) {
+            await this.rollbackAndThrow(
+                new TransactionAbortedError(this.abortError)
+            );
+        }
+
+        if (this.isAborted() || this.commitPrevented) {
+            await this.hooks.executeRollback(
+                () => this.rollback(),
+                this.abortError ?? this.commitPreventionCause
+            );
+            return;
+        }
+
+        if (!this.startPromise || !this.client || this.closed) {
+            return;
+        }
+
+        await this.hooks.executeCommit(
+            () => this.commit(),
+            () => this.rollback()
+        );
     }
 
     private resolveExecutor(
@@ -358,6 +512,29 @@ class PostgresTransaction {
         this.savepoints.pop();
     }
 
+    private async runNestedSavepoint<T>(fn: () => Promise<T>): Promise<T> {
+        this.nestedSavepointDepth++;
+        try {
+            return await fn();
+        } finally {
+            this.nestedSavepointDepth--;
+        }
+    }
+
+    private assertNotInNestedSavepoint(operation: string): void {
+        if (this.nestedSavepointDepth > 0) {
+            throw new UnsupportedNestedTransactionCapabilityError(operation);
+        }
+    }
+
+    private async rollbackAndThrow(error: Error): Promise<never> {
+        await this.hooks.executeRollback(
+            () => this.rollback(),
+            error
+        );
+        throw error;
+    }
+
     private async commit(): Promise<void> {
         if (this.closed) {
             return;
@@ -365,6 +542,7 @@ class PostgresTransaction {
 
         this.closed = true;
         await this.client.query("COMMIT");
+        this.resources.clear();
         await this.clientCleanUp?.(this.client);
     }
 
@@ -375,8 +553,11 @@ class PostgresTransaction {
 
         this.closed = true;
 
+        const client = this.client;
         try {
-            await this.client.query("ROLLBACK");
+            if (this.startPromise && client) {
+                await client.query("ROLLBACK");
+            }
         } catch (e) {
             if (
                 e instanceof Error &&
@@ -387,7 +568,10 @@ class PostgresTransaction {
             throw e;
         }
 
-        await this.clientCleanUp?.(this.client);
+        this.resources.clear();
+        if (client) {
+            await this.clientCleanUp?.(client);
+        }
     }
 
     private isAborted(): boolean {

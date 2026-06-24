@@ -8,6 +8,23 @@
   Drain hooks run after ordinary `beforeCommit` hooks and before `COMMIT`,
   allowing transaction-local buffers to flush as the final in-transaction
   commit step.
+- Added Postgres-local transaction capabilities for commit prevention and
+  transaction-local resources: `CommitControl`, `TransactionResourceAware`,
+  `createTransactionResourceKey()`, `TransactionAbortedError`, and
+  `UnsupportedNestedTransactionCapabilityError`.
+
+### Changed
+
+- `DefaultPostgresUnitOfWork` now rolls back instead of committing when
+  `preventCommit()` is called, while preserving the callback's return value.
+  This supports value-based error contracts such as returning an error result.
+- `DefaultPostgresUnitOfWork` now rejects root finalization with
+  `TransactionAbortedError` when an `EXISTING` nested scope fails and the root
+  callback returns normally without acknowledging the aborted transaction through
+  `preventCommit()`.
+- Commit-control and transaction-resource capabilities now fail fast inside
+  `Propagation.NESTED` savepoints. Use the root transaction scope or
+  `Propagation.NEW` when a capability needs its own transaction boundary.
 
 ## [0.11.0] - 2026-06-24
 
