@@ -3,7 +3,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.5.1",
+  "version": "0.6.0",
   "type": "module",
   "description": "SQLite support for hexai",
   "license": "MIT",
@@ -50,7 +50,7 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@hexaijs/core": "^0.9.0",
+    "@hexaijs/core": "^0.10.0",
     "better-sqlite3": "^12.5.0"
   },
   "devDependencies": {
