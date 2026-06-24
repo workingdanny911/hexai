@@ -49,6 +49,32 @@ describe("PostgresUnitOfWorkForTesting", () => {
         await c.query(`INSERT INTO ${TABLE} VALUES ($1);`, [id]);
     }
 
+    async function getRecordIds(): Promise<number[]> {
+        const result = await client.query(`SELECT id FROM ${TABLE} ORDER BY id`);
+        return result.rows.map((r) => r.id);
+    }
+
+    async function expectRecordIds(ids: number[]): Promise<void> {
+        expect(await getRecordIds()).toEqual(ids);
+    }
+
+    async function expectRecordCount(count: number): Promise<void> {
+        expect(await getRecordIds()).toHaveLength(count);
+    }
+
+    function captureSyncError(fn: () => unknown): unknown {
+        try {
+            fn();
+        } catch (e) {
+            return e;
+        }
+    }
+
+    function expectNoActiveTransaction(error: unknown): void {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toMatch(/not started/);
+    }
+
     async function runFailingTransaction(
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
@@ -323,8 +349,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 });
 
                 expect(called).toBe(true);
-                const result = await client.query(`SELECT * FROM ${TABLE}`);
-                expect(result.rows).toHaveLength(1);
+                await expectRecordCount(1);
             });
 
             test("triggers rollback when hook throws", async () => {
@@ -339,8 +364,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                     expect((e as Error).message).toBe("hook failure");
                 }
 
-                const result = await client.query(`SELECT * FROM ${TABLE}`);
-                expect(result.rows).toHaveLength(0);
+                await expectRecordCount(0);
             });
         });
 
@@ -402,6 +426,68 @@ describe("PostgresUnitOfWorkForTesting", () => {
             });
         });
 
+        describe("transaction context", () => {
+            test("keeps beforeCommit hooks inside the active test transaction", async () => {
+                let directClient!: pg.ClientBase;
+
+                await uow.wrap(async (c) => {
+                    uow.beforeCommit(() => {
+                        directClient = uow.getClient();
+                    });
+                    await insertRecord(c, 1);
+                });
+
+                expect(directClient).toBe(client);
+                await expectRecordIds([1]);
+            });
+
+            test("runs afterCommit outside the completed test transaction context", async () => {
+                let directClientError: unknown;
+
+                await uow.wrap(async (c) => {
+                    uow.afterCommit(async () => {
+                        directClientError = captureSyncError(() =>
+                            uow.getClient()
+                        );
+
+                        await uow.withClient(async (hookClient) => {
+                            await insertRecord(hookClient, 2);
+                        });
+                    });
+
+                    await insertRecord(c, 1);
+                });
+
+                expectNoActiveTransaction(directClientError);
+                await expectRecordIds([1, 2]);
+            });
+
+            test("runs afterRollback outside the completed test transaction context", async () => {
+                const scopeFailure = new Error("scope failure");
+                let directClientError: unknown;
+
+                await expect(
+                    uow.wrap(async (c) => {
+                        uow.afterRollback(async () => {
+                            directClientError = captureSyncError(() =>
+                                uow.getClient()
+                            );
+
+                            await uow.withClient(async (hookClient) => {
+                                await insertRecord(hookClient, 2);
+                            });
+                        });
+
+                        await insertRecord(c, 1);
+                        throw scopeFailure;
+                    })
+                ).rejects.toBe(scopeFailure);
+
+                expectNoActiveTransaction(directClientError);
+                await expectRecordIds([2]);
+            });
+        });
+
         describe("hook registration outside scope", () => {
             test("throws when registering beforeCommit outside scope", () => {
                 expect(() => uow.beforeCommit(() => {})).toThrow(
@@ -437,8 +523,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 ).rejects.toBeInstanceOf(AggregateError);
 
                 expect(secondHookCalled).toBe(true);
-                const result = await client.query(`SELECT * FROM ${TABLE}`);
-                expect(result.rows).toHaveLength(1);
+                await expectRecordCount(1);
             });
 
             test("afterRollback runs all hooks even when one throws", async () => {
@@ -456,8 +541,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 ).rejects.toBeInstanceOf(AggregateError);
 
                 expect(secondHookCalled).toBe(true);
-                const result = await client.query(`SELECT * FROM ${TABLE}`);
-                expect(result.rows).toHaveLength(0);
+                await expectRecordCount(0);
             });
         });
 

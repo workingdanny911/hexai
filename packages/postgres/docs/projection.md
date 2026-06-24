@@ -77,6 +77,10 @@ On `start()`, each runner calls `initialize()`, which reads its checkpoint:
 2. `ProjectionWakeQueue.wake()`, typically from an `afterCommit` hook right after
    you append events.
 
+Postgres `afterCommit` hooks run outside the completed transaction context, so a
+wake can trigger polling without reusing the command transaction client that just
+committed.
+
 A single poll opens one event-store stream from the minimum position across
 active runners and feeds each event to every runner whose position is behind it.
 Each event is applied through `processEvent`, which wraps the read model write

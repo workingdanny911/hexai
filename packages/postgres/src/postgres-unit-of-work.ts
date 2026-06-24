@@ -62,6 +62,13 @@ export class TransactionAbortedError extends Error {
     }
 }
 
+export class TransactionClosedError extends Error {
+    constructor(operation: string = "Transaction") {
+        super(`${operation} cannot use a transaction that has already closed`);
+        this.name = "TransactionClosedError";
+    }
+}
+
 export class UnsupportedNestedTransactionCapabilityError extends Error {
     constructor(operation: string = "Transaction capabilities") {
         super(`${operation} is not supported inside nested savepoints`);
@@ -136,12 +143,12 @@ export class DefaultPostgresUnitOfWork
 
     afterCommit(hook: TransactionHook): void {
         const tx = this.getRequiredTransaction("afterCommit");
-        tx.addAfterCommitHook(hook);
+        tx.addAfterCommitHook(() => this.runOutsideTransactionContext(hook));
     }
 
     afterRollback(hook: TransactionHook): void {
         const tx = this.getRequiredTransaction("afterRollback");
-        tx.addAfterRollbackHook(hook);
+        tx.addAfterRollbackHook(() => this.runOutsideTransactionContext(hook));
     }
 
     preventCommit(cause?: unknown): void {
@@ -207,7 +214,16 @@ export class DefaultPostgresUnitOfWork
                 `Cannot use ${operation} outside of a transaction scope`
             );
         }
+        if (tx.isClosed()) {
+            throw new TransactionClosedError(operation);
+        }
         return tx;
+    }
+
+    private runOutsideTransactionContext(
+        hook: TransactionHook
+    ): void | Promise<void> {
+        return this.transactionStorage.exit(() => hook());
     }
 
     private resolveOptions(
@@ -244,6 +260,7 @@ export class DefaultPostgresUnitOfWork
 
 class PostgresTransaction {
     private startPromise: Promise<void> | null = null;
+    private transactionStarted = false;
     private closed = false;
     private abortError?: Error;
     private commitPrevented = false;
@@ -346,17 +363,24 @@ class PostgresTransaction {
     }
 
     public async getClientLazy(): Promise<pg.ClientBase> {
+        this.assertOpen("withClient()");
         await this.ensureStarted();
+        this.assertOpen("withClient()");
         return this.client;
     }
 
     public getClient(): pg.ClientBase {
+        this.assertOpen("getClient()");
         if (!this.client) {
             throw new Error(
                 "Transaction not initialized. Use withClient() inside scope() to trigger lazy initialization."
             );
         }
         return this.client;
+    }
+
+    public isClosed(): boolean {
+        return this.closed;
     }
 
     private ensureStarted(): Promise<void> {
@@ -368,7 +392,20 @@ class PostgresTransaction {
 
     private async doStart(): Promise<void> {
         await this.initializeClient();
+        if (this.closed) {
+            await this.clientCleanUp?.(this.client);
+            return;
+        }
+
         await this.beginTransaction();
+        if (this.closed) {
+            try {
+                await this.client.query("ROLLBACK");
+            } finally {
+                this.transactionStarted = false;
+                await this.clientCleanUp?.(this.client);
+            }
+        }
     }
 
     private async initializeClient(): Promise<void> {
@@ -384,6 +421,7 @@ class PostgresTransaction {
 
     private async beginTransaction(): Promise<void> {
         await this.client.query("BEGIN");
+        this.transactionStarted = true;
 
         const isolationLevel =
             this.options.isolationLevel ?? IsolationLevel.READ_COMMITTED;
@@ -468,7 +506,12 @@ class PostgresTransaction {
             return;
         }
 
-        if (!this.startPromise || !this.client || this.closed) {
+        if (this.closed) {
+            return;
+        }
+
+        if (!this.startPromise || !this.client || !this.transactionStarted) {
+            await this.closeWithoutDatabaseWork();
             return;
         }
 
@@ -527,6 +570,25 @@ class PostgresTransaction {
         }
     }
 
+    private assertOpen(operation: string): void {
+        if (this.closed) {
+            throw new TransactionClosedError(operation);
+        }
+    }
+
+    private async closeWithoutDatabaseWork(): Promise<void> {
+        this.closed = true;
+        this.resources.clear();
+
+        if (this.startPromise) {
+            try {
+                await this.startPromise;
+            } catch {
+                // The detached client acquisition path will surface its own error.
+            }
+        }
+    }
+
     private async rollbackAndThrow(error: Error): Promise<never> {
         await this.hooks.executeRollback(
             () => this.rollback(),
@@ -542,6 +604,7 @@ class PostgresTransaction {
 
         this.closed = true;
         await this.client.query("COMMIT");
+        this.transactionStarted = false;
         this.resources.clear();
         await this.clientCleanUp?.(this.client);
     }
@@ -555,7 +618,7 @@ class PostgresTransaction {
 
         const client = this.client;
         try {
-            if (this.startPromise && client) {
+            if (this.transactionStarted && client) {
                 await client.query("ROLLBACK");
             }
         } catch (e) {
@@ -569,6 +632,7 @@ class PostgresTransaction {
         }
 
         this.resources.clear();
+        this.transactionStarted = false;
         if (client) {
             await this.clientCleanUp?.(client);
         }

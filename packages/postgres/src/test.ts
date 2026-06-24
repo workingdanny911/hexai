@@ -69,12 +69,16 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
 
     afterCommit(hook: TransactionHook): void {
         const executor = this.getRequiredExecutor("afterCommit");
-        executor.addAfterCommitHook(hook);
+        executor.addAfterCommitHook(() =>
+            this.runOutsideTransactionContext(hook)
+        );
     }
 
     afterRollback(hook: TransactionHook): void {
         const executor = this.getRequiredExecutor("afterRollback");
-        executor.addAfterRollbackHook(hook);
+        executor.addAfterRollbackHook(() =>
+            this.runOutsideTransactionContext(hook)
+        );
     }
 
     async withClient<T>(fn: (client: ClientBase) => Promise<T>): Promise<T> {
@@ -102,6 +106,12 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
 
     private getCurrentExecutor(): TestTransactionExecutor | null {
         return this.executorStorage.getStore() ?? null;
+    }
+
+    private runOutsideTransactionContext(
+        hook: TransactionHook
+    ): void | Promise<void> {
+        return this.executorStorage.exit(() => hook());
     }
 
     private getRequiredExecutor(hookName: string): TestTransactionExecutor {

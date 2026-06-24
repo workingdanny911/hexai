@@ -8,6 +8,7 @@ import {
     createTransactionResourceKey,
     DefaultPostgresUnitOfWork,
     TransactionAbortedError,
+    TransactionClosedError,
     UnsupportedNestedTransactionCapabilityError,
 } from "./postgres-unit-of-work.js";
 import {
@@ -31,6 +32,30 @@ function areSameTransaction(...txids: string[]): boolean {
 
 function areDistinctTransactions(...txids: string[]): boolean {
     return new Set(txids).size === txids.length;
+}
+
+function captureSyncError(fn: () => unknown): unknown {
+    try {
+        fn();
+    } catch (e) {
+        return e;
+    }
+}
+
+function expectNoActiveTransaction(error: unknown): void {
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/not started/);
+}
+
+function createDeferred(): {
+    promise: Promise<void>;
+    resolve: () => void;
+} {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+        resolve = r;
+    });
+    return { promise, resolve };
 }
 
 describe("PostgresUnitOfWork", () => {
@@ -852,6 +877,180 @@ describe("PostgresUnitOfWork", () => {
                 });
 
                 expect(called).toBe(false);
+            });
+        });
+
+        describe("transaction context", () => {
+            test("keeps beforeCommit hooks inside the active transaction", async () => {
+                const txids: string[] = [];
+
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                    });
+
+                    uow.beforeCommit(async () => {
+                        await uow.withClient(async (client) => {
+                            txids.push(await getTransactionId(client));
+                        });
+
+                        uow.beforeCommit(async () => {
+                            await uow.withClient(async (client) => {
+                                txids.push(await getTransactionId(client));
+                            });
+                        }, { phase: "drain" });
+                    });
+                });
+
+                expect(areSameTransaction(...txids)).toBe(true);
+            });
+
+            test("runs afterCommit outside the completed transaction context", async () => {
+                const txids: string[] = [];
+                let directClientError: unknown;
+
+                await uow.scope(async () => {
+                    uow.afterCommit(async () => {
+                        directClientError = captureSyncError(() =>
+                            uow.getClient()
+                        );
+
+                        await uow.withClient(async (client) => {
+                            txids.push(await getTransactionId(client));
+                            await insertRecord(client, 2);
+                        });
+                    });
+
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                expectNoActiveTransaction(directClientError);
+                expect(areDistinctTransactions(...txids)).toBe(true);
+                await expectRecordExists(1);
+                await expectRecordExists(2);
+            });
+
+            test("runs afterRollback outside the completed transaction context", async () => {
+                const scopeFailure = new Error("scope failure");
+                const txids: string[] = [];
+                let directClientError: unknown;
+
+                await expect(
+                    uow.scope(async () => {
+                        uow.afterRollback(async () => {
+                            directClientError = captureSyncError(() =>
+                                uow.getClient()
+                            );
+
+                            await uow.withClient(async (client) => {
+                                txids.push(await getTransactionId(client));
+                                await insertRecord(client, 2);
+                            });
+                        });
+
+                        await uow.withClient(async (client) => {
+                            txids.push(await getTransactionId(client));
+                            await insertRecord(client, 1);
+                        });
+                        throw scopeFailure;
+                    })
+                ).rejects.toBe(scopeFailure);
+
+                expectNoActiveTransaction(directClientError);
+                expect(areDistinctTransactions(...txids)).toBe(true);
+                await expectRecordNotExists(1);
+                await expectRecordExists(2);
+            });
+
+            test("runs afterRollback outside the prevented transaction context", async () => {
+                const txids: string[] = [];
+
+                const result = await uow.scope(async () => {
+                    uow.afterRollback(async () => {
+                        await uow.withClient(async (client) => {
+                            txids.push(await getTransactionId(client));
+                            await insertRecord(client, 2);
+                        });
+                    });
+
+                    await uow.withClient(async (client) => {
+                        txids.push(await getTransactionId(client));
+                        await insertRecord(client, 1);
+                    });
+                    uow.preventCommit();
+
+                    return "handled";
+                });
+
+                expect(result).toBe("handled");
+                expect(areDistinctTransactions(...txids)).toBe(true);
+                await expectRecordNotExists(1);
+                await expectRecordExists(2);
+            });
+
+            test("rejects leaked async work that uses a closed transaction context", async () => {
+                const gate = createDeferred();
+                let leakedClientUse!: Promise<void>;
+
+                await uow.scope(async () => {
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+
+                    leakedClientUse = gate.promise.then(() =>
+                        uow.withClient(async (client) => {
+                            await insertRecord(client, 2);
+                        })
+                    );
+                });
+
+                gate.resolve();
+
+                await expect(leakedClientUse).rejects.toBeInstanceOf(
+                    TransactionClosedError
+                );
+                await expectRecordExists(1);
+                await expectRecordNotExists(2);
+            });
+
+            test("rejects leaked async work after a lazy no-op scope", async () => {
+                const gate = createDeferred();
+                let leakedClientUse!: Promise<void>;
+
+                await uow.scope(async () => {
+                    leakedClientUse = gate.promise.then(() =>
+                        uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        })
+                    );
+                });
+
+                gate.resolve();
+
+                await expect(leakedClientUse).rejects.toBeInstanceOf(
+                    TransactionClosedError
+                );
+                await expectRecordNotExists(1);
+            });
+
+            test("rolls back a leaked microtask that races lazy no-op finalization", async () => {
+                let leakedClientUse!: Promise<void>;
+
+                await uow.scope(async () => {
+                    leakedClientUse = Promise.resolve().then(() =>
+                        uow.withClient(async (client) => {
+                            await insertRecord(client, 1);
+                        })
+                    );
+                });
+
+                await expect(leakedClientUse).rejects.toBeInstanceOf(
+                    TransactionClosedError
+                );
+                await expectRecordNotExists(1);
             });
         });
 

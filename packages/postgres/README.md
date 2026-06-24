@@ -226,9 +226,11 @@ await unitOfWork.scope(async () => {
 
 - `beforeCommit` hooks run **before** the `COMMIT` — if any hook throws, the transaction rolls back instead
 - `beforeCommit` drain hooks run after ordinary `beforeCommit` hooks and still inside the same transaction
+- `afterCommit` and `afterRollback` hooks run after the transaction is finalized and outside the completed transaction context
 - `afterCommit` and `afterRollback` hooks run **best-effort**: all hooks execute even if some fail, with errors collected into an `AggregateError`
+- `getClient()` is not available inside `afterCommit` or `afterRollback`; use `withClient()` for follow-up database work
 - Hooks are **scope-local**: registered within a `scope()`, cleared after the transaction completes
-- `Propagation.NESTED` scopes maintain their own independent hook registries
+- Hooks registered inside `Propagation.NESTED` scopes are attached to the current root transaction and run when that root transaction finalizes
 - Calling hook registration methods outside a `scope()` throws an error
 
 ### Postgres Transaction Capabilities
@@ -529,7 +531,7 @@ When a read model version changes, the engine resets that projection and rebuild
 
 **Processing is effectively-once.** The engine commits the read model write and the projection checkpoint in a single transaction, so a crash before commit replays the event rather than skipping it. Within that same transaction it also locks and reads the committed checkpoint (`SELECT ... FOR UPDATE`) and skips events already covered, so an in-process retry after a commit-ambiguous failure cannot re-apply an already-committed event. Keep `apply()` idempotent as defense-in-depth (prefer upserts / `ON CONFLICT`) — the guard relies on read model writes going through the provided transactional client.
 
-**Scope and ownership.** This engine targets single-process, single-owner execution: exactly one process owns projection workers for a given database. Registering the same read model name twice on one engine fails fast. Multi-process ownership (lease, fencing, checkpoint compare-and-swap) is not yet provided. The engine runs each apply/checkpoint in its own transaction (`Propagation.NEW`), so it is safe to trigger `poll()` from an `afterCommit` hook without entangling projection writes with your command transaction.
+**Scope and ownership.** This engine targets single-process, single-owner execution: exactly one process owns projection workers for a given database. Registering the same read model name twice on one engine fails fast. Multi-process ownership (lease, fencing, checkpoint compare-and-swap) is not yet provided. The engine runs each apply/checkpoint in its own transaction (`Propagation.NEW`), so it is safe to trigger `poll()` from an `afterCommit` hook without entangling projection writes with your command transaction. Postgres `afterCommit` hooks run outside the completed transaction context, so follow-up polling cannot accidentally reuse the released command transaction client.
 
 See [`docs/projection.md`](./docs/projection.md) for the projection architecture, delivery semantics, failure handling, and rebuild behavior.
 
@@ -691,6 +693,7 @@ describe("OrderService", () => {
 **Key behaviors:**
 
 - **`withClient()` method**: Uses the test client directly, always within the external transaction context.
+- **After hooks**: `afterCommit` and `afterRollback` run outside the completed UoW scope. `getClient()` throws there, while `withClient()` still uses the external test transaction client.
 - **abortError propagation**: When a nested `EXISTING` operation throws (even if caught), the entire transaction is marked as aborted and will rollback - matching production behavior.
 - **NESTED savepoints**: `Propagation.NESTED` creates independent savepoints that can rollback without affecting the parent.
 - **Propagation.NEW**: Logs a warning and creates a new savepoint instead (true separate transactions are not possible within the external transaction).
@@ -743,6 +746,7 @@ await uow.scope(async () => {
 | `TransactionResourceAware` | Postgres-local capability for transaction-scoped resources |
 | `createTransactionResourceKey` | Creates typed keys for transaction-scoped resources |
 | `TransactionAbortedError` | Error thrown when an aborted root transaction would otherwise finalize normally |
+| `TransactionClosedError` | Error thrown when a leaked async context tries to use a finalized transaction client |
 | `UnsupportedNestedTransactionCapabilityError` | Error thrown when root-only transaction capabilities are used inside a nested savepoint |
 | `PostgresEventStore` | Event store implementation with batch insert support |
 | `PostgresConfig` | Immutable configuration with builder pattern |

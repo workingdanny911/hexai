@@ -12,9 +12,15 @@
   transaction-local resources: `CommitControl`, `TransactionResourceAware`,
   `createTransactionResourceKey()`, `TransactionAbortedError`, and
   `UnsupportedNestedTransactionCapabilityError`.
+- Added `TransactionClosedError` for attempts to use a finalized transaction
+  client from a leaked async context.
 
 ### Changed
 
+- `DefaultPostgresUnitOfWork` and `PostgresUnitOfWorkForTesting` now run
+  `afterCommit` and `afterRollback` hooks outside the completed transaction
+  context. Use `withClient()` for follow-up database work in after hooks;
+  `getClient()` no longer exposes the finalized transaction client there.
 - `DefaultPostgresUnitOfWork` now rolls back instead of committing when
   `preventCommit()` is called, while preserving the callback's return value.
   This supports value-based error contracts such as returning an error result.
@@ -25,6 +31,14 @@
 - Commit-control and transaction-resource capabilities now fail fast inside
   `Propagation.NESTED` savepoints. Use the root transaction scope or
   `Propagation.NEW` when a capability needs its own transaction boundary.
+
+### Fixed
+
+- Fixed a transaction-context leak where Postgres `afterCommit` or
+  `afterRollback` hooks could reuse a released transaction client when they
+  called `withClient()` on the same unit of work.
+- Fixed lazy no-op transaction scopes so leaked async work cannot open a new
+  transaction after the scope has already completed.
 
 ## [0.11.0] - 2026-06-24
 
