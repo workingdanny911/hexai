@@ -82,6 +82,15 @@ active runners and feeds each event to every runner whose position is behind it.
 Each event is applied through `processEvent`, which wraps the read model write
 and the checkpoint advance in **one transaction**.
 
+This cursor model depends on event positions being commit-order safe. The default
+`PostgresEventStore` enforces that at append time with a transaction-scoped
+counter row, so a later position cannot become visible while an earlier position
+is still uncommitted.
+
+If event appends run inside a larger transaction, that counter row lock is held
+until the larger transaction commits or rolls back. Append events near the end of
+the transaction to keep concurrent writers moving.
+
 ## Delivery semantics
 
 The read model write and the checkpoint advance commit **atomically** in a single

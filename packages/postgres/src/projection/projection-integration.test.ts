@@ -17,10 +17,12 @@ if (!hasProjectionIntegrationDatabaseUrl()) {
             await expect(
                 scenario.tablesExist(
                     "hexai__events",
+                    "hexai__event_position_counter",
                     "projection__checkpoints"
                 )
             ).resolves.toEqual({
                 hexai__events: true,
+                hexai__event_position_counter: true,
                 projection__checkpoints: true,
             });
         });
@@ -96,6 +98,159 @@ if (!hasProjectionIntegrationDatabaseUrl()) {
                 projectionName: "projection-integration-read-model",
                 lastPosition: 3,
                 version: 1,
+                status: "running",
+            });
+        });
+
+        it("does not checkpoint a later append while an earlier append is still unresolved", async () => {
+            await scenario.ensureReadModelTable();
+            const engine = scenario.createEngine(scenario.createReadModel());
+            const outOfOrderAttempt =
+                await scenario.attemptToCommitLaterAppendFirst({
+                    earlier: {
+                        type: "projection.handled",
+                        payload: { value: "earlier" },
+                    },
+                    later: {
+                        type: "projection.handled",
+                        payload: { value: "later" },
+                    },
+                });
+
+            try {
+                await outOfOrderAttempt.waitUntilLaterAppendCanExposeRace();
+
+                await engine.poll();
+
+                expect(await scenario.readProjectionRows()).toEqual([]);
+                expect(await scenario.readCheckpoint()).toBeNull();
+            } finally {
+                await outOfOrderAttempt.commitEarlierAppend();
+                await outOfOrderAttempt.waitForBothAppends();
+            }
+
+            await engine.poll();
+
+            expect(await scenario.readProjectionRows()).toEqual([
+                {
+                    id: 1,
+                    eventType: "projection.handled",
+                    eventPosition: 1,
+                    payload: { value: "earlier" },
+                },
+                {
+                    id: 2,
+                    eventType: "projection.handled",
+                    eventPosition: 2,
+                    payload: { value: "later" },
+                },
+            ]);
+            expect(await scenario.readCheckpoint()).toMatchObject({
+                lastPosition: 2,
+                status: "running",
+            });
+        });
+
+        it("reuses the first position when the unresolved earlier append rolls back", async () => {
+            await scenario.ensureReadModelTable();
+            const engine = scenario.createEngine(scenario.createReadModel());
+            const outOfOrderAttempt =
+                await scenario.attemptToCommitLaterAppendFirst({
+                    earlier: {
+                        type: "projection.handled",
+                        payload: { value: "rolled back" },
+                    },
+                    later: {
+                        type: "projection.handled",
+                        payload: { value: "committed later" },
+                    },
+                });
+
+            let rolledBackEarlierAppend = false;
+            try {
+                await outOfOrderAttempt.waitUntilLaterAppendCanExposeRace();
+                await outOfOrderAttempt.rollbackEarlierAppend();
+                rolledBackEarlierAppend = true;
+                await outOfOrderAttempt.waitForLaterAppend();
+            } finally {
+                if (!rolledBackEarlierAppend) {
+                    await outOfOrderAttempt.rollbackEarlierAppend();
+                }
+            }
+
+            await engine.poll();
+
+            expect(await scenario.readProjectionRows()).toEqual([
+                {
+                    id: 1,
+                    eventType: "projection.handled",
+                    eventPosition: 1,
+                    payload: { value: "committed later" },
+                },
+            ]);
+            expect(await scenario.readCheckpoint()).toMatchObject({
+                lastPosition: 1,
+                status: "running",
+            });
+        });
+
+        it("keeps a later append behind every event in an unresolved batch", async () => {
+            await scenario.ensureReadModelTable();
+            const engine = scenario.createEngine(scenario.createReadModel());
+            const outOfOrderAttempt =
+                await scenario.attemptToCommitLaterAppendFirst({
+                    earlier: [
+                        {
+                            type: "projection.handled",
+                            payload: { value: "batch first" },
+                        },
+                        {
+                            type: "projection.handled",
+                            payload: { value: "batch second" },
+                        },
+                    ],
+                    later: {
+                        type: "projection.handled",
+                        payload: { value: "after batch" },
+                    },
+                });
+
+            try {
+                await outOfOrderAttempt.waitUntilLaterAppendCanExposeRace();
+
+                await engine.poll();
+
+                expect(await scenario.readProjectionRows()).toEqual([]);
+                expect(await scenario.readCheckpoint()).toBeNull();
+            } finally {
+                await outOfOrderAttempt.commitEarlierAppend();
+                await outOfOrderAttempt.waitForBothAppends();
+            }
+
+            await engine.poll();
+
+            expect(await scenario.readProjectionRows()).toEqual([
+                {
+                    id: 1,
+                    eventType: "projection.handled",
+                    eventPosition: 1,
+                    payload: { value: "batch first" },
+                },
+                {
+                    id: 2,
+                    eventType: "projection.handled",
+                    eventPosition: 2,
+                    payload: { value: "batch second" },
+                },
+                {
+                    id: 3,
+                    eventType: "projection.handled",
+                    eventPosition: 3,
+                    payload: { value: "after batch" },
+                },
+            ]);
+            expect(await scenario.readCheckpoint()).toMatchObject({
+                lastPosition: 3,
                 status: "running",
             });
         });

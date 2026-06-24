@@ -33,6 +33,8 @@ export interface ProjectionEventSpec {
     payload?: Record<string, unknown>;
 }
 
+type ProjectionEventInput = string | ProjectionEventSpec;
+
 export interface ProjectionRow {
     id: number;
     eventType: string;
@@ -51,6 +53,32 @@ export interface ProjectionRunResult {
     rows: ProjectionRow[];
     checkpoint: Checkpoint | null;
 }
+
+export interface HeldEventAppend {
+    stored: Promise<StoredEvent[]>;
+    done: Promise<StoredEvent[]>;
+    commit(): Promise<StoredEvent[]>;
+    rollback(): Promise<void>;
+}
+
+export interface AttemptedOutOfOrderAppend {
+    waitUntilLaterAppendCanExposeRace(): Promise<void>;
+    commitEarlierAppend(): Promise<void>;
+    rollbackEarlierAppend(): Promise<void>;
+    waitForLaterAppend(): Promise<StoredEvent[]>;
+    waitForBothAppends(): Promise<void>;
+}
+
+interface HeldAppendCommit {
+    type: "commit";
+}
+
+interface HeldAppendRollback {
+    type: "rollback";
+    error: Error;
+}
+
+type HeldAppendRelease = HeldAppendCommit | HeldAppendRollback;
 
 export function hasProjectionIntegrationDatabaseUrl(): boolean {
     return Boolean(process.env.HEXAI_DB_URL);
@@ -77,8 +105,12 @@ export function useProjectionIntegrationScenario() {
         unitOfWork: uow,
         migrate: () => migrate(databaseUrl),
         reset: () => resetScenario(client),
-        storeEvents: (...events: Array<string | ProjectionEventSpec>) =>
+        storeEvents: (...events: ProjectionEventInput[]) =>
             eventStore.storeAll(events.map(createMessage)),
+        attemptToCommitLaterAppendFirst: (spec: {
+            earlier: ProjectionEventInput | ProjectionEventInput[];
+            later: ProjectionEventInput;
+        }) => attemptToCommitLaterAppendFirst(client, uow, eventStore, spec),
         runProjection: (readModel = createProjectionReadModel()) =>
             runProjection(readModel, eventStore, uow),
         projectEvents: (...events: Array<string | ProjectionEventSpec>) =>
@@ -112,8 +144,7 @@ export function useProjectionIntegrationScenario() {
             ),
         markCheckpointIsolated: (name: string) =>
             checkpointStore.updateStatus(name, "isolated", client),
-        resetCheckpoint: (name: string) =>
-            checkpointStore.reset(name, client),
+        resetCheckpoint: (name: string) => checkpointStore.reset(name, client),
         createReadModel: createProjectionReadModel,
     };
 }
@@ -127,6 +158,9 @@ async function migrate(
 
 async function resetScenario(client: ClientBase): Promise<void> {
     await client.query("TRUNCATE TABLE hexai__events RESTART IDENTITY");
+    await client.query(
+        "UPDATE hexai__event_position_counter SET last_position = 0 WHERE id = 1"
+    );
     await client.query("TRUNCATE TABLE projection__checkpoints");
     await client.query(`DROP TABLE IF EXISTS ${READ_MODEL_TABLE}`);
 }
@@ -182,7 +216,7 @@ async function tablesExist(
     );
 }
 
-function createMessage(event: string | ProjectionEventSpec): Message {
+function createMessage(event: ProjectionEventInput): Message {
     const spec = typeof event === "string" ? { type: event } : event;
     return new Message(spec.payload ?? {}, { headers: { type: spec.type } });
 }
@@ -192,7 +226,7 @@ async function projectEvents(
     eventStore: PostgresEventStore,
     uow: PostgresUnitOfWork,
     checkpointStore: CheckpointStore,
-    events: Array<string | ProjectionEventSpec>
+    events: ProjectionEventInput[]
 ): Promise<ProjectionRunResult> {
     await createReadModelTable(client);
     await eventStore.storeAll(events.map(createMessage));
@@ -204,14 +238,177 @@ async function projectEvents(
     };
 }
 
-function createProjectionReadModel(options: {
-    name?: string;
-    version?: number;
-    handledTypes?: string[];
-    failOnType?: string;
-    insertBeforeFail?: boolean;
-} = {}): IPostgresReadModel {
-    const handledTypes = new Set(options.handledTypes ?? ["projection.handled"]);
+function appendEventsAndHoldCommitOpen(
+    uow: PostgresUnitOfWork,
+    eventStore: PostgresEventStore,
+    events: ProjectionEventInput[]
+): HeldEventAppend {
+    const stored = createDeferred<StoredEvent[]>();
+    const releaseSignal = createDeferred<HeldAppendRelease>();
+    let releaseRequested = false;
+
+    const releaseOnce = (release: HeldAppendRelease) => {
+        if (!releaseRequested) {
+            releaseRequested = true;
+            releaseSignal.resolve(release);
+        }
+    };
+
+    const done = uow.scope(async () => {
+        const storedEvents = await eventStore.storeAll(
+            events.map(createMessage)
+        );
+        stored.resolve(storedEvents);
+        const release = await releaseSignal.promise;
+        if (release.type === "rollback") {
+            throw release.error;
+        }
+        return storedEvents;
+    });
+
+    done.catch((error) => stored.reject(error));
+
+    return {
+        stored: stored.promise,
+        done,
+        commit: async () => {
+            releaseOnce({ type: "commit" });
+            return done;
+        },
+        rollback: async () => {
+            const rollbackError = new Error("rollback held event append");
+            releaseOnce({ type: "rollback", error: rollbackError });
+            try {
+                await done;
+            } catch (error) {
+                if (error === rollbackError) {
+                    return;
+                }
+                throw error;
+            }
+        },
+    };
+}
+
+async function attemptToCommitLaterAppendFirst(
+    client: ClientBase,
+    uow: PostgresUnitOfWork,
+    eventStore: PostgresEventStore,
+    spec: {
+        earlier: ProjectionEventInput | ProjectionEventInput[];
+        later: ProjectionEventInput;
+    }
+): Promise<AttemptedOutOfOrderAppend> {
+    const earlierEvents = Array.isArray(spec.earlier)
+        ? spec.earlier
+        : [spec.earlier];
+    const earlierAppend = appendEventsAndHoldCommitOpen(
+        uow,
+        eventStore,
+        earlierEvents
+    );
+    await earlierAppend.stored;
+
+    const laterAppend = eventStore.storeAll([createMessage(spec.later)]);
+
+    return {
+        waitUntilLaterAppendCanExposeRace: () =>
+            waitForAppendToBlockOrFinish(client, laterAppend),
+        commitEarlierAppend: async () => {
+            await earlierAppend.commit();
+        },
+        rollbackEarlierAppend: async () => {
+            await earlierAppend.rollback();
+        },
+        waitForLaterAppend: () => laterAppend,
+        waitForBothAppends: async () => {
+            await earlierAppend.done;
+            await laterAppend;
+        },
+    };
+}
+
+async function waitForAppendToBlockOrFinish(
+    client: ClientBase,
+    append: Promise<unknown>
+): Promise<void> {
+    let settled: "resolved" | "rejected" | null = null;
+    let rejection: unknown;
+    append.then(
+        () => {
+            settled = "resolved";
+        },
+        (error) => {
+            settled = "rejected";
+            rejection = error;
+        }
+    );
+
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+        if (settled === "resolved") {
+            return;
+        }
+        if (settled === "rejected") {
+            throw rejection;
+        }
+        if (await hasAppendWaitingForPositionCounter(client)) {
+            return;
+        }
+        await delay(10);
+    }
+
+    throw new Error(
+        "Concurrent append neither finished nor waited for the position counter lock"
+    );
+}
+
+async function hasAppendWaitingForPositionCounter(
+    client: ClientBase
+): Promise<boolean> {
+    const result = await client.query(
+        `SELECT 1
+         FROM pg_stat_activity
+         WHERE pid <> pg_backend_pid()
+           AND state = 'active'
+           AND wait_event_type = 'Lock'
+           AND query LIKE '%UPDATE hexai__event_position_counter%'
+         LIMIT 1`
+    );
+    return result.rowCount > 0;
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createDeferred<T>(): {
+    promise: Promise<T>;
+    resolve(value: T | PromiseLike<T>): void;
+    reject(reason?: unknown): void;
+} {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((promiseResolve, promiseReject) => {
+        resolve = promiseResolve;
+        reject = promiseReject;
+    });
+
+    return { promise, resolve, reject };
+}
+
+function createProjectionReadModel(
+    options: {
+        name?: string;
+        version?: number;
+        handledTypes?: string[];
+        failOnType?: string;
+        insertBeforeFail?: boolean;
+    } = {}
+): IPostgresReadModel {
+    const handledTypes = new Set(
+        options.handledTypes ?? ["projection.handled"]
+    );
 
     const insertRow = (client: ClientBase, storedEvent: StoredEvent) =>
         client.query(

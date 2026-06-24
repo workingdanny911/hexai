@@ -10,6 +10,11 @@ import {
 import { runHexaiMigrations } from "./run-hexai-migrations.js";
 
 const DATABASE = "test_hexai__event_store";
+const MIGRATION_DATABASE = "test_hexai__event_store_migration";
+const CUSTOM_EVENT_TABLE = "hexai__custom_events";
+const CUSTOM_POSITION_COUNTER_TABLE = "hexai__custom_events_position_counter";
+const EXPLICIT_POSITION_COUNTER_TABLE = "hexai__explicit_position_counter";
+const MISSING_POSITION_COUNTER_TABLE = "hexai__missing_position_counter";
 
 class TestEvent extends Message<{ value: string }> {
     static readonly type = "TestEvent";
@@ -43,6 +48,17 @@ describe("PostgresEventStore", () => {
 
     beforeEach(async () => {
         await conn.query(`TRUNCATE TABLE hexai__events RESTART IDENTITY`);
+        await resetPositionCounter(conn, "hexai__event_position_counter");
+        await conn.query(`DROP TABLE IF EXISTS ${CUSTOM_EVENT_TABLE}`);
+        await conn.query(
+            `DROP TABLE IF EXISTS ${CUSTOM_POSITION_COUNTER_TABLE}`
+        );
+        await conn.query(
+            `DROP TABLE IF EXISTS ${EXPLICIT_POSITION_COUNTER_TABLE}`
+        );
+        await conn.query(
+            `DROP TABLE IF EXISTS ${MISSING_POSITION_COUNTER_TABLE}`
+        );
     });
 
     describe("store", () => {
@@ -103,6 +119,105 @@ describe("PostgresEventStore", () => {
             const storedEvents = await eventStore.storeAll([]);
 
             expect(storedEvents).toEqual([]);
+        });
+
+        test("reuses positions assigned by a rolled-back transaction", async () => {
+            await expect(
+                uow.scope(async () => {
+                    await eventStore.store(createTestEvent(TEST_VALUES.FIRST));
+                    throw new Error("rollback event append");
+                })
+            ).rejects.toThrow("rollback event append");
+
+            const stored = await eventStore.store(
+                createTestEvent(TEST_VALUES.SECOND)
+            );
+
+            expect(stored.position).toBe(1);
+            expect(
+                (await eventStore.fetch(0)).events.map((event) => ({
+                    position: event.position,
+                    payload: event.event.getPayload(),
+                }))
+            ).toEqual([
+                {
+                    position: 1,
+                    payload: { value: TEST_VALUES.SECOND },
+                },
+            ]);
+        });
+
+        test("fails fast when the position counter row is missing", async () => {
+            await conn.query(
+                `DELETE FROM hexai__event_position_counter WHERE id = 1`
+            );
+
+            await expect(
+                eventStore.store(createTestEvent(TEST_VALUES.FIRST))
+            ).rejects.toThrow(
+                `Event position counter "hexai__event_position_counter" is not initialized`
+            );
+        });
+
+        test("explains how to fix a missing position counter table", async () => {
+            const storeWithMissingCounter = new PostgresEventStore(uow, {
+                positionCounterTableName: MISSING_POSITION_COUNTER_TABLE,
+            });
+
+            await expect(
+                storeWithMissingCounter.store(
+                    createTestEvent(TEST_VALUES.FIRST)
+                )
+            ).rejects.toThrow(
+                `Event position counter table "${MISSING_POSITION_COUNTER_TABLE}" does not exist`
+            );
+        });
+    });
+
+    describe("custom tables", () => {
+        test("uses a table-scoped counter by default", async () => {
+            await createEventTable(conn, CUSTOM_EVENT_TABLE);
+            await createPositionCounterTable(
+                conn,
+                CUSTOM_POSITION_COUNTER_TABLE
+            );
+            await setPositionCounter(conn, "hexai__event_position_counter", 41);
+            const customEventStore = new PostgresEventStore(uow, {
+                tableName: CUSTOM_EVENT_TABLE,
+            });
+
+            const stored = await customEventStore.store(
+                createTestEvent(TEST_VALUES.FIRST)
+            );
+
+            expect(stored.position).toBe(1);
+            expect(
+                await readPositionCounter(conn, "hexai__event_position_counter")
+            ).toBe(41);
+            expect(
+                await readPositionCounter(conn, CUSTOM_POSITION_COUNTER_TABLE)
+            ).toBe(1);
+        });
+
+        test("supports an explicit counter table override", async () => {
+            await createEventTable(conn, CUSTOM_EVENT_TABLE);
+            await createPositionCounterTable(
+                conn,
+                EXPLICIT_POSITION_COUNTER_TABLE
+            );
+            const customEventStore = new PostgresEventStore(uow, {
+                tableName: CUSTOM_EVENT_TABLE,
+                positionCounterTableName: EXPLICIT_POSITION_COUNTER_TABLE,
+            });
+
+            const stored = await customEventStore.store(
+                createTestEvent(TEST_VALUES.FIRST)
+            );
+
+            expect(stored.position).toBe(1);
+            expect(
+                await readPositionCounter(conn, EXPLICIT_POSITION_COUNTER_TABLE)
+            ).toBe(1);
         });
     });
 
@@ -295,14 +410,16 @@ describe("PostgresEventStore", () => {
 
             const timeline: string[] = [];
             const original = uow.withClient.bind(uow);
-            const spy = vi.spyOn(uow, "withClient").mockImplementation(
-                async <T>(fn: (client: any) => Promise<T>): Promise<T> => {
-                    timeline.push("fetch-start");
-                    const result = await original(fn);
-                    timeline.push("fetch-end");
-                    return result;
-                }
-            );
+            const spy = vi
+                .spyOn(uow, "withClient")
+                .mockImplementation(
+                    async <T>(fn: (client: any) => Promise<T>): Promise<T> => {
+                        timeline.push("fetch-start");
+                        const result = await original(fn);
+                        timeline.push("fetch-end");
+                        return result;
+                    }
+                );
 
             for await (const event of eventStore.stream(0, 2)) {
                 timeline.push(`event-${event.position}`);
@@ -370,3 +487,160 @@ describe("PostgresEventStore", () => {
         });
     });
 });
+
+describe("PostgresEventStore migrations", () => {
+    const databaseUrl = useDatabase(MIGRATION_DATABASE);
+    const conn = useClient(MIGRATION_DATABASE);
+    const uow = useUnitOfWork(MIGRATION_DATABASE);
+
+    beforeEach(async () => {
+        await conn.query(`DROP TABLE IF EXISTS hexai__events CASCADE`);
+        await conn.query(
+            `DROP TABLE IF EXISTS hexai__event_position_counter CASCADE`
+        );
+        await conn.query(
+            `DROP TABLE IF EXISTS hexai__migrations_hexai CASCADE`
+        );
+    });
+
+    test("upgrades an existing serial-position event table to counter allocation", async () => {
+        await createLegacyEventStoreSchema(conn);
+
+        await runHexaiMigrations(databaseUrl.toString());
+
+        await expectCounterMigrationState(conn, 2);
+
+        const eventStore = new PostgresEventStore(uow);
+        const stored = await eventStore.store(
+            createTestEvent(TEST_VALUES.THIRD)
+        );
+
+        expect(stored.position).toBe(3);
+    });
+
+    test("can rerun the counter migration after the schema change is applied but not recorded", async () => {
+        await createLegacyEventStoreSchema(conn);
+        await runHexaiMigrations(databaseUrl.toString());
+        await conn.query(
+            `DELETE FROM hexai__migrations_hexai WHERE name = '02_event_position_counter'`
+        );
+
+        await runHexaiMigrations(databaseUrl.toString());
+
+        await expectCounterMigrationState(conn, 2);
+        const eventStore = new PostgresEventStore(uow);
+        const stored = await eventStore.store(
+            createTestEvent(TEST_VALUES.THIRD)
+        );
+        expect(stored.position).toBe(3);
+    });
+});
+
+async function createLegacyEventStoreSchema(
+    conn: ReturnType<typeof useClient>
+): Promise<void> {
+    await conn.query(`
+        CREATE TABLE hexai__migrations_hexai (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            run_on TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    `);
+    await conn.query(
+        `INSERT INTO hexai__migrations_hexai (name) VALUES ('01_postgres_event_store')`
+    );
+    await conn.query(`
+        CREATE TABLE hexai__events (
+            position BIGSERIAL PRIMARY KEY,
+            message_type TEXT NOT NULL,
+            headers JSONB NOT NULL,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    `);
+    await conn.query(`
+        INSERT INTO hexai__events (message_type, headers, payload)
+        VALUES
+            ('${TestEvent.type}', '{"headers":{"type":"${TestEvent.type}"}}', '{"value":"${TEST_VALUES.FIRST}"}'),
+            ('${TestEvent.type}', '{"headers":{"type":"${TestEvent.type}"}}', '{"value":"${TEST_VALUES.SECOND}"}')
+    `);
+}
+
+async function expectCounterMigrationState(
+    conn: ReturnType<typeof useClient>,
+    lastPosition: number
+): Promise<void> {
+    const counter = await conn.query<{ last_position: string }>(
+        `SELECT last_position FROM hexai__event_position_counter WHERE id = 1`
+    );
+    expect(Number(counter.rows[0].last_position)).toBe(lastPosition);
+
+    const positionDefault = await conn.query<{
+        column_default: string | null;
+    }>(
+        `SELECT column_default
+         FROM information_schema.columns
+         WHERE table_name = 'hexai__events'
+           AND column_name = 'position'`
+    );
+    expect(positionDefault.rows[0].column_default).toBeNull();
+}
+
+async function createEventTable(
+    conn: ReturnType<typeof useClient>,
+    tableName: string
+): Promise<void> {
+    await conn.query(`
+        CREATE TABLE ${tableName} (
+            position BIGINT PRIMARY KEY,
+            message_type TEXT NOT NULL,
+            headers JSONB NOT NULL,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    `);
+}
+
+async function createPositionCounterTable(
+    conn: ReturnType<typeof useClient>,
+    tableName: string
+): Promise<void> {
+    await conn.query(`
+        CREATE TABLE ${tableName} (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            last_position BIGINT NOT NULL DEFAULT 0,
+            CONSTRAINT ${tableName}_singleton CHECK (id = 1)
+        )
+    `);
+    await resetPositionCounter(conn, tableName);
+}
+
+async function resetPositionCounter(
+    conn: ReturnType<typeof useClient>,
+    tableName: string
+): Promise<void> {
+    await setPositionCounter(conn, tableName, 0);
+}
+
+async function setPositionCounter(
+    conn: ReturnType<typeof useClient>,
+    tableName: string,
+    position: number
+): Promise<void> {
+    await conn.query(
+        `INSERT INTO ${tableName} (id, last_position)
+         VALUES (1, $1)
+         ON CONFLICT (id) DO UPDATE SET last_position = EXCLUDED.last_position`,
+        [position]
+    );
+}
+
+async function readPositionCounter(
+    conn: ReturnType<typeof useClient>,
+    tableName: string
+): Promise<number> {
+    const result = await conn.query<{ last_position: string }>(
+        `SELECT last_position FROM ${tableName} WHERE id = 1`
+    );
+    return Number(result.rows[0].last_position);
+}

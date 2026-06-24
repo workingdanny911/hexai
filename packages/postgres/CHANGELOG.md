@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `PostgresEventStore` now allocates event positions from a transaction-scoped
+  counter row instead of a PostgreSQL sequence, making projection checkpoints
+  safe against sequence allocation order racing ahead of commit order.
+- The built-in event-store migration removes the old `position` column default.
+  Use a write-stop deployment order: stop old writers, run the migration, then
+  start new writers. Old code fails after the migration because it omits
+  `position`; new code fails before the migration because the counter table does
+  not exist yet. The migration briefly takes an `ACCESS EXCLUSIVE` lock on the
+  event table while seeding the counter from existing events.
+
 ## [0.10.0] - 2026-06-10
 
 ### Changed

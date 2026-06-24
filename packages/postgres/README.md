@@ -276,6 +276,25 @@ const { events, lastPosition } = await eventStore.fetch(0, 100);
 // lastPosition: number - highest position in store (for catchup detection)
 ```
 
+Event positions are allocated from a transaction-scoped counter row, not from a
+PostgreSQL sequence. This keeps positions safe for projection checkpoints: a
+transaction holding a lower position must commit or roll back before a higher
+position can be assigned. The trade-off is that concurrent event appends
+serialize at position allocation until the surrounding transaction finishes.
+
+When appending inside a larger unit-of-work scope, prefer doing it near the end
+of the transaction so the counter row lock is not held while unrelated work is
+still running.
+
+Operational note: the built-in migration that introduces the counter removes the
+old `position` column default. Use a write-stop deployment order: stop old
+writers, run `runHexaiMigrations()`, then start new writers. Old writers fail
+after the migration because they omit `position`; new writers fail before the
+migration because the counter table does not exist yet. The migration briefly
+takes an `ACCESS EXCLUSIVE` lock on the event table, so long-running readers can
+delay it; consider setting database-level `lock_timeout` and
+`statement_timeout` for production migration runs.
+
 Inside a transaction scope, the event store shares the same client with repositories:
 
 ```typescript
@@ -303,6 +322,35 @@ The stream prefetches the next batch while yielding current events, hiding DB la
 ```typescript
 const eventStore = new PostgresEventStore(unitOfWork, {
     tableName: "my_bounded_context_events"
+});
+```
+
+Custom event tables need a matching position counter table. By default the
+counter table name is `<event_table>_position_counter`. If you override it,
+create and seed that table before writing events:
+
+```sql
+CREATE TABLE my_bounded_context_event_positions (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    last_position BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT my_bounded_context_event_positions_singleton
+        CHECK (id = 1)
+);
+
+INSERT INTO my_bounded_context_event_positions (id, last_position)
+VALUES (1, 0)
+ON CONFLICT (id) DO NOTHING;
+```
+
+For an existing custom event table, seed `last_position` from
+`COALESCE(MAX(position), 0)` instead of `0`. If that table used a sequence-backed
+`position` default, drop the default after the counter is seeded so future writes
+must use the counter-allocated position.
+
+```typescript
+const eventStore = new PostgresEventStore(unitOfWork, {
+    tableName: "my_bounded_context_events",
+    positionCounterTableName: "my_bounded_context_event_positions"
 });
 ```
 
