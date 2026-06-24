@@ -113,6 +113,42 @@ describe("unit of work", () => {
                 expect(order).toEqual([1, 2, 3]);
             });
 
+            test("runs drain-phase hooks after main hooks for the current transaction", async () => {
+                const order: string[] = [];
+
+                await uow.wrap(async () => {
+                    uow.beforeCommit(() => { order.push("drain"); }, {
+                        phase: "drain",
+                    });
+                    uow.beforeCommit(() => { order.push("main"); });
+
+                    db.prepare("INSERT INTO test VALUES ('scope')").run();
+                });
+
+                expect(order).toEqual(["main", "drain"]);
+                const rows = db.prepare("SELECT * FROM test").all();
+                expect(rows).toEqual([{ value: "scope" }]);
+            });
+
+            test("allows a main hook to register a drain hook on the current transaction", async () => {
+                const order: string[] = [];
+
+                await uow.wrap(async () => {
+                    uow.beforeCommit(() => {
+                        order.push("main");
+                        uow.beforeCommit(() => { order.push("drain"); }, {
+                            phase: "drain",
+                        });
+                    });
+
+                    db.prepare("INSERT INTO test VALUES ('scope')").run();
+                });
+
+                expect(order).toEqual(["main", "drain"]);
+                const rows = db.prepare("SELECT * FROM test").all();
+                expect(rows).toEqual([{ value: "scope" }]);
+            });
+
             test("triggers rollback when hook throws", async () => {
                 try {
                     await uow.wrap(async () => {

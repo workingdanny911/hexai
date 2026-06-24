@@ -2,8 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import * as pg from "pg";
 
-import { Propagation, TransactionHooks, UnitOfWork } from "@hexaijs/core";
-import type { TransactionHook } from "@hexaijs/core";
+import { Propagation, TransactionHooks } from "@hexaijs/core";
 import { PostgresConfig } from "./config/index.js";
 import { IsolationLevel } from "./types.js";
 import {
@@ -12,6 +11,11 @@ import {
     PostgresTransactionOptions,
 } from "./types.js";
 import { ensureConnection } from "./helpers.js";
+import type {
+    BeforeCommitOptions,
+    TransactionHook,
+    UnitOfWork,
+} from "@hexaijs/core";
 
 export interface PostgresUnitOfWork
     extends UnitOfWork<pg.ClientBase, PostgresTransactionOptions> {
@@ -69,9 +73,12 @@ export class DefaultPostgresUnitOfWork implements PostgresUnitOfWork {
         );
     }
 
-    beforeCommit(hook: TransactionHook): void {
+    beforeCommit(
+        hook: TransactionHook,
+        options?: BeforeCommitOptions
+    ): void {
         const tx = this.getRequiredTransaction("beforeCommit");
-        tx.addBeforeCommitHook(hook);
+        tx.addBeforeCommitHook(hook, options);
     }
 
     afterCommit(hook: TransactionHook): void {
@@ -164,8 +171,11 @@ class PostgresTransaction {
         private clientCleanUp?: ClientCleanUp
     ) {}
 
-    public addBeforeCommitHook(hook: TransactionHook): void {
-        this.hooks.addBeforeCommit(hook);
+    public addBeforeCommitHook(
+        hook: TransactionHook,
+        options?: BeforeCommitOptions
+    ): void {
+        this.hooks.addBeforeCommit(hook, options?.phase);
     }
 
     public addAfterCommitHook(hook: TransactionHook): void {

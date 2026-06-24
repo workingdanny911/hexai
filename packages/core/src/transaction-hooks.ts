@@ -1,12 +1,38 @@
-import type { TransactionHook } from "./unit-of-work.js";
+import type {
+    BeforeCommitPhase,
+    TransactionHook,
+} from "./unit-of-work.js";
+
+type BeforeCommitCursor = "idle" | "main" | "drain" | "done";
+
+export class BeforeCommitPhaseClosedError extends Error {
+    constructor(phase: BeforeCommitPhase, currentPhase: BeforeCommitCursor) {
+        super(
+            `Cannot register ${phase} beforeCommit hook while ${currentPhase} phase is active`
+        );
+        this.name = "BeforeCommitPhaseClosedError";
+    }
+}
 
 export class TransactionHooks {
-    private beforeCommitHooks: TransactionHook[] = [];
+    private mainBeforeCommitHooks: TransactionHook[] = [];
+    private drainBeforeCommitHooks: TransactionHook[] = [];
     private afterCommitHooks: TransactionHook[] = [];
     private afterRollbackHooks: TransactionHook[] = [];
+    private beforeCommitCursor: BeforeCommitCursor = "idle";
 
-    addBeforeCommit(hook: TransactionHook): void {
-        this.beforeCommitHooks.push(hook);
+    addBeforeCommit(
+        hook: TransactionHook,
+        phase: BeforeCommitPhase = "main"
+    ): void {
+        this.assertBeforeCommitPhaseOpen(phase);
+
+        if (phase === "drain") {
+            this.drainBeforeCommitHooks.push(hook);
+            return;
+        }
+
+        this.mainBeforeCommitHooks.push(hook);
     }
 
     addAfterCommit(hook: TransactionHook): void {
@@ -22,8 +48,15 @@ export class TransactionHooks {
         rollbackFn: () => Promise<void>
     ): Promise<void> {
         try {
-            for (const hook of this.beforeCommitHooks) await hook();
+            this.beforeCommitCursor = "main";
+            for (const hook of this.mainBeforeCommitHooks) await hook();
+
+            this.beforeCommitCursor = "drain";
+            for (const hook of this.drainBeforeCommitHooks) await hook();
+
+            this.beforeCommitCursor = "done";
         } catch (e) {
+            this.beforeCommitCursor = "done";
             await this.executeRollback(rollbackFn, e);
             throw e;
         }
@@ -38,6 +71,19 @@ export class TransactionHooks {
     ): Promise<void> {
         await rollbackFn();
         await this.runBestEffort(this.afterRollbackHooks, cause);
+    }
+
+    private assertBeforeCommitPhaseOpen(phase: BeforeCommitPhase): void {
+        if (
+            this.beforeCommitCursor === "done" ||
+            this.beforeCommitCursor === "drain" ||
+            (this.beforeCommitCursor === "main" && phase === "main")
+        ) {
+            throw new BeforeCommitPhaseClosedError(
+                phase,
+                this.beforeCommitCursor
+            );
+        }
     }
 
     private async runBestEffort(

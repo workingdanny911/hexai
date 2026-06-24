@@ -199,6 +199,13 @@ await unitOfWork.scope(async () => {
         if (count === 0) throw new Error("Order must have at least one item");
     });
 
+    // Flush buffered work after validation and still inside this transaction
+    unitOfWork.beforeCommit(async () => {
+        await unitOfWork.withClient(async (client) => {
+            await client.query("INSERT INTO order_audit_log (order_id) VALUES ($1)", [orderId]);
+        });
+    }, { phase: "drain" });
+
     // Send notification after successful commit
     unitOfWork.afterCommit(async () => {
         await notificationService.send("Order confirmed");
@@ -218,6 +225,7 @@ await unitOfWork.scope(async () => {
 **Key behaviors:**
 
 - `beforeCommit` hooks run **before** the `COMMIT` — if any hook throws, the transaction rolls back instead
+- `beforeCommit` drain hooks run after ordinary `beforeCommit` hooks and still inside the same transaction
 - `afterCommit` and `afterRollback` hooks run **best-effort**: all hooks execute even if some fail, with errors collected into an `AggregateError`
 - Hooks are **scope-local**: registered within a `scope()`, cleared after the transaction completes
 - `Propagation.NESTED` scopes maintain their own independent hook registries
@@ -676,6 +684,7 @@ await uow.scope(async () => {
 ```typescript
 await unitOfWork.scope(async () => {
     unitOfWork.beforeCommit(async () => { /* validate */ });
+    unitOfWork.beforeCommit(async () => { /* flush */ }, { phase: "drain" });
     unitOfWork.afterCommit(async () => { /* notify */ });
     unitOfWork.afterRollback(async () => { /* cleanup */ });
 

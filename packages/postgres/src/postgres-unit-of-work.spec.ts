@@ -633,6 +633,44 @@ describe("PostgresUnitOfWork", () => {
                 expect(order).toEqual([1, 2, 3]);
             });
 
+            test("runs drain-phase hooks after main hooks for the current transaction", async () => {
+                const order: string[] = [];
+
+                await uow.scope(async () => {
+                    uow.beforeCommit(() => { order.push("drain"); }, {
+                        phase: "drain",
+                    });
+                    uow.beforeCommit(() => { order.push("main"); });
+
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                expect(order).toEqual(["main", "drain"]);
+                await expectRecordExists(1);
+            });
+
+            test("allows a main hook to register a drain hook on the current transaction", async () => {
+                const order: string[] = [];
+
+                await uow.scope(async () => {
+                    uow.beforeCommit(() => {
+                        order.push("main");
+                        uow.beforeCommit(() => { order.push("drain"); }, {
+                            phase: "drain",
+                        });
+                    });
+
+                    await uow.withClient(async (client) => {
+                        await insertRecord(client, 1);
+                    });
+                });
+
+                expect(order).toEqual(["main", "drain"]);
+                await expectRecordExists(1);
+            });
+
             test("triggers rollback when hook throws", async () => {
                 try {
                     await uow.scope(async () => {

@@ -1,7 +1,11 @@
-import type { Database } from "better-sqlite3";
+import { TransactionHooks } from "@hexaijs/core";
 
-import { TransactionHooks, UnitOfWork } from "@hexaijs/core";
-import type { TransactionHook } from "@hexaijs/core";
+import type { Database } from "better-sqlite3";
+import type {
+    BeforeCommitOptions,
+    TransactionHook,
+    UnitOfWork,
+} from "@hexaijs/core";
 
 export class SqliteUnitOfWork implements UnitOfWork<Database> {
     private static transactions = new WeakMap<
@@ -9,6 +13,7 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
         {
             level: number;
             aborted: boolean;
+            finalizing: "commit" | "rollback" | null;
             hooks: TransactionHooks;
         }
     >();
@@ -18,6 +23,7 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
             SqliteUnitOfWork.transactions.set(db, {
                 level: 0,
                 aborted: false,
+                finalizing: null,
                 hooks: new TransactionHooks(),
             });
         }
@@ -31,9 +37,12 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
         return this.db;
     }
 
-    beforeCommit(hook: TransactionHook): void {
+    beforeCommit(
+        hook: TransactionHook,
+        options?: BeforeCommitOptions
+    ): void {
         const current = this.getRequiredState("beforeCommit");
-        current.hooks.addBeforeCommit(hook);
+        current.hooks.addBeforeCommit(hook, options?.phase);
     }
 
     afterCommit(hook: TransactionHook): void {
@@ -71,19 +80,23 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
                 const hooks = current.hooks;
                 const wasAborted = current.aborted;
 
-                current.hooks = new TransactionHooks();
-                current.aborted = false;
-
-                if (wasAborted) {
-                    await hooks.executeRollback(
-                        async () => { this.db.exec("ROLLBACK"); },
-                        abortError
-                    );
-                } else {
-                    await hooks.executeCommit(
-                        async () => { this.db.exec("COMMIT"); },
-                        async () => { this.db.exec("ROLLBACK"); }
-                    );
+                current.finalizing = wasAborted ? "rollback" : "commit";
+                try {
+                    if (wasAborted) {
+                        await hooks.executeRollback(
+                            async () => { this.db.exec("ROLLBACK"); },
+                            abortError
+                        );
+                    } else {
+                        await hooks.executeCommit(
+                            async () => { this.db.exec("COMMIT"); },
+                            async () => { this.db.exec("ROLLBACK"); }
+                        );
+                    }
+                } finally {
+                    current.hooks = new TransactionHooks();
+                    current.aborted = false;
+                    current.finalizing = null;
                 }
             }
         }
@@ -91,7 +104,12 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
 
     private getRequiredState(hookName: string) {
         const current = SqliteUnitOfWork.transactions.get(this.db);
-        if (!current || current.level === 0) {
+        const isCommitFinalizingBeforeCommit =
+            hookName === "beforeCommit" && current?.finalizing === "commit";
+        if (
+            !current ||
+            (current.level === 0 && !isCommitFinalizingBeforeCommit)
+        ) {
             throw new Error(
                 `Cannot register ${hookName} hook outside of a transaction scope`
             );

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added support for `beforeCommit` drain hooks in `SqliteUnitOfWork`. Drain
+  hooks run after ordinary `beforeCommit` hooks and before `COMMIT`.
+
 ## [0.5.1] - 2026-03-07
 
 ### Changed

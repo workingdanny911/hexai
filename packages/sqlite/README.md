@@ -110,6 +110,10 @@ await unitOfWork.scope(async () => {
         // Validate before committing
     });
 
+    unitOfWork.beforeCommit(() => {
+        // Flush buffered work after validation and before COMMIT
+    }, { phase: "drain" });
+
     unitOfWork.afterCommit(() => {
         // Notify after successful commit
     });
@@ -128,6 +132,7 @@ Hooks follow the same semantics as `@hexaijs/postgres`:
 | Hook | When | On failure |
 |------|------|------------|
 | `beforeCommit` | Before COMMIT | Transaction rolls back instead |
+| `beforeCommit(..., { phase: "drain" })` | After main `beforeCommit` hooks and before COMMIT | Transaction rolls back instead |
 | `afterCommit` | After COMMIT | Best-effort (errors → `AggregateError`) |
 | `afterRollback` | After ROLLBACK | Best-effort (errors → `AggregateError`) |
 

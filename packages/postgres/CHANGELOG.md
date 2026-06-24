@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added support for `beforeCommit` drain hooks in `DefaultPostgresUnitOfWork`.
+  Drain hooks run after ordinary `beforeCommit` hooks and before `COMMIT`,
+  allowing transaction-local buffers to flush as the final in-transaction
+  commit step.
+
 ## [0.11.0] - 2026-06-24
 
 ### Fixed

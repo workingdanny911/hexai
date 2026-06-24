@@ -320,6 +320,11 @@ await unitOfWork.scope(async () => {
         await validateBusinessRules();
     });
 
+    // Runs after every main beforeCommit hook and still before COMMIT
+    unitOfWork.beforeCommit(async () => {
+        await flushBufferedWork();
+    }, { phase: "drain" });
+
     // Runs after successful COMMIT (best-effort)
     unitOfWork.afterCommit(async () => {
         await sendNotification();
@@ -339,10 +344,16 @@ await unitOfWork.scope(async () => {
 | Hook | When | On failure |
 |------|------|------------|
 | `beforeCommit` | Before COMMIT, sequentially | Transaction rolls back instead of committing |
+| `beforeCommit(..., { phase: "drain" })` | After main `beforeCommit` hooks and before COMMIT | Transaction rolls back instead of committing |
 | `afterCommit` | After COMMIT, sequentially | Best-effort: all hooks run, errors collected into `AggregateError` |
 | `afterRollback` | After ROLLBACK, sequentially | Best-effort: all hooks run, errors collected into `AggregateError` |
 
 Hooks are scope-local — they are cleared after the transaction completes. Calling `beforeCommit()` / `afterCommit()` / `afterRollback()` outside a `scope()` throws an error.
+
+Use the default `beforeCommit` phase for validation and other ordinary commit
+guards. Use the `"drain"` phase for work that must run after those guards but
+still inside the same transaction, such as flushing transaction-local buffers.
+Main `beforeCommit` hooks may register drain hooks for the same transaction.
 
 #### Transaction Propagation
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added `BeforeCommitOptions` with `phase: "main" | "drain"` so
+  `beforeCommit` work can be split into ordinary commit guards and a final
+  in-transaction drain phase.
+
 ## [0.9.4] - 2026-06-22
 
 ### Changed
