@@ -8,6 +8,11 @@ export {
     ensureConnection,
 } from "./helpers.js";
 export * from "./postgres-event-store.js";
+export {
+    attachPostgresEventStoreSink,
+    TransactionalEventStoreSinkClosedError,
+    type PostgresTransactionalEventStoreSinkConfig,
+} from "./postgres-transactional-event-store-sink.js";
 export * from "./types.js";
 
 // Re-exported from ezcfg/postgres

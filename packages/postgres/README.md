@@ -391,6 +391,63 @@ await unitOfWork.scope(async () => {
 });
 ```
 
+### Transactional Event Store Sink
+
+`attachPostgresEventStoreSink()` attaches a transactional event-store sink to a
+subscribable event publisher. Application event handlers still run immediately,
+while the database append happens once in the `beforeCommit` drain phase using
+the bound unit of work transaction client.
+
+The sink is a Postgres package concept, not a core interface. The helper only
+requires the publisher to implement the core
+`SubscribableEventPublisher<Message>` contract; transaction buffering, resource
+storage, and drain-phase flushing stay inside `@hexaijs/postgres`.
+
+```typescript
+import {
+    PostgresEventStore,
+    attachPostgresEventStoreSink,
+    createPostgresUnitOfWork,
+} from "@hexaijs/postgres";
+import { ApplicationEventPublisher } from "@hexaijs/application";
+
+const commandUnitOfWork = createPostgresUnitOfWork(pool);
+const publisher = new ApplicationEventPublisher();
+
+const detachEventStoreSink = attachPostgresEventStoreSink(
+    publisher,
+    commandUnitOfWork
+);
+
+const projectionUnitOfWork = createPostgresUnitOfWork(pool);
+const eventStore = new PostgresEventStore(projectionUnitOfWork);
+
+await commandUnitOfWork.scope(async () => {
+    await repository.save(order);
+    await publisher.publish(...order.flushEvents());
+});
+```
+
+Key behaviors:
+
+- Attached events must be published inside a `unitOfWork.scope()`. Publishing
+  outside a transaction fails instead of writing in autocommit mode.
+- The first buffered event starts the transaction so commit hooks are guaranteed
+  to run, but event positions are not allocated until the drain phase.
+- Events published by main-phase `beforeCommit` hooks are included in the same
+  drain.
+- Read/projection event stores may use a separate `PostgresUnitOfWork` instance.
+  The sink does not depend on an injected event store's transaction context.
+- Events accepted after the sink has drained fail with
+  `TransactionalEventStoreSinkClosedError`, causing rollback instead of silent
+  event loss.
+- `Propagation.NESTED` savepoints are not supported because transaction
+  resources are root-transaction scoped.
+
+Only event-store persistence is delayed. Other event-publisher subscribers still
+execute immediately, so external side effects such as email, HTTP calls, or
+non-transactional read-model updates are not made atomic by this buffer.
+
 #### Streaming Events
 
 Use `stream()` for processing large volumes of events (e.g., projection rebuilds). It returns an `AsyncGenerator` that fetches events in batches:
@@ -749,6 +806,8 @@ await uow.scope(async () => {
 | `TransactionClosedError` | Error thrown when a leaked async context tries to use a finalized transaction client |
 | `UnsupportedNestedTransactionCapabilityError` | Error thrown when root-only transaction capabilities are used inside a nested savepoint |
 | `PostgresEventStore` | Event store implementation with batch insert support |
+| `attachPostgresEventStoreSink` | Attaches a transactional Postgres event-store sink to a subscribable event publisher |
+| `TransactionalEventStoreSinkClosedError` | Error thrown when events are accepted after the transaction-local sink has already drained |
 | `PostgresConfig` | Immutable configuration with builder pattern |
 | `postgresConfig` | Config spec for `defineConfig` integration |
 | `runMigrations` | Migration runner for SQL and JS migrations |

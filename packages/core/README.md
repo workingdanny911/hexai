@@ -10,7 +10,7 @@ The package focuses on three key areas:
 
 1. **Messaging** - A unified `Message` abstraction for commands, queries, and events with built-in headers (id, type, timestamp, schema version)
 2. **Domain Modeling** - Base classes for aggregates, entities, and domain events following DDD tactical patterns
-3. **Infrastructure Interfaces** - Abstract contracts for repositories, unit of work, and event stores that infrastructure packages implement
+3. **Infrastructure Interfaces** - Abstract contracts for repositories, unit of work, event stores, and event publisher protocols that infrastructure packages implement
 
 These primitives are intentionally minimal. They define contracts and patterns without prescribing implementation details, allowing you to integrate with any database, message broker, or framework.
 
@@ -254,6 +254,33 @@ order.getEventsOccurred(); // [] — now empty
 ```
 
 `flushEvents()` is useful in repository implementations where you need to publish events after persisting the aggregate, and want to ensure events are not accidentally re-published.
+
+### Event Publishing Contracts
+
+`EventPublisher` is the minimal contract for dispatching events:
+
+```typescript
+interface EventPublisher<E extends object = any> {
+    publish(...events: E[]): Promise<void>;
+}
+```
+
+`SubscribableEventPublisher` extends that contract with subscriber registration:
+
+```typescript
+type EventSubscriber<E extends object = any> = (
+    event: E
+) => void | Promise<void>;
+
+interface SubscribableEventPublisher<E extends object = any>
+    extends EventPublisher<E> {
+    subscribe(subscriber: EventSubscriber<E>): () => void;
+}
+```
+
+Core intentionally keeps these contracts about event flow only. Storage-specific
+buffers, sinks, and transaction-aware adapters belong in infrastructure packages
+such as `@hexaijs/postgres`.
 
 ### Repository
 

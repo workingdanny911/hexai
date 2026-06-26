@@ -1,3 +1,5 @@
-export interface EventPublisher<E extends object = any> {
-    publish(...events: E[]): Promise<void>;
-}
+export type {
+    EventPublisher,
+    EventSubscriber,
+    SubscribableEventPublisher,
+} from "@hexaijs/core";

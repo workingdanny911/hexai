@@ -216,6 +216,12 @@ await ctx.publish(
 );
 ```
 
+`ApplicationEventPublisher` implements the core
+`SubscribableEventPublisher<Message>` contract. Infrastructure packages can
+attach subscribers to it without depending on application internals, and
+`@hexaijs/application` re-exports `EventPublisher`, `EventSubscriber`, and
+`SubscribableEventPublisher` from `@hexaijs/core` for convenience.
+
 ### ExecutionScope
 
 `ExecutionScope` provides ALS-based (AsyncLocalStorage) execution context that scopes handler execution with SecurityContext, correlation, and causation data. It replaces the old pattern of passing SecurityContext through message generics.

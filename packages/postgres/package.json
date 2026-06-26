@@ -3,7 +3,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.12.0",
+  "version": "0.13.0",
   "type": "module",
   "description": "PostgreSQL support for hexai",
   "license": "MIT",
@@ -64,7 +64,7 @@
     "node-pg-migrate": "^7.9.0"
   },
   "peerDependencies": {
-    "@hexaijs/core": "^0.10.0",
+    "@hexaijs/core": "^0.11.0",
     "ezcfg": "^0.3.0",
     "pg": "^8.0.0"
   },

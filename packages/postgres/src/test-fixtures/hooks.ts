@@ -4,8 +4,6 @@ import { createPostgresUnitOfWork } from "../postgres-unit-of-work.js";
 import { afterAll, beforeAll, beforeEach } from "vitest";
 import { Client } from "pg";
 
-import type { PostgresUnitOfWork } from "../postgres-unit-of-work.js";
-
 export function getDatabaseManager() {
     return new DatabaseManager(getPostgresUrl());
 }
@@ -95,7 +93,7 @@ export function newClient(database?: string) {
     return new Client(url.toString());
 }
 
-export function useUnitOfWork(database?: string): PostgresUnitOfWork {
+export function useUnitOfWork(database?: string) {
     let url = getTestConfig().db;
     if (database) {
         url = url.withDatabase(database);

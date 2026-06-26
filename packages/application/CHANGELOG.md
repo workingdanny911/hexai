@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0] - 2026-06-26
+
+### Changed
+
+- `ApplicationEventPublisher` now implements the core
+  `SubscribableEventPublisher<Message>` contract.
+- `EventPublisher`, `EventSubscriber`, and `SubscribableEventPublisher` are
+  re-exported from `@hexaijs/core`.
+- Peer dependency: `@hexaijs/core` `^0.9.0 || ^0.10.0` → `^0.11.0`.
+
 ## [0.5.5] - 2026-06-24
 
 ### Changed

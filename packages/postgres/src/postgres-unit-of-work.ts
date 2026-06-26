@@ -726,13 +726,15 @@ class Savepoint {
     }
 }
 
-export function createPostgresUnitOfWork(pool: pg.Pool): PostgresUnitOfWork;
+export function createPostgresUnitOfWork(
+    pool: pg.Pool
+): DefaultPostgresUnitOfWork;
 export function createPostgresUnitOfWork(
     config: PostgresConfig | string
-): PostgresUnitOfWork;
+): DefaultPostgresUnitOfWork;
 export function createPostgresUnitOfWork(
     source: pg.Pool | PostgresConfig | string
-): PostgresUnitOfWork {
+): DefaultPostgresUnitOfWork {
     if (source instanceof pg.Pool) {
         return new DefaultPostgresUnitOfWork(
             async () => source.connect(),

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0] - 2026-06-26
+
+### Added
+
+- Added event flow contracts: `EventPublisher`, `EventSubscriber`, and
+  `SubscribableEventPublisher`.
+
 ## [0.10.0] - 2026-06-24
 
 ### Added

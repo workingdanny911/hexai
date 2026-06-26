@@ -3,3 +3,4 @@ export * from "./unit-of-work.js";
 export * from "./transaction-hooks.js";
 export * from "./message.js";
 export * from "./event-store.js";
+export * from "./event-publisher.js";

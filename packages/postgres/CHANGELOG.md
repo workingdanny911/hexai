@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.13.0] - 2026-06-26
+
+### Added
+
+- Added `attachPostgresEventStoreSink()` for attaching a transactional Postgres
+  event-store sink to a subscribable event publisher. Accepted events are
+  buffered in a transaction resource and flushed through the bound unit of work's
+  transaction client during the `beforeCommit` drain phase. The sink remains a
+  Postgres-local implementation detail; the public integration boundary is the
+  core `SubscribableEventPublisher<Message>` contract.
+
+### Changed
+
+- Peer dependency: `@hexaijs/core` `^0.10.0` → `^0.11.0`.
+
 ## [0.12.0] - 2026-06-24
 
 ### Added

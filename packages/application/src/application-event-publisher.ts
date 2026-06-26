@@ -1,25 +1,26 @@
-import { AnyMessage, Message } from "@hexaijs/core";
+import {
+    AnyMessage,
+    Message,
+    type EventSubscriber,
+    type SubscribableEventPublisher,
+} from "@hexaijs/core";
 
-import { EventPublisher } from "./event-publisher.js";
 import { ExecutionScope } from "./execution-scope.js";
-
-interface PublishCallback {
-    (event: AnyMessage): void | Promise<void>;
-}
 
 interface SecurityContextAwareMessage extends Message {
     withSecurityContext(securityContext: unknown): Message;
 }
 
-export class ApplicationEventPublisher implements EventPublisher<Message> {
-    private callbacks: Set<PublishCallback> = new Set();
+export class ApplicationEventPublisher
+    implements SubscribableEventPublisher<Message> {
+    private callbacks: Set<EventSubscriber<AnyMessage>> = new Set();
 
-    public subscribe(callback: PublishCallback): () => void {
+    public subscribe(callback: EventSubscriber<AnyMessage>): () => void {
         this.callbacks.add(callback);
         return () => this.unsubscribe(callback);
     }
 
-    private unsubscribe(callback: PublishCallback): void {
+    private unsubscribe(callback: EventSubscriber<AnyMessage>): void {
         this.callbacks.delete(callback);
     }
 
