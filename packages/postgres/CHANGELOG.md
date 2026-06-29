@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.14.0] - 2026-06-29
+
+### Added
+
+- Added Postgres-local `PostgresUnitOfWorkObserver` support through
+  `onEveryCommit()`. Observers are instance-level, may be registered outside a
+  scope, run after root physical commits and transaction-local `afterCommit`
+  hooks, and run outside the completed transaction context.
+- Added `TransactionResources` as the preferred name for the Postgres-local
+  transaction-resource capability. `TransactionResourceAware` remains available
+  as a deprecated alias.
+- Exported `PostgresTransactionalEventStoreSink` for direct transactional sink
+  wiring.
+- Added transactional event-store sink `onStored(storedEvents)` support. The
+  callback runs after each drain-batch append succeeds and before the surrounding
+  transaction commits; throwing or rejecting rolls back that transaction.
+
+### Changed
+
+- `PostgresUnitOfWork` now follows the core capability split: base
+  `UnitOfWork` for `scope()`, `UnitOfWorkClientAccess` for `getClient()` and
+  deprecated `wrap()`, `TransactionLifecycle` for commit/rollback hooks, and
+  the Postgres-local observer capability for `onEveryCommit()`.
+- Peer dependency: `@hexaijs/core` `^0.11.0` → `^0.12.0`.
+
+### Fixed
+
+- Fixed transactional event-store sink accept ordering by buffering accepted
+  events before awaiting lazy transaction startup.
+
 ## [0.13.0] - 2026-06-26
 
 ### Added

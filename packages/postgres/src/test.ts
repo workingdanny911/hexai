@@ -2,12 +2,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Client, ClientBase } from "pg";
 
 import { Propagation, TransactionHooks } from "@hexaijs/core";
-import type { TransactionHook } from "@hexaijs/core";
+import type { BeforeCommitOptions, TransactionHook } from "@hexaijs/core";
 import { DatabaseManager, isDatabaseError, TableManager } from "./helpers.js";
 import { PostgresConfig } from "./config/index.js";
 import { runHexaiMigrations } from "./run-hexai-migrations.js";
 import { PostgresTransactionOptions } from "./types.js";
-import { PostgresUnitOfWork } from "./postgres-unit-of-work.js";
+import {
+    PostgresUnitOfWork,
+    UnsupportedNestedTransactionCapabilityError,
+} from "./postgres-unit-of-work.js";
+import type {
+    CommitControl,
+    TransactionResourceKey,
+    TransactionResources,
+} from "./postgres-unit-of-work.js";
 
 export function createTestContext(dbUrl: string | PostgresConfig) {
     const config =
@@ -49,8 +57,10 @@ export function createTestContext(dbUrl: string | PostgresConfig) {
     };
 }
 
-export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
+export class PostgresUnitOfWorkForTesting
+    implements PostgresUnitOfWork, CommitControl, TransactionResources {
     private executorStorage = new AsyncLocalStorage<TestTransactionExecutor>();
+    private everyCommitObservers = new Set<TransactionHook>();
 
     constructor(private client: ClientBase) {}
 
@@ -62,9 +72,12 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
         return this.client;
     }
 
-    beforeCommit(hook: TransactionHook): void {
+    beforeCommit(
+        hook: TransactionHook,
+        options?: BeforeCommitOptions
+    ): void {
         const executor = this.getRequiredExecutor("beforeCommit");
-        executor.addBeforeCommitHook(hook);
+        executor.addBeforeCommitHook(hook, options);
     }
 
     afterCommit(hook: TransactionHook): void {
@@ -79,6 +92,55 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
         executor.addAfterRollbackHook(() =>
             this.runOutsideTransactionContext(hook)
         );
+    }
+
+    onEveryCommit(observer: TransactionHook): () => void {
+        this.everyCommitObservers.add(observer);
+
+        let subscribed = true;
+        return () => {
+            if (!subscribed) {
+                return;
+            }
+
+            subscribed = false;
+            this.everyCommitObservers.delete(observer);
+        };
+    }
+
+    preventCommit(cause?: unknown): void {
+        const executor = this.getRequiredExecutor("preventCommit");
+        executor.preventCommit(cause);
+    }
+
+    isCommitPrevented(): boolean {
+        const executor = this.getRequiredExecutor("isCommitPrevented");
+        return executor.isCommitPrevented();
+    }
+
+    getTransactionResource<T>(
+        key: TransactionResourceKey<T>
+    ): T | undefined {
+        const executor = this.getRequiredExecutor("getTransactionResource");
+        return executor.getResource(key);
+    }
+
+    getOrCreateTransactionResource<T>(
+        key: TransactionResourceKey<T>,
+        factory: () => T
+    ): T {
+        const executor = this.getRequiredExecutor(
+            "getOrCreateTransactionResource"
+        );
+        return executor.getOrCreateResource(key, factory);
+    }
+
+    setTransactionResource<T>(
+        key: TransactionResourceKey<T>,
+        value: T
+    ): void {
+        const executor = this.getRequiredExecutor("setTransactionResource");
+        executor.setResource(key, value);
     }
 
     async withClient<T>(fn: (client: ClientBase) => Promise<T>): Promise<T> {
@@ -114,6 +176,26 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
         return this.executorStorage.exit(() => hook());
     }
 
+    private async notifyEveryCommit(): Promise<void> {
+        const observers = Array.from(this.everyCommitObservers);
+        if (observers.length === 0) {
+            return;
+        }
+
+        await this.executorStorage.exit(async () => {
+            for (const observer of observers) {
+                try {
+                    await observer();
+                } catch (e) {
+                    console.error(
+                        "PostgresUnitOfWorkForTesting onEveryCommit observer failed",
+                        e
+                    );
+                }
+            }
+        });
+    }
+
     private getRequiredExecutor(hookName: string): TestTransactionExecutor {
         const executor = this.getCurrentExecutor();
         if (!executor) {
@@ -146,7 +228,10 @@ export class PostgresUnitOfWorkForTesting implements PostgresUnitOfWork {
     }
 
     private createExecutor(): TestTransactionExecutor {
-        return new TestTransactionExecutor(this.client);
+        return new TestTransactionExecutor(
+            this.client,
+            () => this.notifyEveryCommit()
+        );
     }
 
     private executeInContext<T>(
@@ -161,19 +246,29 @@ class TestTransactionExecutor {
     private initialized = false;
     private closed = false;
     private abortError?: Error;
+    private commitPrevented = false;
+    private commitPreventionCause?: unknown;
 
     private nestingDepth = 0;
+    private nestedSavepointDepth = 0;
     private savepointCounter = 0;
     private savepoints: TestSavepoint[] = [];
     private savepointName: string;
     private hooks = new TransactionHooks();
+    private resources = new Map<symbol, unknown>();
 
-    constructor(private readonly client: ClientBase) {
+    constructor(
+        private readonly client: ClientBase,
+        private notifyRootCommit: () => Promise<void>
+    ) {
         this.savepointName = `test_sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     }
 
-    public addBeforeCommitHook(hook: TransactionHook): void {
-        this.hooks.addBeforeCommit(hook);
+    public addBeforeCommitHook(
+        hook: TransactionHook,
+        options?: BeforeCommitOptions
+    ): void {
+        this.hooks.addBeforeCommit(hook, options?.phase);
     }
 
     public addAfterCommitHook(hook: TransactionHook): void {
@@ -182,6 +277,45 @@ class TestTransactionExecutor {
 
     public addAfterRollbackHook(hook: TransactionHook): void {
         this.hooks.addAfterRollback(hook);
+    }
+
+    public preventCommit(cause?: unknown): void {
+        this.assertNotInNestedSavepoint("preventCommit()");
+        if (!this.commitPrevented) {
+            this.commitPrevented = true;
+            this.commitPreventionCause = cause;
+        }
+    }
+
+    public isCommitPrevented(): boolean {
+        this.assertNotInNestedSavepoint("isCommitPrevented()");
+        return this.commitPrevented;
+    }
+
+    public getResource<T>(
+        key: TransactionResourceKey<T>
+    ): T | undefined {
+        this.assertNotInNestedSavepoint("Transaction resources");
+        return this.resources.get(key.symbol) as T | undefined;
+    }
+
+    public getOrCreateResource<T>(
+        key: TransactionResourceKey<T>,
+        factory: () => T
+    ): T {
+        this.assertNotInNestedSavepoint("Transaction resources");
+        if (!this.resources.has(key.symbol)) {
+            this.resources.set(key.symbol, factory());
+        }
+        return this.resources.get(key.symbol) as T;
+    }
+
+    public setResource<T>(
+        key: TransactionResourceKey<T>,
+        value: T
+    ): void {
+        this.assertNotInNestedSavepoint("Transaction resources");
+        this.resources.set(key.symbol, value);
     }
 
     public async execute<T>(
@@ -193,7 +327,7 @@ class TestTransactionExecutor {
         const executor = this.resolveExecutor(options.propagation);
         return executor === this
             ? this.runWithLifecycle(fn)
-            : executor.execute(fn, options);
+            : this.runNestedSavepoint(() => executor.execute(fn, options));
     }
 
     public getClient(): ClientBase {
@@ -239,16 +373,26 @@ class TestTransactionExecutor {
 
     private async finalizeIfRoot(): Promise<void> {
         if (this.nestingDepth === 0) {
-            if (this.isAborted()) {
+            if (this.isAborted() || this.commitPrevented) {
                 await this.hooks.executeRollback(
                     () => this.rollback(),
-                    this.abortError
+                    this.abortError ?? this.commitPreventionCause
                 );
             } else if (!this.closed) {
-                await this.hooks.executeCommit(
-                    () => this.commit(),
-                    () => this.rollback()
-                );
+                let committed = false;
+                try {
+                    await this.hooks.executeCommit(
+                        async () => {
+                            await this.commit();
+                            committed = true;
+                        },
+                        () => this.rollback()
+                    );
+                } finally {
+                    if (committed) {
+                        await this.notifyRootCommit();
+                    }
+                }
             }
         }
     }
@@ -288,6 +432,21 @@ class TestTransactionExecutor {
         this.savepoints.pop();
     }
 
+    private async runNestedSavepoint<T>(fn: () => Promise<T>): Promise<T> {
+        this.nestedSavepointDepth++;
+        try {
+            return await fn();
+        } finally {
+            this.nestedSavepointDepth--;
+        }
+    }
+
+    private assertNotInNestedSavepoint(operation: string): void {
+        if (this.nestedSavepointDepth > 0) {
+            throw new UnsupportedNestedTransactionCapabilityError(operation);
+        }
+    }
+
     private async commit(): Promise<void> {
         if (this.closed) {
             return;
@@ -295,6 +454,7 @@ class TestTransactionExecutor {
 
         this.closed = true;
         await this.client.query(`RELEASE SAVEPOINT ${this.savepointName}`);
+        this.resources.clear();
     }
 
     private async rollback(): Promise<void> {
@@ -306,6 +466,7 @@ class TestTransactionExecutor {
         await this.client.query(
             `ROLLBACK TO SAVEPOINT ${this.savepointName}`
         );
+        this.resources.clear();
     }
 
     private isAborted(): boolean {

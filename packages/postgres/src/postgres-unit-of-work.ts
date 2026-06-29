@@ -13,8 +13,9 @@ import {
 import { ensureConnection } from "./helpers.js";
 import type {
     BeforeCommitOptions,
+    TransactionLifecycle,
     TransactionHook,
-    UnitOfWork,
+    UnitOfWorkClientAccess,
 } from "@hexaijs/core";
 
 declare const transactionResourceKeyBrand: unique symbol;
@@ -39,7 +40,7 @@ export interface CommitControl {
     isCommitPrevented(): boolean;
 }
 
-export interface TransactionResourceAware {
+export interface TransactionResources {
     getTransactionResource<T>(
         key: TransactionResourceKey<T>
     ): T | undefined;
@@ -52,6 +53,9 @@ export interface TransactionResourceAware {
         value: T
     ): void;
 }
+
+/** @deprecated Use TransactionResources. */
+export type TransactionResourceAware = TransactionResources;
 
 export class TransactionAbortedError extends Error {
     constructor(cause?: unknown) {
@@ -76,15 +80,22 @@ export class UnsupportedNestedTransactionCapabilityError extends Error {
     }
 }
 
+export interface PostgresUnitOfWorkObserver {
+    onEveryCommit(observer: TransactionHook): () => void;
+}
+
 export interface PostgresUnitOfWork
-    extends UnitOfWork<pg.ClientBase, PostgresTransactionOptions> {
+    extends UnitOfWorkClientAccess<pg.ClientBase, PostgresTransactionOptions>,
+        TransactionLifecycle,
+        PostgresUnitOfWorkObserver {
     withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T>;
 }
 
 export class DefaultPostgresUnitOfWork
-    implements PostgresUnitOfWork, CommitControl, TransactionResourceAware {
+    implements PostgresUnitOfWork, CommitControl, TransactionResources {
     private static wrapDeprecationEmitted = false;
     private transactionStorage = new AsyncLocalStorage<PostgresTransaction>();
+    private everyCommitObservers = new Set<TransactionHook>();
 
     constructor(
         private clientFactory: ClientFactory,
@@ -149,6 +160,20 @@ export class DefaultPostgresUnitOfWork
     afterRollback(hook: TransactionHook): void {
         const tx = this.getRequiredTransaction("afterRollback");
         tx.addAfterRollbackHook(() => this.runOutsideTransactionContext(hook));
+    }
+
+    onEveryCommit(observer: TransactionHook): () => void {
+        this.everyCommitObservers.add(observer);
+
+        let subscribed = true;
+        return () => {
+            if (!subscribed) {
+                return;
+            }
+
+            subscribed = false;
+            this.everyCommitObservers.delete(observer);
+        };
     }
 
     preventCommit(cause?: unknown): void {
@@ -226,6 +251,26 @@ export class DefaultPostgresUnitOfWork
         return this.transactionStorage.exit(() => hook());
     }
 
+    private async notifyEveryCommit(): Promise<void> {
+        const observers = Array.from(this.everyCommitObservers);
+        if (observers.length === 0) {
+            return;
+        }
+
+        await this.transactionStorage.exit(async () => {
+            for (const observer of observers) {
+                try {
+                    await observer();
+                } catch (e) {
+                    console.error(
+                        "PostgresUnitOfWork onEveryCommit observer failed",
+                        e
+                    );
+                }
+            }
+        });
+    }
+
     private resolveOptions(
         options: Partial<PostgresTransactionOptions>
     ): PostgresTransactionOptions {
@@ -245,7 +290,11 @@ export class DefaultPostgresUnitOfWork
     }
 
     private createTransaction(): PostgresTransaction {
-        return new PostgresTransaction(this.clientFactory, this.clientCleanUp);
+        return new PostgresTransaction(
+            this.clientFactory,
+            this.clientCleanUp,
+            () => this.notifyEveryCommit()
+        );
     }
 
     private executeInContext<T>(
@@ -277,7 +326,8 @@ class PostgresTransaction {
 
     constructor(
         private clientFactory: ClientFactory,
-        private clientCleanUp?: ClientCleanUp
+        private clientCleanUp: ClientCleanUp | undefined,
+        private notifyRootCommit: () => Promise<void>
     ) {}
 
     public addBeforeCommitHook(
@@ -515,10 +565,20 @@ class PostgresTransaction {
             return;
         }
 
-        await this.hooks.executeCommit(
-            () => this.commit(),
-            () => this.rollback()
-        );
+        let committed = false;
+        try {
+            await this.hooks.executeCommit(
+                async () => {
+                    await this.commit();
+                    committed = true;
+                },
+                () => this.rollback()
+            );
+        } finally {
+            if (committed) {
+                await this.notifyRootCommit();
+            }
+        }
     }
 
     private resolveExecutor(

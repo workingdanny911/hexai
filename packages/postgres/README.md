@@ -26,7 +26,14 @@ npm install @hexaijs/core ezcfg pg
 
 ### PostgresUnitOfWork
 
-The `PostgresUnitOfWork` implements `UnitOfWork` from `@hexaijs/core`. It manages transaction lifecycle and provides access to the database client.
+The `PostgresUnitOfWork` implements the base `UnitOfWork` transaction boundary
+from `@hexaijs/core`, plus the core `UnitOfWorkClientAccess` and
+`TransactionLifecycle` capabilities. It also exposes the Postgres-local
+`PostgresUnitOfWorkObserver` API for instance-level commit observers.
+
+`DefaultPostgresUnitOfWork` additionally implements Postgres-local capabilities
+such as `CommitControl` and `TransactionResources` for advanced in-transaction
+coordination.
 
 ```typescript
 import * as pg from "pg";
@@ -233,6 +240,34 @@ await unitOfWork.scope(async () => {
 - Hooks registered inside `Propagation.NESTED` scopes are attached to the current root transaction and run when that root transaction finalizes
 - Calling hook registration methods outside a `scope()` throws an error
 
+#### onEveryCommit()
+
+`onEveryCommit()` is a Postgres-local observer API. It is not part of the core
+`UnitOfWork` or `TransactionLifecycle` contracts.
+
+```typescript
+const unsubscribe = unitOfWork.onEveryCommit(async () => {
+    await projectionWakeQueue.wake();
+});
+
+// Later, when the observer is no longer needed:
+unsubscribe();
+```
+
+Observers are instance-level and may be registered outside a transaction scope.
+They run after a root physical `COMMIT` succeeds, after transaction-local
+`afterCommit` hooks have run, and outside the completed transaction context.
+Use `withClient()` if an observer needs follow-up database work.
+
+Avoid opening a committing `scope()` on the same unit of work from an
+`onEveryCommit()` observer. That new commit would notify the same observer
+again. Use `withClient()` for follow-up database work, or register a separate
+post-commit coordinator when more transaction boundaries are needed.
+
+Observer failures are logged and do not change the already completed scope
+result. Observers do not run for rollbacks, `Propagation.NESTED` savepoint
+release, or lazy no-op scopes that never started a database transaction.
+
 ### Postgres Transaction Capabilities
 
 `DefaultPostgresUnitOfWork` also provides Postgres-local transaction
@@ -278,23 +313,23 @@ was already aborted.
 `CommitControl` is not available inside `Propagation.NESTED` savepoints because
 savepoints do not own the root transaction outcome.
 
-#### TransactionResourceAware
+#### TransactionResources
 
-Use `TransactionResourceAware` to store transaction-local resources without
+Use `TransactionResources` to store transaction-local resources without
 threading them through every call. Resources are cleared when the transaction
 commits or rolls back.
 
 ```typescript
 import { DomainEvent } from "@hexaijs/core";
 import {
-    TransactionResourceAware,
+    TransactionResources,
     createTransactionResourceKey,
 } from "@hexaijs/postgres";
 
 const eventsKey = createTransactionResourceKey<DomainEvent[]>(
     "buffered-domain-events"
 );
-const resources = unitOfWork as typeof unitOfWork & TransactionResourceAware;
+const resources = unitOfWork as typeof unitOfWork & TransactionResources;
 
 await unitOfWork.scope(async () => {
     const events = resources.getOrCreateTransactionResource(
@@ -308,6 +343,9 @@ await unitOfWork.scope(async () => {
 
 Transaction resources are root-transaction scoped and are not available inside
 `Propagation.NESTED` savepoints.
+
+`TransactionResourceAware` remains available as a deprecated alias for
+backward compatibility. Prefer `TransactionResources` in new code.
 
 ### Isolation Levels
 
@@ -381,6 +419,11 @@ takes an `ACCESS EXCLUSIVE` lock on the event table, so long-running readers can
 delay it; consider setting database-level `lock_timeout` and
 `statement_timeout` for production migration runs.
 
+Runtime appends do not auto-seed the position counter from existing legacy rows
+on first publish. For any existing legacy or custom event table, seed or sync the
+counter to at least `COALESCE(MAX(position), 0)` before starting new writers and
+before legacy writes resume after a migration window.
+
 Inside a transaction scope, the event store shares the same client with repositories:
 
 ```typescript
@@ -393,10 +436,14 @@ await unitOfWork.scope(async () => {
 
 ### Transactional Event Store Sink
 
-`attachPostgresEventStoreSink()` attaches a transactional event-store sink to a
-subscribable event publisher. Application event handlers still run immediately,
-while the database append happens once in the `beforeCommit` drain phase using
+`PostgresTransactionalEventStoreSink` buffers published events in the current
+Postgres transaction and appends them during the `beforeCommit` drain phase using
 the bound unit of work transaction client.
+
+`attachPostgresEventStoreSink()` is a convenience helper that creates a sink and
+subscribes it to a subscribable event publisher. Application event handlers still
+run immediately; only event-store persistence is delayed until the transaction
+drain.
 
 The sink is a Postgres package concept, not a core interface. The helper only
 requires the publisher to implement the core
@@ -405,7 +452,6 @@ storage, and drain-phase flushing stay inside `@hexaijs/postgres`.
 
 ```typescript
 import {
-    PostgresEventStore,
     attachPostgresEventStoreSink,
     createPostgresUnitOfWork,
 } from "@hexaijs/postgres";
@@ -416,11 +462,13 @@ const publisher = new ApplicationEventPublisher();
 
 const detachEventStoreSink = attachPostgresEventStoreSink(
     publisher,
-    commandUnitOfWork
+    commandUnitOfWork,
+    {
+        onStored: async (storedEvents) => {
+            trackStoredEventPositions(storedEvents);
+        },
+    }
 );
-
-const projectionUnitOfWork = createPostgresUnitOfWork(pool);
-const eventStore = new PostgresEventStore(projectionUnitOfWork);
 
 await commandUnitOfWork.scope(async () => {
     await repository.save(order);
@@ -430,14 +478,20 @@ await commandUnitOfWork.scope(async () => {
 
 Key behaviors:
 
-- Attached events must be published inside a `unitOfWork.scope()`. Publishing
-  outside a transaction fails instead of writing in autocommit mode.
+- Events must be accepted inside a `unitOfWork.scope()`. Publishing outside a
+  transaction fails instead of writing in autocommit mode.
+- Accepted events are buffered before awaiting transaction startup, so accept
+  order is preserved even when the first event needs to start a lazy transaction.
 - The first buffered event starts the transaction so commit hooks are guaranteed
   to run, but event positions are not allocated until the drain phase.
 - Events published by main-phase `beforeCommit` hooks are included in the same
-  drain.
-- Read/projection event stores may use a separate `PostgresUnitOfWork` instance.
-  The sink does not depend on an injected event store's transaction context.
+  drain. Events accepted while draining are appended in a later drain batch.
+- `onStored(storedEvents)` runs after each drain-batch append succeeds and before
+  the surrounding transaction commits. If it throws or rejects, the drain hook
+  fails and the surrounding transaction rolls back.
+- `onStored` is for capturing stored-position bookmarks, not for confirming that
+  a projection has applied those events. Wake external projection workers after
+  commit, for example from `onEveryCommit()` or an `afterCommit()` hook.
 - Events accepted after the sink has drained fail with
   `TransactionalEventStoreSinkClosedError`, causing rollback instead of silent
   event loss.
@@ -486,9 +540,10 @@ ON CONFLICT (id) DO NOTHING;
 ```
 
 For an existing custom event table, seed `last_position` from
-`COALESCE(MAX(position), 0)` instead of `0`. If that table used a sequence-backed
-`position` default, drop the default after the counter is seeded so future writes
-must use the counter-allocated position.
+`COALESCE(MAX(position), 0)` instead of `0`, and keep it at least that high
+before legacy writes resume after a migration window. If that table used a
+sequence-backed `position` default, drop the default after the counter is seeded
+so future writes must use the counter-allocated position.
 
 ```typescript
 const eventStore = new PostgresEventStore(unitOfWork, {
@@ -796,17 +851,20 @@ await uow.scope(async () => {
 | Export | Description |
 |--------|-------------|
 | `createPostgresUnitOfWork` | Factory function to create PostgresUnitOfWork from Pool or Config |
-| `PostgresUnitOfWork` | Interface extending UnitOfWork with `withClient()` method |
+| `PostgresUnitOfWork` | Interface combining base `UnitOfWork`, client access, transaction lifecycle hooks, and Postgres commit observers |
+| `PostgresUnitOfWorkObserver` | Postgres-local capability for instance-level `onEveryCommit()` observers |
 | `DefaultPostgresUnitOfWork` | Default implementation of PostgresUnitOfWork with transaction management |
 | `PostgresUnitOfWorkForTesting` | Test-specific PostgresUnitOfWork that runs inside external transaction |
 | `CommitControl` | Postgres-local capability for marking the current transaction as rollback-only while preserving the callback result |
-| `TransactionResourceAware` | Postgres-local capability for transaction-scoped resources |
+| `TransactionResources` | Postgres-local capability for transaction-scoped resources |
+| `TransactionResourceAware` | Deprecated alias for `TransactionResources` |
 | `createTransactionResourceKey` | Creates typed keys for transaction-scoped resources |
 | `TransactionAbortedError` | Error thrown when an aborted root transaction would otherwise finalize normally |
 | `TransactionClosedError` | Error thrown when a leaked async context tries to use a finalized transaction client |
 | `UnsupportedNestedTransactionCapabilityError` | Error thrown when root-only transaction capabilities are used inside a nested savepoint |
 | `PostgresEventStore` | Event store implementation with batch insert support |
-| `attachPostgresEventStoreSink` | Attaches a transactional Postgres event-store sink to a subscribable event publisher |
+| `PostgresTransactionalEventStoreSink` | Transaction-local event-store sink with drain-phase append and optional `onStored` callback |
+| `attachPostgresEventStoreSink` | Attaches a `PostgresTransactionalEventStoreSink` to a subscribable event publisher |
 | `TransactionalEventStoreSinkClosedError` | Error thrown when events are accepted after the transaction-local sink has already drained |
 | `PostgresConfig` | Immutable configuration with builder pattern |
 | `postgresConfig` | Config spec for `defineConfig` integration |

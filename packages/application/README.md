@@ -377,6 +377,9 @@ await compositeApp.handleEvent(event);
 // All event handlers run within a single scope() transaction
 ```
 
+`SimpleCompositeApplication` only requires the base `UnitOfWork.scope()`
+contract; client access and transaction lifecycle capabilities are not required.
+
 ## API Highlights
 
 | Export | Description |

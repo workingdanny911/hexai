@@ -352,6 +352,21 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 await expectRecordCount(1);
             });
 
+            test("runs drain-phase hooks after main hooks", async () => {
+                const order: string[] = [];
+
+                await uow.wrap(async (c) => {
+                    uow.beforeCommit(() => { order.push("drain"); }, {
+                        phase: "drain",
+                    });
+                    uow.beforeCommit(() => { order.push("main"); });
+                    await insertRecord(c, 1);
+                });
+
+                expect(order).toEqual(["main", "drain"]);
+                await expectRecordCount(1);
+            });
+
             test("triggers rollback when hook throws", async () => {
                 try {
                     await uow.wrap(async (c) => {
@@ -593,6 +608,98 @@ describe("PostgresUnitOfWorkForTesting", () => {
                     expect((e as AggregateError).cause).toBeUndefined();
                 }
             });
+        });
+    });
+
+    describe("onEveryCommit observer", () => {
+        test("runs after successful test transaction commit and after afterCommit hooks", async () => {
+            const order: string[] = [];
+            let directClientError: unknown;
+            const unsubscribe = uow.onEveryCommit(async () => {
+                order.push("observer");
+                directClientError = captureSyncError(() => uow.getClient());
+
+                await uow.withClient(async (c) => {
+                    await insertRecord(c, 2);
+                });
+            });
+
+            try {
+                await uow.wrap(async (c) => {
+                    uow.afterCommit(() => { order.push("afterCommit"); });
+                    await insertRecord(c, 1);
+                });
+
+                expect(order).toEqual(["afterCommit", "observer"]);
+                expectNoActiveTransaction(directClientError);
+                await expectRecordIds([1, 2]);
+            } finally {
+                unsubscribe();
+            }
+        });
+
+        test("does not run when a nested savepoint is released before root commit", async () => {
+            const order: string[] = [];
+            const unsubscribe = uow.onEveryCommit(() => {
+                order.push("observer");
+            });
+
+            try {
+                await uow.wrap(async (root) => {
+                    await insertRecord(root, 1);
+
+                    await uow.wrap(
+                        async (savepoint) => {
+                            await insertRecord(savepoint, 2);
+                        },
+                        { propagation: Propagation.NESTED }
+                    );
+
+                    order.push("after savepoint release");
+                    expect(order).toEqual(["after savepoint release"]);
+                });
+
+                expect(order).toEqual([
+                    "after savepoint release",
+                    "observer",
+                ]);
+                await expectRecordIds([1, 2]);
+            } finally {
+                unsubscribe();
+            }
+        });
+
+        test("logs observer errors without blocking later observers or changing the scope result", async () => {
+            const observerFailure = new Error("observer failure");
+            const errorSpy = vi
+                .spyOn(console, "error")
+                .mockImplementation(() => {});
+            let secondObserverCalled = false;
+            const unsubscribeFailing = uow.onEveryCommit(() => {
+                throw observerFailure;
+            });
+            const unsubscribeSecond = uow.onEveryCommit(() => {
+                secondObserverCalled = true;
+            });
+
+            try {
+                const result = await uow.wrap(async (c) => {
+                    await insertRecord(c, 1);
+                    return "ok";
+                });
+
+                expect(result).toBe("ok");
+                expect(secondObserverCalled).toBe(true);
+                expect(errorSpy).toHaveBeenCalledWith(
+                    "PostgresUnitOfWorkForTesting onEveryCommit observer failed",
+                    observerFailure
+                );
+                await expectRecordIds([1]);
+            } finally {
+                unsubscribeFailing();
+                unsubscribeSecond();
+                errorSpy.mockRestore();
+            }
         });
     });
 });

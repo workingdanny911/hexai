@@ -1,5 +1,6 @@
 import type {
     Message,
+    StoredEvent,
     SubscribableEventPublisher,
 } from "@hexaijs/core";
 
@@ -10,11 +11,13 @@ import {
 import {
     createTransactionResourceKey,
     type PostgresUnitOfWork,
-    type TransactionResourceAware,
+    type TransactionResources,
 } from "./postgres-unit-of-work.js";
 
-export type PostgresTransactionalEventStoreSinkConfig =
-    PostgresEventAppenderConfig;
+export interface PostgresTransactionalEventStoreSinkConfig
+    extends PostgresEventAppenderConfig {
+    onStored?: (storedEvents: StoredEvent[]) => void | Promise<void>;
+}
 
 interface BufferedEvents {
     events: Message[];
@@ -39,15 +42,17 @@ export class PostgresTransactionalEventStoreSink {
             "postgres-transactional-event-store-sink"
         );
     private readonly appender: PostgresEventAppender;
-    private readonly resources: TransactionResourceAware;
+    private readonly onStored:
+        PostgresTransactionalEventStoreSinkConfig["onStored"];
+    private readonly resources: TransactionResources;
 
     constructor(
-        private readonly unitOfWork:
-            PostgresUnitOfWork & TransactionResourceAware,
+        private readonly unitOfWork: PostgresUnitOfWork & TransactionResources,
         config: PostgresTransactionalEventStoreSinkConfig = {}
     ) {
-        assertTransactionResourceAware(unitOfWork);
+        assertTransactionResources(unitOfWork);
         this.appender = new PostgresEventAppender(config);
+        this.onStored = config.onStored;
         this.resources = unitOfWork;
     }
 
@@ -61,7 +66,9 @@ export class PostgresTransactionalEventStoreSink {
 
         if (!buffer.drainHookRegistered) {
             this.registerDrainHook(buffer);
+            buffer.events.push(...events);
             await this.startTransactionForCommitHooks();
+            return;
         }
 
         buffer.events.push(...events);
@@ -109,10 +116,11 @@ export class PostgresTransactionalEventStoreSink {
         try {
             while (buffer.events.length > 0) {
                 const events = buffer.events.splice(0);
-                await this.appender.appendAll(
+                const storedEvents = await this.appender.appendAll(
                     events,
                     this.unitOfWork.getClient()
                 );
+                await this.onStored?.(storedEvents);
             }
         } finally {
             buffer.draining = false;
@@ -121,10 +129,10 @@ export class PostgresTransactionalEventStoreSink {
     }
 }
 
-function assertTransactionResourceAware(
+function assertTransactionResources(
     unitOfWork: PostgresUnitOfWork
-): asserts unitOfWork is PostgresUnitOfWork & TransactionResourceAware {
-    const candidate = unitOfWork as Partial<TransactionResourceAware>;
+): asserts unitOfWork is PostgresUnitOfWork & TransactionResources {
+    const candidate = unitOfWork as Partial<TransactionResources>;
 
     if (
         typeof candidate.getOrCreateTransactionResource !== "function" ||
@@ -132,14 +140,14 @@ function assertTransactionResourceAware(
         typeof candidate.setTransactionResource !== "function"
     ) {
         throw new Error(
-            "PostgresTransactionalEventStoreSink requires a Postgres unit of work that implements TransactionResourceAware"
+            "PostgresTransactionalEventStoreSink requires a Postgres unit of work that implements TransactionResources"
         );
     }
 }
 
 export function attachPostgresEventStoreSink(
     publisher: SubscribableEventPublisher<Message>,
-    unitOfWork: PostgresUnitOfWork & TransactionResourceAware,
+    unitOfWork: PostgresUnitOfWork & TransactionResources,
     config: PostgresTransactionalEventStoreSinkConfig = {}
 ): () => void {
     const sink = new PostgresTransactionalEventStoreSink(unitOfWork, config);

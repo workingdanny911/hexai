@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.0] - 2026-06-29
+
+### Breaking Changes
+
+- The base `UnitOfWork` interface now exposes only `scope()`. Consumers and
+  implementations that need direct transaction client access should depend on
+  `UnitOfWorkClientAccess`; consumers and implementations that need
+  `beforeCommit`, `afterCommit`, or `afterRollback` should depend on
+  `TransactionLifecycle`.
+
+### Added
+
+- Added `UnitOfWorkClientAccess` as the core capability interface for
+  `getClient()` and deprecated `wrap()` support.
+- Added `TransactionLifecycle` as the core capability interface for
+  transaction lifecycle hooks.
+
 ## [0.11.0] - 2026-06-26
 
 ### Added

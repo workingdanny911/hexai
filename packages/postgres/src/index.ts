@@ -9,6 +9,7 @@ export {
 } from "./helpers.js";
 export * from "./postgres-event-store.js";
 export {
+    PostgresTransactionalEventStoreSink,
     attachPostgresEventStoreSink,
     TransactionalEventStoreSinkClosedError,
     type PostgresTransactionalEventStoreSinkConfig,

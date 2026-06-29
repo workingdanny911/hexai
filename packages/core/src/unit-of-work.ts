@@ -28,13 +28,18 @@ export interface TransactionLifecycle {
 export interface UnitOfWork<
     Client = unknown,
     Options extends BaseUnitOfWorkOptions = BaseUnitOfWorkOptions,
-> extends TransactionLifecycle {
-    getClient(): Client;
-
+> {
     scope<T>(
         fn: () => Promise<T>,
         options?: Partial<Options>
     ): Promise<T>;
+}
+
+export interface UnitOfWorkClientAccess<
+    Client = unknown,
+    Options extends BaseUnitOfWorkOptions = BaseUnitOfWorkOptions,
+> extends UnitOfWork<Client, Options> {
+    getClient(): Client;
 
     /** @deprecated Use scope() for transaction boundaries and withClient() for client access. */
     wrap<T>(

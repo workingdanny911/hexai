@@ -309,7 +309,9 @@ async function confirmOrder(
 
 ### UnitOfWork
 
-Interface for transaction management. The primary API is `scope()` for defining transaction boundaries.
+Base interface for transaction boundaries. The base `UnitOfWork` contract only
+requires `scope()`, so application code that only needs a transaction boundary
+does not also depend on client access or lifecycle hooks.
 
 ```typescript
 import { UnitOfWork, Propagation } from "@hexaijs/core";
@@ -327,43 +329,67 @@ await unitOfWork.scope(async () => {
 });
 ```
 
-#### scope() vs wrap()
+#### Client Access Capability
 
-| Method | Signature | Status |
-|--------|-----------|--------|
-| `scope(fn)` | `fn: () => Promise<T>` | **Recommended** |
-| `wrap(fn)` | `fn: (client) => Promise<T>` | **Deprecated** |
+Use `UnitOfWorkClientAccess` only when code needs direct access to an
+implementation-owned transaction client or the legacy `wrap()` API.
+
+```typescript
+import { UnitOfWorkClientAccess } from "@hexaijs/core";
+
+async function runLegacyWork<Client>(
+    unitOfWork: UnitOfWorkClientAccess<Client>
+): Promise<void> {
+    await unitOfWork.wrap(async (client) => {
+        await legacyRepository.save(client);
+    });
+}
+```
+
+| Method | Defined on | Status |
+|--------|------------|--------|
+| `scope(fn)` | `UnitOfWork` | **Recommended** |
+| `getClient()` | `UnitOfWorkClientAccess` | Capability-specific |
+| `wrap(fn)` | `UnitOfWorkClientAccess` | **Deprecated** |
 
 `scope()` defines a transaction boundary without exposing the database client. Client access is handled separately through infrastructure methods (e.g., `withClient()` in `@hexaijs/postgres`). This separation enables lazy transaction initialization — the actual `BEGIN` is deferred until the first client access.
 
-#### Transaction Lifecycle Hooks
+#### Transaction Lifecycle Capability
 
-Register callbacks that execute at specific points in the transaction lifecycle. Hooks must be registered inside an active `scope()`.
+Use `TransactionLifecycle` when code needs to register callbacks that execute at
+specific points in the transaction lifecycle. Hooks must be registered inside an
+active `scope()` when the implementation enforces scope-local lifecycle state.
 
 ```typescript
-await unitOfWork.scope(async () => {
-    // Runs before COMMIT — if it throws, transaction rolls back instead
-    unitOfWork.beforeCommit(async () => {
-        await validateBusinessRules();
+import { TransactionLifecycle, UnitOfWork } from "@hexaijs/core";
+
+async function saveOrder(
+    unitOfWork: UnitOfWork & TransactionLifecycle
+): Promise<void> {
+    await unitOfWork.scope(async () => {
+        // Runs before COMMIT — if it throws, transaction rolls back instead
+        unitOfWork.beforeCommit(async () => {
+            await validateBusinessRules();
+        });
+
+        // Runs after every main beforeCommit hook and still before COMMIT
+        unitOfWork.beforeCommit(async () => {
+            await flushBufferedWork();
+        }, { phase: "drain" });
+
+        // Runs after successful COMMIT (best-effort)
+        unitOfWork.afterCommit(async () => {
+            await sendNotification();
+        });
+
+        // Runs after ROLLBACK (best-effort)
+        unitOfWork.afterRollback(async () => {
+            await cleanupResources();
+        });
+
+        await repository.save(order);
     });
-
-    // Runs after every main beforeCommit hook and still before COMMIT
-    unitOfWork.beforeCommit(async () => {
-        await flushBufferedWork();
-    }, { phase: "drain" });
-
-    // Runs after successful COMMIT (best-effort)
-    unitOfWork.afterCommit(async () => {
-        await sendNotification();
-    });
-
-    // Runs after ROLLBACK (best-effort)
-    unitOfWork.afterRollback(async () => {
-        await cleanupResources();
-    });
-
-    await repository.save(order);
-});
+}
 ```
 
 **Hook execution semantics:**
@@ -381,6 +407,10 @@ Use the default `beforeCommit` phase for validation and other ordinary commit
 guards. Use the `"drain"` phase for work that must run after those guards but
 still inside the same transaction, such as flushing transaction-local buffers.
 Main `beforeCommit` hooks may register drain hooks for the same transaction.
+
+Instance-level observers such as Postgres `onEveryCommit()` are not part of the
+core lifecycle capability. They belong to infrastructure packages that can define
+their own transaction semantics.
 
 #### Transaction Propagation
 
@@ -471,7 +501,9 @@ throw new DuplicateObjectError("Order with this ID already exists");
 | `Id<T>` | Value object for typed identities |
 | `Identifiable<T>` | Interface for entities with identity |
 | `Repository<T>` | Interface for aggregate persistence |
-| `UnitOfWork` | Interface for transaction management (`scope()` for boundaries, `wrap()` deprecated) |
+| `UnitOfWork` | Base transaction-boundary interface with `scope()` only |
+| `UnitOfWorkClientAccess` | Capability interface for `getClient()` and deprecated `wrap()` |
+| `TransactionLifecycle` | Capability interface for `beforeCommit`, `afterCommit`, and `afterRollback` hooks |
 | `TransactionHook` | Type for hook callbacks: `() => void \| Promise<void>` |
 | `TransactionHooks` | Reusable hook registry with commit/rollback lifecycle execution |
 | `Propagation` | Enum for transaction propagation modes |

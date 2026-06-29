@@ -21,15 +21,10 @@ function createMockUnitOfWork(): UnitOfWork<void, never> & {
 } {
     const scopeSpy = vi.fn();
     return {
-        getClient: () => null,
         scope: async <T>(fn: () => Promise<T>): Promise<T> => {
             scopeSpy();
             return fn();
         },
-        wrap: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
-        beforeCommit() {},
-        afterCommit() {},
-        afterRollback() {},
         scopeSpy,
     };
 }

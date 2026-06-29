@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
     Message,
     type EventSubscriber,
+    type StoredEvent,
     type SubscribableEventPublisher,
 } from "@hexaijs/core";
 
@@ -27,6 +28,20 @@ class EventStoreSinkEvent extends Message<{ value: string }> {
 
 function event(value: string): EventStoreSinkEvent {
     return new EventStoreSinkEvent({ value });
+}
+
+interface StoredEventSummary {
+    position: number;
+    value: string;
+}
+
+function summarizeStoredEvents(
+    storedEvents: StoredEvent[]
+): StoredEventSummary[] {
+    return storedEvents.map((stored) => ({
+        position: stored.position,
+        value: stored.event.getPayload().value,
+    }));
 }
 
 class TestEventPublisher implements SubscribableEventPublisher<Message> {
@@ -83,6 +98,34 @@ describe("PostgresTransactionalEventStoreSink", () => {
         expect(await readPositionCounter()).toBe(2);
     });
 
+    test("notifies onStored with stored positions before the transaction commits", async () => {
+        const batches: StoredEventSummary[][] = [];
+        const callbackSink = new PostgresTransactionalEventStoreSink(uow, {
+            onStored: async (storedEvents) => {
+                batches.push(summarizeStoredEvents(storedEvents));
+
+                expect(await readCommittedEvents()).toEqual([]);
+            },
+        });
+
+        await uow.scope(async () => {
+            await callbackSink.accept(event("first"), event("second"));
+
+            expect(batches).toEqual([]);
+        });
+
+        expect(batches).toEqual([
+            [
+                { position: 1, value: "first" },
+                { position: 2, value: "second" },
+            ],
+        ]);
+        expect(await readCommittedEvents()).toEqual([
+            { position: 1, value: "first" },
+            { position: 2, value: "second" },
+        ]);
+    });
+
     test("drops accepted events when the transaction rolls back", async () => {
         await expect(
             uow.scope(async () => {
@@ -91,6 +134,44 @@ describe("PostgresTransactionalEventStoreSink", () => {
                 throw new Error("command failed");
             })
         ).rejects.toThrow("command failed");
+
+        expect(await readCommittedEvents()).toEqual([]);
+        expect(await readPositionCounter()).toBe(0);
+    });
+
+    test("does not call onStored when the transaction rolls back before drain", async () => {
+        const batches: StoredEventSummary[][] = [];
+        const callbackSink = new PostgresTransactionalEventStoreSink(uow, {
+            onStored: (storedEvents) => {
+                batches.push(summarizeStoredEvents(storedEvents));
+            },
+        });
+
+        await expect(
+            uow.scope(async () => {
+                await callbackSink.accept(event("rolled-back"));
+
+                throw new Error("command failed");
+            })
+        ).rejects.toThrow("command failed");
+
+        expect(batches).toEqual([]);
+        expect(await readCommittedEvents()).toEqual([]);
+        expect(await readPositionCounter()).toBe(0);
+    });
+
+    test("rolls back accepted events when onStored rejects", async () => {
+        const callbackSink = new PostgresTransactionalEventStoreSink(uow, {
+            onStored: async () => {
+                throw new Error("onStored failed");
+            },
+        });
+
+        await expect(
+            uow.scope(async () => {
+                await callbackSink.accept(event("should-roll-back"));
+            })
+        ).rejects.toThrow("onStored failed");
 
         expect(await readCommittedEvents()).toEqual([]);
         expect(await readPositionCounter()).toBe(0);
@@ -106,6 +187,33 @@ describe("PostgresTransactionalEventStoreSink", () => {
         ]);
     });
 
+    test("notifies onStored once per drained append batch", async () => {
+        const batches: StoredEventSummary[][] = [];
+        let callbackSink!: PostgresTransactionalEventStoreSink;
+        callbackSink = new PostgresTransactionalEventStoreSink(uow, {
+            onStored: async (storedEvents) => {
+                batches.push(summarizeStoredEvents(storedEvents));
+
+                if (batches.length === 1) {
+                    await callbackSink.accept(event("from-callback"));
+                }
+            },
+        });
+
+        await uow.scope(async () => {
+            await callbackSink.accept(event("from-handler"));
+        });
+
+        expect(batches).toEqual([
+            [{ position: 1, value: "from-handler" }],
+            [{ position: 2, value: "from-callback" }],
+        ]);
+        expect(await readCommittedEvents()).toEqual([
+            { position: 1, value: "from-handler" },
+            { position: 2, value: "from-callback" },
+        ]);
+    });
+
     test("drains events published by main-phase beforeCommit hooks", async () => {
         await uow.scope(async () => {
             await sink.accept(event("from-handler"));
@@ -118,6 +226,22 @@ describe("PostgresTransactionalEventStoreSink", () => {
         expect(await readCommittedEvents()).toEqual([
             { position: 1, value: "from-handler" },
             { position: 2, value: "from-commit-hook" },
+        ]);
+    });
+
+    test("preserves accept order when a concurrent accept runs before the first accept resumes", async () => {
+        const orderingSink = new PostgresTransactionalEventStoreSink(uow);
+
+        await uow.scope(async () => {
+            const firstAccept = orderingSink.accept(event("first"));
+
+            await orderingSink.accept(event("second"));
+            await firstAccept;
+        });
+
+        expect(await readCommittedEvents()).toEqual([
+            { position: 1, value: "first" },
+            { position: 2, value: "second" },
         ]);
     });
 

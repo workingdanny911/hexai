@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1] - 2026-06-29
+
+### Changed
+
+- Peer dependency: `@hexaijs/core` `^0.11.0` → `^0.11.0 || ^0.12.0`.
+- Test mocks now align with the smaller base `UnitOfWork` surface by requiring
+  only `scope()` where no client access or lifecycle hooks are needed.
+
 ## [0.6.0] - 2026-06-26
 
 ### Changed
