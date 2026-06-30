@@ -653,6 +653,23 @@ See [`docs/projection.md`](./docs/projection.md) for the projection architecture
 
 The package provides a migration runner that supports both SQL and JavaScript migration formats.
 
+SQL-format migrations run one pending migration per transaction. The runner
+executes `migration.sql` and records the migration ledger row in the same
+transaction, so a crash before commit rolls both back. Runners that use the same
+namespace serialize on the namespace-specific migrations table; different
+namespaces use different tables and can progress independently.
+
+SQL migration files must be safe to run inside a PostgreSQL transaction. Do not
+include transaction-control statements (`BEGIN`, `COMMIT`, `ROLLBACK`) or
+commands PostgreSQL disallows in transaction blocks, such as
+`CREATE INDEX CONCURRENTLY` or `VACUUM`. The runner adds a unique index on
+ledger `name` values and fails fast if an existing ledger already contains
+duplicate migration names.
+
+For SQL-format migrations, `dryRun: true` is read-only: it reads the existing
+ledger if present and prints pending migrations without creating or altering
+ledger tables, indexes, or application schema.
+
 ```typescript
 import { runMigrations } from "@hexaijs/postgres";
 
