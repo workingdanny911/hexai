@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.15.0] - 2026-07-01
+
+### Changed
+
+- SQL-format migrations now run each `migration.sql` and its ledger insert in a
+  single transaction. If the process fails before commit, both the schema/data
+  change and the ledger row roll back.
+- SQL-format migration runners now serialize per namespace-specific migrations
+  table with a PostgreSQL advisory lock.
+- SQL-format migration ledgers now enforce unique migration names. Existing
+  ledgers with duplicate names fail fast instead of being auto-repaired.
+- SQL-format `dryRun` no longer creates or updates migration ledger tables,
+  indexes, or legacy ledger columns.
+
+### Migration Notes
+
+- SQL migration files must be safe to run inside a PostgreSQL transaction. Do
+  not use transaction-control statements or PostgreSQL commands that are
+  forbidden in transaction blocks, such as `CREATE INDEX CONCURRENTLY` or
+  `VACUUM`.
+
 ## [0.14.0] - 2026-06-29
 
 ### Added
