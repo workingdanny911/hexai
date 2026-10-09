@@ -1,7 +1,8 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as os from "node:os";
 
-import { beforeEach, expect } from "vitest";
+import { afterAll, beforeEach, expect } from "vitest";
 
 import { generateApplicationBuilder } from "./main.js";
 
@@ -40,10 +41,14 @@ function getOutputFile(contextPath: string) {
 }
 
 export function makeContext(name: string): TestContext {
+    return createContextAt(getContextPath(name));
+}
+
+function createContextAt(contextPath: string): TestContext {
     return {
-        path: getContextPath(name),
-        outputDir: getOutputDir(getContextPath(name)),
-        outputFile: getOutputFile(getContextPath(name)),
+        path: contextPath,
+        outputDir: getOutputDir(contextPath),
+        outputFile: getOutputFile(contextPath),
         generate(options = {}) {
             return generateApplicationBuilder(this.path, {
                 configFile: DEFAULT_CONFIG_FILE,
@@ -85,8 +90,17 @@ export function makeContext(name: string): TestContext {
     };
 }
 
+// Spec files run in parallel, so each call works on its own copy of the
+// fixture: no two spec files write or delete the same generated file.
 export function useContext(name: string): TestContext {
-    const context = makeContext(name);
+    const copyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hexai-fixture-"));
+    const contextPath = path.join(copyRoot, name);
+    fs.cpSync(getContextPath(name), contextPath, { recursive: true });
+    const context = createContextAt(contextPath);
+
+    afterAll(() => {
+        fs.rmSync(copyRoot, { recursive: true, force: true });
+    });
 
     beforeEach(() => {
         context.cleanUp();

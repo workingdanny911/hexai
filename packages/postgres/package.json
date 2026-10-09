@@ -69,6 +69,7 @@
     "pg": "^8.0.0"
   },
   "devDependencies": {
+    "@hexaijs/application": "workspace:^",
     "@hexaijs/core": "workspace:^",
     "@hexaijs/tooling": "workspace:*",
     "@typescript/native-preview": "^7.0.0-dev",

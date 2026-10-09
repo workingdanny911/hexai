@@ -1,12 +1,14 @@
 import { Message, UnitOfWork } from "@hexaijs/core";
 import {
     Application,
+    ApplicationBuilder,
     ErrorResult,
     EventHandlingResult,
     Result,
     SuccessResult,
 } from "./application.js";
-import { ApplicationErrorFactory } from "./error.js";
+import { ApplicationError, ApplicationErrorFactory } from "./error.js";
+import { fanOut } from "./fan-out.js";
 import { Command } from "./command.js";
 import { Query } from "./query.js";
 
@@ -80,14 +82,115 @@ export class SimpleCompositeApplication implements Application {
             }
         };
 
-        return await this.unitOfWork.scope(async () => {
-            try {
-                await Promise.all(apps.map((app) => throwIfError(app)));
-            } catch (e) {
-                return e as ErrorResult;
+        // The application failure must reject the scope callback so the unit
+        // of work rolls back; returning it from inside the scope would commit
+        // the writes of the applications that succeeded. It is rejected as a
+        // fresh Error because a unit of work may not treat a falsy rejection
+        // as a failure (Postgres does not abort a nested scope on
+        // `undefined`). Only that failure becomes an ErrorResult; unit-of-work
+        // failures reject as before.
+        let applicationFailure: CompositeEventHandlingFailure | undefined;
+        try {
+            await this.unitOfWork.scope(async () => {
+                try {
+                    await fanOut(apps, throwIfError);
+                } catch (failure) {
+                    applicationFailure = new CompositeEventHandlingFailure(
+                        event,
+                        failure
+                    );
+                    throw applicationFailure;
+                }
+            });
+        } catch (error) {
+            if (applicationFailure && error === applicationFailure) {
+                return toErrorResult(applicationFailure.failure, event);
             }
+            throw error;
+        }
 
-            return new SuccessResult(null);
+        return applicationFailure
+            ? toErrorResult(applicationFailure.failure, event)
+            : new SuccessResult(null);
+    }
+}
+
+class CompositeEventHandlingFailure extends Error {
+    constructor(
+        event: Message,
+        readonly failure: unknown
+    ) {
+        super(`Handling event '${event.getMessageType()}' failed`, {
+            cause: failure,
         });
+        this.name = "CompositeEventHandlingFailure";
+    }
+}
+
+function toErrorResult(failure: unknown, event: Message): ErrorResult {
+    if (isErrorResult(failure)) {
+        return failure;
+    }
+    if (failure instanceof ApplicationError) {
+        return new ErrorResult(failure);
+    }
+
+    return new ErrorResult(
+        ApplicationBuilder.defaultErrorTransformer(toError(failure), {
+            message: event,
+        })
+    );
+}
+
+// Duck-typed because applications may come from another installed copy of
+// this package, whose ErrorResult is a different class.
+function isErrorResult(value: unknown): value is ErrorResult {
+    if (typeof value !== "object" || value === null) {
+        return false;
+    }
+
+    const candidate = value as {
+        isError?: unknown;
+        getOrThrow?: unknown;
+    };
+    return (
+        candidate.isError === true &&
+        "error" in candidate &&
+        typeof candidate.getOrThrow === "function"
+    );
+}
+
+// Keeps the original value in the cause chain: structured rejections carry
+// fields such as a SQLSTATE `code`, and errors from another realm fail
+// `instanceof Error` but still carry their own cause chain.
+function toError(failure: unknown): Error {
+    if (failure instanceof Error) {
+        return failure;
+    }
+
+    return new Error(describeFailure(failure), { cause: failure });
+}
+
+function describeFailure(failure: unknown): string {
+    // Each step may throw (getters, null-prototype objects, revoked proxies);
+    // describing a failure must never replace it with a new one.
+    try {
+        const message = (failure as { message?: unknown } | null | undefined)
+            ?.message;
+        if (typeof message === "string") {
+            return message;
+        }
+    } catch {
+        // Fall through to the next description.
+    }
+    try {
+        return String(failure);
+    } catch {
+        // Fall through to the next description.
+    }
+    try {
+        return Object.prototype.toString.call(failure);
+    } catch {
+        return "Unknown failure";
     }
 }

@@ -6,6 +6,7 @@ import {
 } from "@hexaijs/core";
 
 import { ExecutionScope } from "./execution-scope.js";
+import { fanOut } from "./fan-out.js";
 
 interface SecurityContextAwareMessage extends Message {
     withSecurityContext(securityContext: unknown): Message;
@@ -58,6 +59,6 @@ export class ApplicationEventPublisher
     }
 
     private async runCallbacks(event: Message): Promise<void> {
-        await Promise.all([...this.callbacks].map((cb) => cb(event)));
+        await fanOut([...this.callbacks], (cb) => cb(event));
     }
 }

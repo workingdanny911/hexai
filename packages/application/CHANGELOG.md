@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.2] - 2026-10-09
+
+### Fixed
+
+- Event fan-out no longer settles while handlers are still running.
+  `ApplicationEventPublisher.publish()`, `ApplicationBuilder`-built
+  applications' `handleEvent()` and `SimpleCompositeApplication.handleEvent()`
+  previously used `Promise.all`, so the first failure ended the caller's
+  `await` (and any enclosing `UnitOfWork.scope()`) while sibling handlers kept
+  running. Their later SQL could then run on a released connection outside the
+  transaction and autocommit. Fan-out now waits for every started handler to
+  settle before reporting the first observed failure.
+- `SimpleCompositeApplication.handleEvent()` now rolls back failed event
+  handling instead of committing partial writes. It used to return the
+  failure from inside `UnitOfWork.scope()`, so the scope committed the writes
+  of the applications that succeeded. The failure now rejects the scope
+  callback. Inside an outer scope, a failed `handleEvent()` therefore rolls
+  back the outer transaction as well. The Postgres unit of work then rejects
+  the outer scope with `TransactionAbortedError`. The SQLite unit of work
+  rolls back without rejecting, so callers must check the returned result.
+- `SimpleCompositeApplication.handleEvent()` now returns a proper
+  `ErrorResult` when an application throws. It used to return the raw thrown
+  value typed as `ErrorResult`. That value is now wrapped in an
+  `ApplicationError` that keeps it in its `cause` chain. Failures of the unit
+  of work itself still reject `handleEvent()`.
+
 ## [0.6.1] - 2026-06-29
 
 ### Changed

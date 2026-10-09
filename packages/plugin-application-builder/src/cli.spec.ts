@@ -3,13 +3,14 @@ import * as path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { makeContext, useContext } from "./test.js";
+import { useContext } from "./test.js";
 
 const CLI_PATH = path.join(__dirname, "../dist/cli.js");
 const EXIT_CODE_ERROR = 1;
 
 describe.sequential("Build Plugin CLI", () => {
     const sampleContext = useContext("sample-context");
+    const emptyContext = useContext("empty-context");
 
     function runCliWithContext(contextPath: string, args: string[] = []) {
         return execSync(
@@ -77,19 +78,12 @@ describe.sequential("Build Plugin CLI", () => {
     });
 
     test("generates empty builder for context with no handlers", () => {
-        const emptyContext = makeContext("empty-context");
-        emptyContext.cleanUp();
+        const cliOutput = runCliWithContext(emptyContext.path);
 
-        try {
-            const cliOutput = runCliWithContext(emptyContext.path);
-
-            expectSuccessfulBuildOutput(cliOutput);
-            emptyContext.expectOutputFileToContain(
-                "export function createApplicationBuilder()",
-                "return new ApplicationBuilder();"
-            );
-        } finally {
-            emptyContext.cleanUp();
-        }
+        expectSuccessfulBuildOutput(cliOutput);
+        emptyContext.expectOutputFileToContain(
+            "export function createApplicationBuilder()",
+            "return new ApplicationBuilder();"
+        );
     });
 });
