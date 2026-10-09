@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { Message } from "@hexaijs/core";
-import { waitForMs } from "@hexaijs/core/test";
+import { waitForMs, waitForTicks } from "@hexaijs/core/test";
 
 import { ApplicationContext } from "../application-context.js";
 import { ApplicationError, ApplicationErrorTransformingContext } from "../error.js";
 import { ApplicationBuilder, SuccessResult } from "../application.js";
 import { MessageHandler } from "../message-handler.js";
 import {
+    createDeferred,
     DummyCommand,
     DummyEvent,
     expectApplicationError,
     expectExecutionTimeLessThan,
     expectSuccessResult,
+    trackSettlement,
 } from "../test/index.js";
 
 describe("Application, handling message", () => {
@@ -244,29 +246,59 @@ describe("Application, handling message", () => {
         );
     });
 
-    test("event handling is fail-fast", async () => {
-        let eventHandlerCompletedExecution = false;
+    test("waits for every event handler to settle before returning the error", async () => {
+        const slowHandlerGate = createDeferred();
+        let isSlowHandlerFinished = false;
         const failingEventHandler = createEventHandlerMock({
-            id: "event-handler-id-1",
+            id: "failing-event-handler",
+            handle: async () => {
+                throw new Error("failure!");
+            },
+        });
+        const slowEventHandler = createEventHandlerMock({
+            id: "slow-event-handler",
+            handle: async () => {
+                await slowHandlerGate.promise;
+                isSlowHandlerFinished = true;
+            },
+        });
+        const application = sutBuilder
+            .withEventHandler(() => failingEventHandler)
+            .withEventHandler(() => slowEventHandler)
+            .build();
+
+        const handling = trackSettlement(application.handleEvent(event));
+        await waitForTicks();
+
+        expect(handling.isSettled).toBe(false);
+
+        slowHandlerGate.resolve();
+
+        expectApplicationError(await handling.promise, {
+            message: "failure!",
+        });
+        expect(isSlowHandlerFinished).toBe(true);
+    });
+
+    test("stops dispatching to later event handlers when one throws synchronously", async () => {
+        const failingEventHandler = createEventHandlerMock({
+            id: "failing-event-handler",
             handle: () => {
                 throw new Error("failure!");
             },
         });
-        const eventHandler = createEventHandlerMock({
-            id: "event-handler-id-2",
-            handle: () =>
-                process.nextTick(() => {
-                    eventHandlerCompletedExecution = true;
-                }),
+        const laterEventHandler = createEventHandlerMock({
+            id: "later-event-handler",
         });
-
-        await sutBuilder
+        const application = sutBuilder
             .withEventHandler(() => failingEventHandler)
-            .withEventHandler(() => eventHandler)
-            .build()
-            .handleEvent(event);
+            .withEventHandler(() => laterEventHandler)
+            .build();
 
-        expect(eventHandlerCompletedExecution).toBe(false);
+        const result = await application.handleEvent(event);
+
+        expectApplicationError(result, { message: "failure!" });
+        expect(laterEventHandler.handle).not.toBeCalled();
     });
 
     test("transforms error thrown in event handler", async () => {

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, Mock, test, vi } from "vitest";
 
 import { Message, MessageTrace } from "@hexaijs/core";
-import { DummyMessage } from "@hexaijs/core/test";
+import { DummyMessage, waitForTicks } from "@hexaijs/core/test";
 import { ApplicationEventPublisher } from "./application-event-publisher.js";
 import { ExecutionScope } from "./execution-scope.js";
+import { createDeferred, trackSettlement } from "./test/index.js";
 
 class SecurityAwareEvent extends Message<null> {
     private securityContext?: { role: string };
@@ -77,6 +78,58 @@ describe("application event publisher", () => {
         });
 
         await expect(publisher.publish(event1)).rejects.toThrowError("test");
+    });
+
+    describe("when a subscriber fails", () => {
+        test("waits for the other subscribers to settle before rejecting", async () => {
+            const slowSubscriberGate = createDeferred();
+            let isSlowSubscriberFinished = false;
+            publisher.subscribe(async () => {
+                throw new Error("fast failure");
+            });
+            publisher.subscribe(async () => {
+                await slowSubscriberGate.promise;
+                isSlowSubscriberFinished = true;
+            });
+
+            const publishing = trackSettlement(publisher.publish(event1));
+            await waitForTicks();
+
+            expect(publishing.isSettled).toBe(false);
+
+            slowSubscriberGate.resolve();
+
+            await expect(publishing.promise).rejects.toThrowError(
+                "fast failure"
+            );
+            expect(isSlowSubscriberFinished).toBe(true);
+        });
+
+        test("waits for already started subscribers when a later one throws synchronously", async () => {
+            const slowSubscriberGate = createDeferred();
+            let isSlowSubscriberFinished = false;
+            publisher.subscribe(async () => {
+                await slowSubscriberGate.promise;
+                isSlowSubscriberFinished = true;
+            });
+            publisher.subscribe(() => {
+                throw new Error("synchronous failure");
+            });
+            publisher.subscribe(subscriber);
+
+            const publishing = trackSettlement(publisher.publish(event1));
+            await waitForTicks();
+
+            expect(publishing.isSettled).toBe(false);
+
+            slowSubscriberGate.resolve();
+
+            await expect(publishing.promise).rejects.toThrowError(
+                "synchronous failure"
+            );
+            expect(isSlowSubscriberFinished).toBe(true);
+            expect(subscriber).not.toBeCalled();
+        });
     });
 
     test("unsubscribing", async () => {

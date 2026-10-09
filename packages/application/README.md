@@ -380,6 +380,20 @@ await compositeApp.handleEvent(event);
 `SimpleCompositeApplication` only requires the base `UnitOfWork.scope()`
 contract; client access and transaction lifecycle capabilities are not required.
 
+Event fan-out runs handlers concurrently but settles only after every started
+handler has settled, and then reports the first observed failure. This applies
+to `SimpleCompositeApplication.handleEvent()`, the `handleEvent()` of
+applications built with `ApplicationBuilder`, and
+`ApplicationEventPublisher.publish()`, so the `scope()` transaction never ends
+while a sibling handler can still use it.
+
+When any application fails, `SimpleCompositeApplication.handleEvent()` rolls
+back the `scope()` transaction and resolves to an `ErrorResult`. Failures of
+the unit of work itself reject instead. Inside an outer scope, a failed
+`handleEvent()` rolls back the outer transaction as well. The Postgres unit of
+work then rejects the outer scope with `TransactionAbortedError`. The SQLite
+unit of work rolls back without rejecting, so check the returned result.
+
 ## API Highlights
 
 | Export | Description |

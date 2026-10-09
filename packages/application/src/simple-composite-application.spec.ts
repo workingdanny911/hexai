@@ -1,3 +1,4 @@
+import vm from "node:vm";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { UnitOfWork } from "@hexaijs/core";
 import { waitForMs, waitForTicks } from "@hexaijs/core/test";
@@ -8,11 +9,14 @@ import { ApplicationError } from "./error.js";
 import { CommandInterceptor, EventInterceptor } from "./interceptor.js";
 import {
     createCommandExecutionTrackingInterceptor,
+    createDeferred,
     createEventExecutionTrackingInterceptor,
     DummyCommand,
     DummyEvent,
     expectApplicationError,
+    expectErrorResult,
     expectExecutionTimeLessThan,
+    trackSettlement,
 } from "./test/index.js";
 import { SimpleCompositeApplication } from "./simple-composite-application.js";
 
@@ -26,6 +30,34 @@ function createMockUnitOfWork(): UnitOfWork<void, never> & {
             return fn();
         },
         scopeSpy,
+    };
+}
+
+function createRecordingUnitOfWork(): UnitOfWork<void, never> & {
+    log: string[];
+    rejections: unknown[];
+    write(entry: string): void;
+} {
+    const log: string[] = [];
+    const rejections: unknown[] = [];
+    return {
+        scope: async <T>(fn: () => Promise<T>): Promise<T> => {
+            log.push("begin");
+            try {
+                const result = await fn();
+                log.push("commit");
+                return result;
+            } catch (e) {
+                log.push("rollback");
+                rejections.push(e);
+                throw e;
+            }
+        },
+        log,
+        rejections,
+        write(entry: string) {
+            log.push(entry);
+        },
     };
 }
 
@@ -198,40 +230,313 @@ describe("SimpleCompositeApplication", () => {
         );
     });
 
-    test("event handling is fail-fast", async () => {
-        let isApplication2Completed = false;
-        const application1 = createApplicationMock({
-            handleEvent: async () => {
-                await waitForTicks(1);
-                return new ErrorResult(
-                    new ApplicationError({
-                        message: "error message",
-                    })
-                );
-            },
-        });
-        const application2 = createApplicationMock({
-            handleEvent: async () => {
-                // wait for one more tick to ensure that this handler takes longer than application1
-                await waitForTicks(2);
-
-                isApplication2Completed = true;
-                return new SuccessResult(null);
-            },
-        });
-        const unitOfWork = createMockUnitOfWork();
-
+    test("commits and returns a success result when every application succeeds", async () => {
+        const unitOfWork = createRecordingUnitOfWork();
         const sut = new SimpleCompositeApplication(
             {
-                "1": application1,
-                "2": application2,
+                "1": createApplicationMock(),
+                "2": createApplicationMock(),
             },
             unitOfWork
         );
 
-        await sut.handleEvent(event);
+        const result = await sut.handleEvent(event);
 
-        expect(isApplication2Completed).toBe(false);
+        expect(result).toEqual(new SuccessResult(null));
+        expect(unitOfWork.log).toEqual(["begin", "commit"]);
+    });
+
+    test("rolls back only after every application has settled when one fails", async () => {
+        const errorResult = new ErrorResult(
+            new ApplicationError({
+                message: "error message",
+            })
+        );
+        const slowApplicationGate = createDeferred();
+        const unitOfWork = createRecordingUnitOfWork();
+        const failingApplication = createApplicationMock({
+            eventResult: errorResult,
+        });
+        const slowApplication = createApplicationMock({
+            handleEvent: async () => {
+                await slowApplicationGate.promise;
+                unitOfWork.write("slow application write");
+                return new SuccessResult(null);
+            },
+        });
+
+        const sut = new SimpleCompositeApplication(
+            {
+                "1": failingApplication,
+                "2": slowApplication,
+            },
+            unitOfWork
+        );
+
+        const handling = trackSettlement(sut.handleEvent(event));
+        await waitForTicks();
+
+        expect(handling.isSettled).toBe(false);
+
+        slowApplicationGate.resolve();
+
+        expect(await handling.promise).toBe(errorResult);
+        expect(unitOfWork.log).toEqual([
+            "begin",
+            "slow application write",
+            "rollback",
+        ]);
+    });
+
+    test("does not commit a later application's write when an earlier application throws", async () => {
+        const failure = new Error("application crashed");
+        const unitOfWork = createRecordingUnitOfWork();
+        const throwingApplication = createApplicationMock({
+            handleEvent: () => {
+                throw failure;
+            },
+        });
+        const writingApplication = createApplicationMock({
+            handleEvent: async () => {
+                await waitForTicks(1);
+                unitOfWork.write("later application write");
+                return new SuccessResult(null);
+            },
+        });
+
+        const sut = new SimpleCompositeApplication(
+            {
+                "1": throwingApplication,
+                "2": writingApplication,
+            },
+            unitOfWork
+        );
+
+        const result = await sut.handleEvent(event);
+
+        expectApplicationError(result, {
+            message: "application crashed",
+            cause: failure,
+        });
+        expect(unitOfWork.log).toEqual([
+            "begin",
+            "later application write",
+            "rollback",
+        ]);
+    });
+
+    describe("when an application fails with a falsy value", () => {
+        test.each([undefined, null, 0, ""])(
+            "rejects the scope with an Error and returns an error result for %j",
+            async (falsyFailure) => {
+                const unitOfWork = createRecordingUnitOfWork();
+                const sut = new SimpleCompositeApplication(
+                    {
+                        foo: createApplicationMock({
+                            handleEvent: () => Promise.reject(falsyFailure),
+                        }),
+                    },
+                    unitOfWork
+                );
+
+                const result = await sut.handleEvent(event);
+
+                expectErrorResult(result);
+                expect(unitOfWork.log).toEqual(["begin", "rollback"]);
+                expect(unitOfWork.rejections).toEqual([expect.any(Error)]);
+            }
+        );
+
+        test("rejects the scope with an Error for an error result without an error", async () => {
+            const errorResultWithoutError = new ErrorResult(
+                undefined as unknown as Error
+            );
+            const unitOfWork = createRecordingUnitOfWork();
+            const sut = new SimpleCompositeApplication(
+                {
+                    foo: createApplicationMock({
+                        eventResult: errorResultWithoutError,
+                    }),
+                },
+                unitOfWork
+            );
+
+            const result = await sut.handleEvent(event);
+
+            expect(result).toBe(errorResultWithoutError);
+            expect(unitOfWork.rejections).toEqual([expect.any(Error)]);
+        });
+    });
+
+    describe("when the unit of work itself fails", () => {
+        test("rejects when the scope cannot begin", async () => {
+            const beginFailure = new Error("cannot begin");
+            const application = createApplicationMock();
+            const unitOfWork: UnitOfWork<void, never> = {
+                scope: async () => {
+                    throw beginFailure;
+                },
+            };
+            const sut = new SimpleCompositeApplication(
+                { foo: application },
+                unitOfWork
+            );
+
+            await expect(sut.handleEvent(event)).rejects.toBe(beginFailure);
+            expect(application.handleEvent).not.toBeCalled();
+        });
+
+        test("rejects when committing fails", async () => {
+            const commitFailure = new Error("commit failed");
+            const unitOfWork: UnitOfWork<void, never> = {
+                scope: async <T>(fn: () => Promise<T>): Promise<T> => {
+                    await fn();
+                    throw commitFailure;
+                },
+            };
+            const sut = new SimpleCompositeApplication(
+                { foo: createApplicationMock() },
+                unitOfWork
+            );
+
+            await expect(sut.handleEvent(event)).rejects.toBe(commitFailure);
+        });
+
+        test("rejects when rolling back an application failure fails", async () => {
+            const rollbackFailure = new Error("rollback failed");
+            const unitOfWork: UnitOfWork<void, never> = {
+                scope: async <T>(fn: () => Promise<T>): Promise<T> => {
+                    try {
+                        return await fn();
+                    } catch {
+                        throw rollbackFailure;
+                    }
+                },
+            };
+            const sut = new SimpleCompositeApplication(
+                {
+                    foo: createApplicationMock({
+                        eventResult: new ErrorResult(
+                            new ApplicationError({ message: "app failure" })
+                        ),
+                    }),
+                },
+                unitOfWork
+            );
+
+            await expect(sut.handleEvent(event)).rejects.toBe(
+                rollbackFailure
+            );
+        });
+
+        test("still returns the application's failure when the unit of work does not rethrow it", async () => {
+            const errorResult = new ErrorResult(
+                new ApplicationError({ message: "app failure" })
+            );
+            const swallowingUnitOfWork: UnitOfWork<void, never> = {
+                scope: async <T>(fn: () => Promise<T>): Promise<T> => {
+                    try {
+                        return await fn();
+                    } catch {
+                        return undefined as T;
+                    }
+                },
+            };
+            const sut = new SimpleCompositeApplication(
+                {
+                    foo: createApplicationMock({ eventResult: errorResult }),
+                },
+                swallowingUnitOfWork
+            );
+
+            expect(await sut.handleEvent(event)).toBe(errorResult);
+        });
+    });
+
+    describe("normalizing an application failure into an error result", () => {
+        async function handleEventFailingWith(failure: unknown) {
+            const sut = new SimpleCompositeApplication(
+                {
+                    foo: createApplicationMock({
+                        handleEvent: () => Promise.reject(failure),
+                    }),
+                },
+                createMockUnitOfWork()
+            );
+            const result = await sut.handleEvent(event);
+            expectErrorResult(result);
+            return result;
+        }
+
+        test("keeps a structured failure value reachable through the cause chain", async () => {
+            const structuredFailure = {
+                code: "40001",
+                message: "serialization failure",
+            };
+
+            const result = await handleEventFailingWith(structuredFailure);
+
+            expectApplicationError(result, {
+                message: "serialization failure",
+            });
+            expect((result.error.cause as Error).cause).toBe(
+                structuredFailure
+            );
+        });
+
+        test("keeps an error from another realm in the cause chain", async () => {
+            const foreignError = vm.runInNewContext("new Error('x')");
+
+            const result = await handleEventFailingWith(foreignError);
+
+            expectApplicationError(result, { message: "x" });
+            expect((result.error.cause as Error).cause).toBe(foreignError);
+        });
+
+        test("turns a null-prototype failure value into an error result", async () => {
+            const nullPrototypeFailure = Object.create(null);
+
+            const result = await handleEventFailingWith(nullPrototypeFailure);
+
+            expectApplicationError(result, { message: "[object Object]" });
+            expect((result.error.cause as Error).cause).toBe(
+                nullPrototypeFailure
+            );
+        });
+
+        test("preserves an error result created by another copy of this package", async () => {
+            const foreignErrorResult = {
+                isSuccess: false,
+                isError: true,
+                error: new ApplicationError({ message: "foreign failure" }),
+                getOrThrow(): never {
+                    throw this.error;
+                },
+            };
+            const sut = new SimpleCompositeApplication(
+                {
+                    foo: createApplicationMock({
+                        eventResult: foreignErrorResult as Result<any>,
+                    }),
+                },
+                createMockUnitOfWork()
+            );
+
+            expect(await sut.handleEvent(event)).toBe(foreignErrorResult);
+        });
+
+        test("does not mistake an error carrying only an isError flag for an error result", async () => {
+            const flaggedError = Object.assign(new Error("failure"), {
+                isError: true,
+            });
+
+            const result = await handleEventFailingWith(flaggedError);
+
+            expectApplicationError(result, {
+                message: "failure",
+                cause: flaggedError,
+            });
+        });
     });
 
     test("throws error when handleEvent is called without UnitOfWork", async () => {

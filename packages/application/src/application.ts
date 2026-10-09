@@ -12,6 +12,7 @@ import {
     ApplicationErrorTransformer,
 } from "./error.js";
 import { EventHandler } from "./event-handler.js";
+import { fanOut } from "./fan-out.js";
 import {
     CommandInterceptor,
     QueryInterceptor,
@@ -137,8 +138,8 @@ class GenericApplication implements Application {
             },
             async () => {
                 try {
-                    await Promise.all(
-                        selected.map((eh) => eh.handle(event, this.applicationContext))
+                    await fanOut(selected, (eh) =>
+                        eh.handle(event, this.applicationContext)
                     );
                     return new SuccessResult(null);
                 } catch (e) {
