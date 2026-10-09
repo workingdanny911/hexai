@@ -1,5 +1,92 @@
 # Changelog
 
+## [0.15.1] - 2026-10-09
+
+### Fixed
+
+- Fixed `DefaultPostgresUnitOfWork` leaking the transaction client when
+  `COMMIT` or `ROLLBACK` fails, including rollbacks after a `beforeCommit` hook
+  failure and rollbacks on a client that was already closed. Each such failure
+  used to leave one pooled client checked out for good; after `max` failures
+  every new scope waited for a connection and `pool.end()` never resolved. The
+  client is now cleaned up exactly once on every finalization path. The error
+  a failed scope rejects with is unchanged: when `ROLLBACK` itself fails after
+  a callback or `beforeCommit` failure, the `ROLLBACK` error is still reported
+  instead of the error that caused the rollback.
+- `createPostgresUnitOfWork(pool)` now destroys a client whose `COMMIT` or
+  `ROLLBACK` failed (`release(err)`) instead of returning it to the pool in an
+  unknown state. Successfully finalized clients still go back to the pool, and
+  connection-string units of work still `end()` the client either way.
+- Fixed the client leaking when a transaction fails to start. A root `wrap()`
+  whose `BEGIN` or `SET TRANSACTION` failed never released its client; it now
+  rolls back (if `BEGIN` had succeeded) and releases the client before
+  rejecting with the start failure, as before. If that `ROLLBACK` fails, the
+  client is destroyed; a `ROLLBACK` or cleanup failure there is only logged
+  with `console.error`. A `scope()` whose callback caught a `BEGIN` failure
+  from `withClient()` also kept its client; the client is now destroyed when
+  the scope ends. The errors and hooks of a scope whose start failed are
+  unchanged, and a client whose `BEGIN` failed is destroyed instead of being
+  returned to the pool.
+- Fixed finalization racing a transaction start that was still in flight, for
+  example when a scope callback fails through `Promise.all()` while a sibling
+  `withClient()` is waiting for `BEGIN`. The rollback used to return the
+  client to the pool while `BEGIN` (or `SET TRANSACTION`) was still running,
+  and the start then sent a late `ROLLBACK` and released the client a second
+  time, on a connection another request may already have borrowed, discarding
+  that request's work. Finalization now waits for a start that already holds a
+  client, so exactly one `ROLLBACK` is sent and the client is released once,
+  afterwards. If that `ROLLBACK` fails, the scope settles as in 0.15.0. When
+  `BEGIN` had already completed as the rollback began, the scope rejects with
+  the `ROLLBACK` error and skips `afterRollback` hooks. Otherwise the scope
+  keeps its own outcome (its own error and `afterRollback` hooks, or, for a
+  lazy scope, resolving), and the `ROLLBACK` error goes to the `withClient()`
+  call that started the transaction, or is logged with `console.error` when
+  that call already failed with the start failure. The client is destroyed in
+  each case. A callback that returns while `BEGIN` is still running is closed
+  without commit hooks, as before; one that returns while `SET TRANSACTION` is
+  still running is now rolled back without commit hooks, where 0.15.0 sent
+  `COMMIT` during the start. A start still waiting for a pooled client is not
+  awaited, so a lazy scope no longer blocks on pool acquisition for work it
+  did not await.
+- `COMMIT`, `ROLLBACK` and the client cleanup now wait for a `SAVEPOINT`,
+  `RELEASE SAVEPOINT` or `ROLLBACK TO SAVEPOINT` statement that is still
+  running, so the client is not released while a savepoint statement is in
+  flight. A failure of that statement still reaches the nested scope that
+  sent it.
+- `withClient()` inside a transaction now rejects with
+  `TransactionClosedError` instead of running its callback when the
+  transaction closed while the call was waiting for the client, for example
+  when work the scope did not await resumes after `COMMIT` failed and the
+  client was released. 0.15.0 ran the callback on that client.
+- Fixed nested `wrap()` calls and `Propagation.NESTED` scopes using a client
+  that their transaction had already released. They did not check whether the
+  transaction was still open after waiting for its start (or, for a nested
+  savepoint, for `SAVEPOINT`), so when the transaction closed meanwhile, or
+  when they were entered after the root scope had finished, they still ran
+  their callback or sent `SAVEPOINT` and `RELEASE SAVEPOINT` on that client.
+  They now reject with `TransactionClosedError` without running the callback.
+- Fixed a nested savepoint sending `RELEASE SAVEPOINT` or
+  `ROLLBACK TO SAVEPOINT` after its transaction had already ended. When a
+  `Propagation.NESTED` callback finished after the root scope rolled back and
+  released the client, the savepoint statement reached whatever request had
+  borrowed the connection next and could undo that request's own savepoint
+  work. The savepoint now sends nothing once its transaction has ended: a
+  callback that succeeded rejects with `TransactionClosedError`, and a callback
+  that failed rethrows its own error.
+
+### Changed
+
+- A cleanup passed to `new DefaultPostgresUnitOfWork(factory, cleanUp)`
+  receives the failure as a second argument when the client is left in an
+  unknown state. A cleanup failure still reaches the caller wherever 0.15.0
+  already ran the cleanup, and is only logged with `console.error` where the
+  cleanup is new (0.15.0 leaked the client there). One narrow case differs:
+  when such a custom cleanup throws while a scope is finalized during its own
+  transaction start (a sibling failed while `BEGIN` or `SET TRANSACTION` was
+  still running), which error the scope reports and whether `afterRollback`
+  runs may differ from 0.15.0. The cleanups that `createPostgresUnitOfWork`
+  installs do not throw on these paths.
+
 ## [0.15.0] - 2026-07-01
 
 ### Changed
