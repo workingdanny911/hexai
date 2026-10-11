@@ -454,6 +454,9 @@ describe("SimpleCompositeApplication", () => {
     });
 
     describe("normalizing an application failure into an error result", () => {
+        const NON_ERROR_FAILURE_MESSAGE =
+            "Event handling failed with a non-Error value";
+
         async function handleEventFailingWith(failure: unknown) {
             const sut = new SimpleCompositeApplication(
                 {
@@ -493,14 +496,44 @@ describe("SimpleCompositeApplication", () => {
             expect((result.error.cause as Error).cause).toBe(foreignError);
         });
 
+        test("uses a thrown string as the error message", async () => {
+            const result = await handleEventFailingWith("handler crashed");
+
+            expectApplicationError(result, { message: "handler crashed" });
+            expect((result.error.cause as Error).cause).toBe(
+                "handler crashed"
+            );
+        });
+
         test("turns a null-prototype failure value into an error result", async () => {
             const nullPrototypeFailure = Object.create(null);
 
             const result = await handleEventFailingWith(nullPrototypeFailure);
 
-            expectApplicationError(result, { message: "[object Object]" });
+            expectApplicationError(result, {
+                message: NON_ERROR_FAILURE_MESSAGE,
+            });
             expect((result.error.cause as Error).cause).toBe(
                 nullPrototypeFailure
+            );
+        });
+
+        test("keeps a failure whose message getter throws", async () => {
+            const failureWithThrowingMessage = {
+                get message(): string {
+                    throw new Error("message getter failed");
+                },
+            };
+
+            const result = await handleEventFailingWith(
+                failureWithThrowingMessage
+            );
+
+            expectApplicationError(result, {
+                message: NON_ERROR_FAILURE_MESSAGE,
+            });
+            expect((result.error.cause as Error).cause).toBe(
+                failureWithThrowingMessage
             );
         });
 

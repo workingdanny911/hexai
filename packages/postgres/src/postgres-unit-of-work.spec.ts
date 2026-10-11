@@ -4,9 +4,11 @@ import _ from "lodash";
 
 import { Propagation } from "@hexaijs/core";
 import { IsolationLevel } from "./types.js";
+import type { PostgresTransactionOptions } from "./types.js";
 import {
     createTransactionResourceKey,
     DefaultPostgresUnitOfWork,
+    IncompatibleIsolationLevelError,
     TransactionAbortedError,
     TransactionClosedError,
     UnsupportedNestedTransactionCapabilityError,
@@ -40,6 +42,15 @@ function captureSyncError(fn: () => unknown): unknown {
     } catch (e) {
         return e;
     }
+}
+
+async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
+    try {
+        await promise;
+    } catch (e) {
+        return e;
+    }
+    throw new Error("Expected the operation to reject, but it resolved");
 }
 
 function expectNoActiveTransaction(error: unknown): void {
@@ -99,6 +110,14 @@ describe("PostgresUnitOfWork", () => {
         await tableManager.truncateTable(TABLE);
     });
 
+    // A scope whose callback works with the transaction's client.
+    function scopeWithClient<T>(
+        fn: (client: pg.ClientBase) => Promise<T>,
+        options?: Partial<PostgresTransactionOptions>
+    ): Promise<T> {
+        return uow.scope(() => uow.withClient(fn), options);
+    }
+
     async function insertRecord(client: pg.ClientBase, id: number): Promise<void> {
         await client.query(`INSERT INTO ${TABLE} VALUES ($1);`, [id]);
     }
@@ -151,7 +170,7 @@ describe("PostgresUnitOfWork", () => {
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
-            await uow.wrap(async (client) => {
+            await scopeWithClient(async (client) => {
                 await fn(client);
                 throw new Error("transaction failure");
             });
@@ -164,7 +183,7 @@ describe("PostgresUnitOfWork", () => {
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
-            await uow.wrap(
+            await scopeWithClient(
                 async (client) => {
                     await fn(client);
                     throw new Error("savepoint failure");
@@ -179,20 +198,20 @@ describe("PostgresUnitOfWork", () => {
     async function runSavepoint(
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
-        await uow.wrap(fn, { propagation: Propagation.NESTED });
+        await scopeWithClient(fn, { propagation: Propagation.NESTED });
     }
 
     async function runNestedTransaction(
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
-        await uow.wrap(fn, { propagation: Propagation.EXISTING });
+        await scopeWithClient(fn, { propagation: Propagation.EXISTING });
     }
 
     async function runFailingNestedTransaction(
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
-            await uow.wrap(
+            await scopeWithClient(
                 async (client) => {
                     await fn(client);
                     throw new Error("nested failure");
@@ -212,7 +231,7 @@ describe("PostgresUnitOfWork", () => {
         test("provides consistent client reference within transaction", async () => {
             const txids: string[] = [];
 
-            await uow.wrap(async (client) => {
+            await scopeWithClient(async (client) => {
                 txids.push(await getTransactionId(client));
                 txids.push(await getTransactionId(uow.getClient()));
             });
@@ -221,7 +240,7 @@ describe("PostgresUnitOfWork", () => {
         });
 
         test("commits all changes on successful completion", async () => {
-            await uow.wrap(async (client) => {
+            await scopeWithClient(async (client) => {
                 await insertRecord(client, 1);
             });
 
@@ -236,12 +255,12 @@ describe("PostgresUnitOfWork", () => {
             await expectRecordNotExists(1);
         });
 
-        test("creates isolated transaction for each wrap call", async () => {
+        test("creates an isolated transaction for each scope", async () => {
             const txids: string[] = [];
 
             await Promise.all(
                 _.times(5, async () => {
-                    await uow.wrap(async (client) => {
+                    await scopeWithClient(async (client) => {
                         txids.push(await getTransactionId(client));
                     });
                 })
@@ -250,24 +269,41 @@ describe("PostgresUnitOfWork", () => {
             expect(areDistinctTransactions(...txids)).toBe(true);
         });
 
-        test("releases database connection after transaction ends", async () => {
+        test("refuses queries through a client kept after the transaction ends", async () => {
             let capturedClient!: pg.ClientBase;
 
-            await uow.wrap(async () => {
+            await scopeWithClient(async () => {
                 capturedClient = uow.getClient();
             });
 
-            await expect(getTransactionId(capturedClient)).rejects.toThrowError(
-                /.*closed.*/
-            );
+            await expect(
+                getTransactionId(capturedClient)
+            ).rejects.toBeInstanceOf(TransactionClosedError);
         });
     });
 
     describe("joining existing transaction", () => {
+        test.each([undefined, null, 0, ""])(
+            "aborts the transaction when a participant scope rejects with %j",
+            async (failure) => {
+                const outcome = uow.scope(async () => {
+                    await uow.withClient((client) => insertRecord(client, 1));
+                    await uow
+                        .scope(async () => {
+                            throw failure;
+                        })
+                        .catch(() => undefined);
+                });
+
+                await expectTransactionAborted(outcome, failure);
+                await expectRecordNotExists(1);
+            }
+        );
+
         test("shares transaction context with parent", async () => {
             const txids: string[] = [];
 
-            await uow.wrap(async (client) => {
+            await scopeWithClient(async (client) => {
                 txids.push(await getTransactionId(client));
 
                 await runNestedTransaction(async (nested) => {
@@ -281,7 +317,7 @@ describe("PostgresUnitOfWork", () => {
         test("starts new transaction when no parent exists", async () => {
             const txids: string[] = [];
 
-            await uow.wrap(
+            await scopeWithClient(
                 async (client) => {
                     txids.push(await getTransactionId(client));
                     txids.push(await getTransactionId(client));
@@ -296,11 +332,11 @@ describe("PostgresUnitOfWork", () => {
             const nestedFailure = new Error("nested failure");
 
             await expectTransactionAborted(
-                uow.wrap(async (client) => {
+                scopeWithClient(async (client) => {
                     await insertRecord(client, 1);
 
                     try {
-                        await uow.wrap(
+                        await scopeWithClient(
                             async () => {
                                 throw nestedFailure;
                             },
@@ -318,7 +354,7 @@ describe("PostgresUnitOfWork", () => {
         });
 
         test("commits all changes when nested operations succeed", async () => {
-            await uow.wrap(async (client) => {
+            await scopeWithClient(async (client) => {
                 await insertRecord(client, 1);
 
                 await runNestedTransaction(async (nested) => {
@@ -334,10 +370,10 @@ describe("PostgresUnitOfWork", () => {
         test("creates independent transaction for each NEW propagation", async () => {
             const txids: string[] = [];
 
-            await uow.wrap(async () => {
+            await scopeWithClient(async () => {
                 await Promise.all(
                     _.times(5, async () => {
-                        await uow.wrap(
+                        await scopeWithClient(
                             async (client) => {
                                 txids.push(await getTransactionId(client));
                             },
@@ -355,7 +391,7 @@ describe("PostgresUnitOfWork", () => {
         test("starts new transaction when no parent exists", async () => {
             const txids: string[] = [];
 
-            await uow.wrap(
+            await scopeWithClient(
                 async (client) => {
                     txids.push(await getTransactionId(client));
                     txids.push(await getTransactionId(client));
@@ -367,7 +403,7 @@ describe("PostgresUnitOfWork", () => {
         });
 
         test("rolls back only savepoint changes while preserving parent transaction", async () => {
-            await uow.wrap(async (root) => {
+            await scopeWithClient(async (root) => {
                 await insertRecord(root, 1);
 
                 await runFailingSavepoint(async (savepoint) => {
@@ -387,22 +423,63 @@ describe("PostgresUnitOfWork", () => {
             await expectRecordExists(4);
         });
 
-        test("rolls back to savepoint when nested operation fails inside savepoint", async () => {
-            await uow.wrap(async (root) => {
-                await insertRecord(root, 1);
+        test("aborts the whole transaction when a joining scope fails inside a savepoint, even if caught", async () => {
+            const error = await captureRejection(
+                scopeWithClient(async (root) => {
+                    await insertRecord(root, 1);
 
-                await uow.wrap(
-                    async (savepoint) => {
-                        await insertRecord(savepoint, 2);
+                    await scopeWithClient(
+                        async (savepoint) => {
+                            await insertRecord(savepoint, 2);
 
-                        await runFailingNestedTransaction(async () => {});
+                            await runFailingNestedTransaction(async () => {});
+                        },
+                        { propagation: Propagation.NESTED }
+                    );
+                })
+            );
+
+            expect(error).toBeInstanceOf(TransactionAbortedError);
+            await expectRecordCount(0);
+        });
+
+        test("rejects a sibling NESTED scope that opens while another savepoint is open", async () => {
+            const firstEntered = createDeferred();
+            const finishFirst = createDeferred();
+            let siblingError: unknown;
+
+            await uow.scope(async () => {
+                const first = uow.scope(
+                    async () => {
+                        firstEntered.resolve();
+                        await finishFirst.promise;
+                        await uow.scope(
+                            () =>
+                                uow.withClient((client) =>
+                                    insertRecord(client, 1)
+                                ),
+                            { propagation: Propagation.NESTED }
+                        );
                     },
                     { propagation: Propagation.NESTED }
                 );
+                await firstEntered.promise;
+                siblingError = await captureRejection(
+                    uow.scope(
+                        () =>
+                            uow.withClient((client) => insertRecord(client, 2)),
+                        { propagation: Propagation.NESTED }
+                    )
+                );
+                finishFirst.resolve();
+                await first;
             });
 
-            await expectRecordCount(1);
+            expect(siblingError).toBeInstanceOf(
+                UnsupportedNestedTransactionCapabilityError
+            );
             await expectRecordExists(1);
+            await expectRecordNotExists(2);
         });
     });
 
@@ -412,7 +489,7 @@ describe("PostgresUnitOfWork", () => {
             IsolationLevel.REPEATABLE_READ,
             IsolationLevel.SERIALIZABLE,
         ])("applies %s isolation level", async (isolationLevel) => {
-            await uow.wrap(
+            await scopeWithClient(
                 async (client) => {
                     const result = await client.query(
                         "SHOW TRANSACTION ISOLATION LEVEL"
@@ -423,6 +500,114 @@ describe("PostgresUnitOfWork", () => {
                     );
                 },
                 { isolationLevel }
+            );
+        });
+
+        const joiningCalls = [
+            {
+                description: "an EXISTING scope",
+                join: (
+                    fn: (client: pg.ClientBase) => Promise<void>,
+                    isolationLevel?: IsolationLevel
+                ) => uow.scope(() => uow.withClient(fn), { isolationLevel }),
+            },
+            {
+                description: "a NESTED scope",
+                join: (
+                    fn: (client: pg.ClientBase) => Promise<void>,
+                    isolationLevel?: IsolationLevel
+                ) =>
+                    uow.scope(() => uow.withClient(fn), {
+                        isolationLevel,
+                        propagation: Propagation.NESTED,
+                    }),
+            },
+        ];
+
+        async function showIsolationLevel(
+            client: pg.ClientBase
+        ): Promise<string> {
+            const result = await client.query(
+                "SHOW TRANSACTION ISOLATION LEVEL"
+            );
+            return result.rows[0].transaction_isolation;
+        }
+
+        describe.each(joiningCalls)("$description", ({ join }) => {
+            test.each([
+                {
+                    name: "read committed in serializable",
+                    ownerLevel: IsolationLevel.SERIALIZABLE,
+                    requestedLevel: IsolationLevel.READ_COMMITTED,
+                },
+                {
+                    name: "serializable in a default one",
+                    ownerLevel: undefined,
+                    requestedLevel: IsolationLevel.SERIALIZABLE,
+                },
+            ])(
+                "rejects asking $name without running the callback",
+                async ({ ownerLevel, requestedLevel }) => {
+                    let callbackRan = false;
+                    let joinError: unknown;
+
+                    await uow.scope(
+                        async () => {
+                            joinError = await captureRejection(
+                                join(async () => {
+                                    callbackRan = true;
+                                }, requestedLevel)
+                            );
+                        },
+                        { isolationLevel: ownerLevel }
+                    );
+
+                    expect(joinError).toBeInstanceOf(
+                        IncompatibleIsolationLevelError
+                    );
+                    expect((joinError as Error).message).toContain(
+                        requestedLevel
+                    );
+                    expect((joinError as Error).message).toContain(
+                        ownerLevel ?? IsolationLevel.READ_COMMITTED
+                    );
+                    expect(callbackRan).toBe(false);
+                }
+            );
+
+            test.each([
+                {
+                    name: "serializable in serializable",
+                    ownerLevel: IsolationLevel.SERIALIZABLE,
+                    requestedLevel: IsolationLevel.SERIALIZABLE,
+                },
+                {
+                    name: "read committed in a default one",
+                    ownerLevel: undefined,
+                    requestedLevel: IsolationLevel.READ_COMMITTED,
+                },
+                {
+                    name: "no level in serializable",
+                    ownerLevel: IsolationLevel.SERIALIZABLE,
+                    requestedLevel: undefined,
+                },
+            ])(
+                "joins asking $name",
+                async ({ ownerLevel, requestedLevel }) => {
+                    let appliedLevel: string | undefined;
+
+                    await uow.scope(
+                        () =>
+                            join(async (client) => {
+                                appliedLevel = await showIsolationLevel(client);
+                            }, requestedLevel),
+                        { isolationLevel: ownerLevel }
+                    );
+
+                    expect(appliedLevel).toBe(
+                        ownerLevel ?? IsolationLevel.READ_COMMITTED
+                    );
+                }
             );
         });
     });
@@ -505,25 +690,6 @@ describe("PostgresUnitOfWork", () => {
         });
 
         describe("nesting", () => {
-            test("scope → wrap(EXISTING): wrap triggers init, same transaction", async () => {
-                const txids: string[] = [];
-
-                await uow.scope(async () => {
-                    await uow.wrap(
-                        async (client) => {
-                            txids.push(await getTransactionId(client));
-                        },
-                        { propagation: Propagation.EXISTING }
-                    );
-
-                    await uow.withClient(async (client) => {
-                        txids.push(await getTransactionId(client));
-                    });
-                });
-
-                expect(areSameTransaction(...txids)).toBe(true);
-            });
-
             test("scope → scope(EXISTING): same transaction, both lazy until withClient", async () => {
                 const txids: string[] = [];
 
@@ -596,11 +762,11 @@ describe("PostgresUnitOfWork", () => {
                 await expectRecordNotExists(2);
             });
 
-            test("wrap → scope(EXISTING): already initialized, scope participates", async () => {
+            test("started scope → scope(EXISTING): scope participates", async () => {
                 const txids: string[] = [];
 
-                await uow.wrap(async (wrapClient) => {
-                    txids.push(await getTransactionId(wrapClient));
+                await scopeWithClient(async (outerClient) => {
+                    txids.push(await getTransactionId(outerClient));
 
                     await uow.scope(
                         async () => {
@@ -626,11 +792,11 @@ describe("PostgresUnitOfWork", () => {
             await expectRecordExists(1);
         });
 
-        test("reuses client when inside wrap()", async () => {
+        test("reuses the transaction's client when inside scope()", async () => {
             const txids: string[] = [];
 
-            await uow.wrap(async (wrapClient) => {
-                txids.push(await getTransactionId(wrapClient));
+            await scopeWithClient(async (scopeClient) => {
+                txids.push(await getTransactionId(scopeClient));
 
                 await uow.withClient(async (queryClient) => {
                     txids.push(await getTransactionId(queryClient));
@@ -746,6 +912,122 @@ describe("PostgresUnitOfWork", () => {
 
                 expect(order).toEqual(["main", "drain"]);
                 await expectRecordExists(1);
+            });
+
+            test("does not re-enter finalization when a hook opens a scope", async () => {
+                let hookEntries = 0;
+                let commits = 0;
+                const unsubscribe = uow.onEveryCommit(() => {
+                    commits++;
+                });
+
+                await uow.scope(async () => {
+                    uow.beforeCommit(async () => {
+                        hookEntries++;
+                        await uow.scope(() =>
+                            uow.withClient((client) => insertRecord(client, 2))
+                        );
+                    });
+                    await uow.withClient((client) => insertRecord(client, 1));
+                });
+                unsubscribe();
+
+                expect(hookEntries).toBe(1);
+                expect(commits).toBe(1);
+                await expectRecordExists(1);
+                await expectRecordExists(2);
+            });
+
+            test("rolls back instead of committing when a scope opened in a hook fails", async () => {
+                const scopeFailure = new Error("scope in hook failed");
+                let afterRollbackCalled = false;
+
+                const outcome = uow.scope(async () => {
+                    uow.afterRollback(() => {
+                        afterRollbackCalled = true;
+                    });
+                    uow.beforeCommit(async () => {
+                        await uow
+                            .scope(async () => {
+                                await uow.withClient((client) =>
+                                    insertRecord(client, 2)
+                                );
+                                throw scopeFailure;
+                            })
+                            .catch(() => undefined);
+                    });
+                    await uow.withClient((client) => insertRecord(client, 1));
+                });
+
+                await expectTransactionAborted(outcome, scopeFailure);
+                expect(afterRollbackCalled).toBe(true);
+                await expectRecordCount(0);
+            });
+
+            test("rolls back instead of committing when a hook prevents the commit", async () => {
+                let afterCommitCalled = false;
+                let afterRollbackCalled = false;
+
+                const result = await uow.scope(async () => {
+                    uow.afterCommit(() => {
+                        afterCommitCalled = true;
+                    });
+                    uow.afterRollback(() => {
+                        afterRollbackCalled = true;
+                    });
+                    uow.beforeCommit(() => {
+                        uow.preventCommit("prevented by a hook");
+                    });
+                    await uow.withClient((client) => insertRecord(client, 1));
+                    return 42;
+                });
+
+                expect(result).toBe(42);
+                expect(afterCommitCalled).toBe(false);
+                expect(afterRollbackCalled).toBe(true);
+                await expectRecordNotExists(1);
+            });
+
+            test("rejects work from outside the beforeCommit hooks while committing", async () => {
+                const hookStarted = createDeferred();
+                let outsideAttempts!: Promise<unknown[]>;
+                let outsideScopeRan = false;
+
+                await uow.scope(async () => {
+                    outsideAttempts = hookStarted.promise.then(() =>
+                        Promise.all([
+                            captureRejection(
+                                uow.withClient((client) =>
+                                    insertRecord(client, 3)
+                                )
+                            ),
+                            captureRejection(
+                                uow.scope(async () => {
+                                    outsideScopeRan = true;
+                                })
+                            ),
+                            captureSyncError(() => uow.afterCommit(() => {})),
+                        ])
+                    );
+                    uow.beforeCommit(async () => {
+                        hookStarted.resolve();
+                        await outsideAttempts;
+                        await uow.withClient((client) =>
+                            insertRecord(client, 2)
+                        );
+                    });
+                    await uow.withClient((client) => insertRecord(client, 1));
+                });
+
+                const outsideErrors = await outsideAttempts;
+                expect(outsideErrors).toHaveLength(3);
+                for (const error of outsideErrors) {
+                    expect(error).toBeInstanceOf(TransactionClosedError);
+                }
+                expect(outsideScopeRan).toBe(false);
+                await expectRecordExists(1);
+                await expectRecordExists(2);
+                await expectRecordNotExists(3);
             });
 
             test("triggers rollback when hook throws", async () => {
@@ -1551,6 +1833,61 @@ describe("PostgresUnitOfWork", () => {
                 });
             });
 
+            test("allows commit prevention in the owner's context while a NESTED scope runs beside it", async () => {
+                const nestedEntered = createDeferred();
+                const finishNested = createDeferred();
+                let nestedError: unknown;
+
+                const result = await uow.scope(async () => {
+                    await uow.withClient((client) => insertRecord(client, 1));
+                    const nested = uow.scope(
+                        async () => {
+                            nestedEntered.resolve();
+                            await finishNested.promise;
+                            uow.preventCommit();
+                        },
+                        { propagation: Propagation.NESTED }
+                    );
+                    await nestedEntered.promise;
+
+                    uow.preventCommit("prevented by the owner");
+                    expect(uow.isCommitPrevented()).toBe(true);
+
+                    finishNested.resolve();
+                    nestedError = await captureRejection(nested);
+                    return 42;
+                });
+
+                expect(result).toBe(42);
+                expect(nestedError).toBeInstanceOf(
+                    UnsupportedNestedTransactionCapabilityError
+                );
+                await expectRecordNotExists(1);
+            });
+
+            test("allows commit prevention in a NEW transaction opened inside a nested savepoint", async () => {
+                await uow.scope(async () => {
+                    await uow.scope(
+                        async () => {
+                            const result = await uow.scope(
+                                async () => {
+                                    await uow.withClient((client) =>
+                                        insertRecord(client, 1)
+                                    );
+                                    uow.preventCommit();
+                                    return uow.isCommitPrevented();
+                                },
+                                { propagation: Propagation.NEW }
+                            );
+                            expect(result).toBe(true);
+                        },
+                        { propagation: Propagation.NESTED }
+                    );
+                });
+
+                await expectRecordNotExists(1);
+            });
+
             test("rolls back while preserving an error result from a nested existing-scope failure", async () => {
                 const nestedFailure = new Error("nested failure");
                 const result = { error: nestedFailure };
@@ -1777,6 +2114,38 @@ describe("PostgresUnitOfWork", () => {
                         UnsupportedNestedTransactionCapabilityError
                     );
                 });
+            });
+
+            test("allows resource access in the owner's context while a NESTED scope runs beside it", async () => {
+                const nestedEntered = createDeferred();
+                const finishNested = createDeferred();
+                let nestedError: unknown;
+
+                await uow.scope(async () => {
+                    const nested = uow.scope(
+                        async () => {
+                            nestedEntered.resolve();
+                            await finishNested.promise;
+                            uow.getTransactionResource(valuesKey);
+                        },
+                        { propagation: Propagation.NESTED }
+                    );
+                    await nestedEntered.promise;
+
+                    uow.setTransactionResource(valuesKey, {
+                        values: ["owner"],
+                    });
+                    expect(
+                        uow.getTransactionResource(valuesKey)?.values
+                    ).toEqual(["owner"]);
+
+                    finishNested.resolve();
+                    nestedError = await captureRejection(nested);
+                });
+
+                expect(nestedError).toBeInstanceOf(
+                    UnsupportedNestedTransactionCapabilityError
+                );
             });
 
             test("keeps parent resources usable after nested savepoint rejection", async () => {

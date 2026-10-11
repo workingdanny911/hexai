@@ -85,10 +85,12 @@ export class SimpleCompositeApplication implements Application {
         // The application failure must reject the scope callback so the unit
         // of work rolls back; returning it from inside the scope would commit
         // the writes of the applications that succeeded. It is rejected as a
-        // fresh Error because a unit of work may not treat a falsy rejection
-        // as a failure (Postgres does not abort a nested scope on
-        // `undefined`). Only that failure becomes an ErrorResult; unit-of-work
-        // failures reject as before.
+        // fresh Error for two reasons. Depending on its implementation or
+        // version, a unit of work may not treat a falsy rejection such as
+        // `undefined` as a failure, and would then commit. And an object
+        // unique to this call is what tells the application failure apart
+        // from a unit-of-work failure below. Only that failure becomes an
+        // ErrorResult; unit-of-work failures reject as before.
         let applicationFailure: CompositeEventHandlingFailure | undefined;
         try {
             await this.unitOfWork.scope(async () => {
@@ -172,8 +174,9 @@ function toError(failure: unknown): Error {
 }
 
 function describeFailure(failure: unknown): string {
-    // Each step may throw (getters, null-prototype objects, revoked proxies);
-    // describing a failure must never replace it with a new one.
+    if (typeof failure === "string") {
+        return failure;
+    }
     try {
         const message = (failure as { message?: unknown } | null | undefined)
             ?.message;
@@ -181,16 +184,7 @@ function describeFailure(failure: unknown): string {
             return message;
         }
     } catch {
-        // Fall through to the next description.
+        // A getter that throws must not replace the failure being reported.
     }
-    try {
-        return String(failure);
-    } catch {
-        // Fall through to the next description.
-    }
-    try {
-        return Object.prototype.toString.call(failure);
-    } catch {
-        return "Unknown failure";
-    }
+    return "Event handling failed with a non-Error value";
 }

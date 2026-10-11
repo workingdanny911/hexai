@@ -11,6 +11,7 @@ import * as pg from "pg";
 
 import { Propagation } from "@hexaijs/core";
 import { PostgresUnitOfWorkForTesting } from "./test.js";
+import type { PostgresTransactionOptions } from "./types.js";
 import {
     newClient,
     useClient,
@@ -44,6 +45,14 @@ describe("PostgresUnitOfWorkForTesting", () => {
         await client.query("ROLLBACK");
         await client.end();
     });
+
+    // A scope whose callback works with the transaction's client.
+    function scopeWithClient<T>(
+        fn: (client: pg.ClientBase) => Promise<T>,
+        options?: Partial<PostgresTransactionOptions>
+    ): Promise<T> {
+        return uow.scope(() => uow.withClient(fn), options);
+    }
 
     async function insertRecord(c: pg.ClientBase, id: number): Promise<void> {
         await c.query(`INSERT INTO ${TABLE} VALUES ($1);`, [id]);
@@ -79,7 +88,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await fn(c);
                 throw new Error("transaction failure");
             });
@@ -92,7 +101,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
         fn: (client: pg.ClientBase) => Promise<void>
     ): Promise<void> {
         try {
-            await uow.wrap(
+            await scopeWithClient(
                 async (c) => {
                     await fn(c);
                     throw new Error("savepoint failure");
@@ -106,7 +115,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
 
     describe("transaction lifecycle", () => {
         test("commits changes on successful completion", async () => {
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 1);
             });
 
@@ -128,7 +137,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 await insertRecord(c, 1);
             });
 
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 2);
             });
 
@@ -138,7 +147,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
 
         test("changes within uow are not visible to external connection during test", async () => {
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 1);
             });
 
@@ -149,11 +158,11 @@ describe("PostgresUnitOfWorkForTesting", () => {
 
     describe("joining existing transaction", () => {
         test("rolls back entire transaction when nested EXISTING fails even if caught", async () => {
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 1);
 
                 try {
-                    await uow.wrap(async () => {
+                    await scopeWithClient(async () => {
                         throw new Error("nested failure");
                     });
                 } catch {
@@ -168,10 +177,10 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
 
         test("commits all changes when nested operations succeed", async () => {
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 1);
 
-                await uow.wrap(async (nested) => {
+                await scopeWithClient(async (nested) => {
                     await insertRecord(nested, 2);
                 });
             });
@@ -183,7 +192,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
 
     describe("nested savepoints", () => {
         test("rolls back only savepoint changes while preserving parent", async () => {
-            await uow.wrap(async (root) => {
+            await scopeWithClient(async (root) => {
                 await insertRecord(root, 1);
 
                 await runFailingSavepoint(async (sp) => {
@@ -198,10 +207,10 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
 
         test("commits savepoint changes on success", async () => {
-            await uow.wrap(async (root) => {
+            await scopeWithClient(async (root) => {
                 await insertRecord(root, 1);
 
-                await uow.wrap(
+                await scopeWithClient(
                     async (sp) => {
                         await insertRecord(sp, 2);
                     },
@@ -216,15 +225,15 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
 
         test("rolls back to savepoint when nested operation fails inside savepoint", async () => {
-            await uow.wrap(async (root) => {
+            await scopeWithClient(async (root) => {
                 await insertRecord(root, 1);
 
-                await uow.wrap(
+                await scopeWithClient(
                     async (savepoint) => {
                         await insertRecord(savepoint, 2);
 
                         try {
-                            await uow.wrap(async () => {
+                            await scopeWithClient(async () => {
                                 throw new Error("nested failure");
                             });
                         } catch {
@@ -241,14 +250,66 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
     });
 
+    describe.each([
+        { label: "undefined", failure: undefined },
+        { label: "null", failure: null },
+        { label: "0", failure: 0 },
+        { label: "an empty string", failure: "" },
+        { label: "false", failure: false },
+    ])("callback rejecting with $label", ({ failure }) => {
+        test("rolls back the transaction", async () => {
+            const settled = scopeWithClient(async (c) => {
+                await insertRecord(c, 1);
+                throw failure;
+            });
+
+            await expect(settled).rejects.toBe(failure);
+            await expectRecordIds([]);
+        });
+
+        test("rolls back the entire transaction from a joining scope even if caught", async () => {
+            await scopeWithClient(async (c) => {
+                await insertRecord(c, 1);
+
+                await uow
+                    .scope(async () => {
+                        throw failure;
+                    })
+                    .catch(() => {});
+
+                await insertRecord(c, 2);
+            });
+
+            await expectRecordIds([]);
+        });
+
+        test("rolls back only the savepoint it fails in", async () => {
+            await scopeWithClient(async (root) => {
+                await insertRecord(root, 1);
+
+                await scopeWithClient(
+                    async (sp) => {
+                        await insertRecord(sp, 2);
+                        throw failure;
+                    },
+                    { propagation: Propagation.NESTED }
+                ).catch(() => {});
+
+                await insertRecord(root, 3);
+            });
+
+            await expectRecordIds([1, 3]);
+        });
+    });
+
     describe("Propagation.NEW", () => {
         test("logs warning and creates new savepoint", async () => {
             const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-            await uow.wrap(async (root) => {
+            await scopeWithClient(async (root) => {
                 await insertRecord(root, 1);
 
-                await uow.wrap(
+                await scopeWithClient(
                     async (newTx) => {
                         await insertRecord(newTx, 2);
                     },
@@ -268,16 +329,16 @@ describe("PostgresUnitOfWorkForTesting", () => {
     });
 
     describe("sequential operations", () => {
-        test("handles multiple sequential wrap calls", async () => {
-            await uow.wrap(async (c) => {
+        test("handles multiple sequential scopes", async () => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 1);
             });
 
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 2);
             });
 
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 3);
             });
 
@@ -288,7 +349,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
 
     describe("test isolation", () => {
         test("external transaction rollback cleans up all changes", async () => {
-            await uow.wrap(async (c) => {
+            await scopeWithClient(async (c) => {
                 await insertRecord(c, 100);
             });
 
@@ -313,9 +374,9 @@ describe("PostgresUnitOfWorkForTesting", () => {
             expect(result.rows).toHaveLength(1);
         });
 
-        test("uses same client inside wrap()", async () => {
-            await uow.wrap(async (wrapClient) => {
-                await insertRecord(wrapClient, 1);
+        test("uses same client inside scope()", async () => {
+            await scopeWithClient(async (scopeClient) => {
+                await insertRecord(scopeClient, 1);
 
                 await uow.withClient(async (queryClient) => {
                     const result = await queryClient.query(
@@ -326,7 +387,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             });
         });
 
-        test("uses same client outside wrap()", async () => {
+        test("uses same client outside scope()", async () => {
             await uow.withClient(async (c) => {
                 await insertRecord(c, 1);
             });
@@ -343,7 +404,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             test("executes before commit", async () => {
                 let called = false;
 
-                await uow.wrap(async (c) => {
+                await scopeWithClient(async (c) => {
                     uow.beforeCommit(() => { called = true; });
                     await insertRecord(c, 1);
                 });
@@ -355,7 +416,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             test("runs drain-phase hooks after main hooks", async () => {
                 const order: string[] = [];
 
-                await uow.wrap(async (c) => {
+                await scopeWithClient(async (c) => {
                     uow.beforeCommit(() => { order.push("drain"); }, {
                         phase: "drain",
                     });
@@ -369,7 +430,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
 
             test("triggers rollback when hook throws", async () => {
                 try {
-                    await uow.wrap(async (c) => {
+                    await scopeWithClient(async (c) => {
                         uow.beforeCommit(() => {
                             throw new Error("hook failure");
                         });
@@ -381,13 +442,138 @@ describe("PostgresUnitOfWorkForTesting", () => {
 
                 await expectRecordCount(0);
             });
+
+            describe("when a hook's work aborts the transaction or prevents the commit", () => {
+                const ROLLED_BACK_STATEMENTS = [
+                    "SAVEPOINT <savepoint>",
+                    `INSERT INTO ${TABLE} VALUES ($1);`,
+                    "ROLLBACK TO SAVEPOINT <savepoint>",
+                ];
+
+                async function runRootWithHook(hook: () => unknown) {
+                    const query = vi.spyOn(client, "query");
+                    const calls = {
+                        afterCommit: 0,
+                        afterRollback: 0,
+                        onEveryCommit: 0,
+                    };
+                    uow.onEveryCommit(() => {
+                        calls.onEveryCommit++;
+                    });
+
+                    const settlement = await scopeWithClient(async (c) => {
+                        uow.afterCommit(() => {
+                            calls.afterCommit++;
+                        });
+                        uow.afterRollback(() => {
+                            calls.afterRollback++;
+                        });
+                        uow.beforeCommit(async () => {
+                            await hook();
+                        });
+                        await insertRecord(c, 1);
+                        return "root result";
+                    }).then(
+                        (value) => ({ value }),
+                        (error: unknown) => ({ error })
+                    );
+                    const statements = query.mock.calls.map(([statement]) =>
+                        String(statement).replace(/test_sp_\w+/g, "<savepoint>")
+                    );
+                    query.mockRestore();
+
+                    return { settlement, statements, calls };
+                }
+
+                describe.each([
+                    { label: "undefined", failure: undefined },
+                    { label: "an Error", failure: new Error("hook scope failure") },
+                ])("with a scope that rejects with $label", ({ failure }) => {
+                    test("rolls back once and reports no commit when the hook catches the failure", async () => {
+                        const { settlement, statements, calls } =
+                            await runRootWithHook(() =>
+                                uow
+                                    .scope(async () => {
+                                        throw failure;
+                                    })
+                                    .catch(() => {})
+                            );
+
+                        expect(settlement).toStrictEqual({
+                            value: "root result",
+                        });
+                        expect(statements).toEqual(ROLLED_BACK_STATEMENTS);
+                        expect(calls).toEqual({
+                            afterCommit: 0,
+                            afterRollback: 1,
+                            onEveryCommit: 0,
+                        });
+                        await expectRecordIds([]);
+                    });
+
+                    test("rolls back once and rejects with the failure when it leaves the hook", async () => {
+                        const { settlement, statements, calls } =
+                            await runRootWithHook(() =>
+                                uow.scope(async () => {
+                                    throw failure;
+                                })
+                            );
+
+                        expect(settlement).toStrictEqual({ error: failure });
+                        expect(statements).toEqual(ROLLED_BACK_STATEMENTS);
+                        expect(calls).toEqual({
+                            afterCommit: 0,
+                            afterRollback: 1,
+                            onEveryCommit: 0,
+                        });
+                        await expectRecordIds([]);
+                    });
+                });
+
+                test("commits once when the hook runs a scope that succeeds", async () => {
+                    const { settlement, statements, calls } =
+                        await runRootWithHook(() =>
+                            uow.scope(() =>
+                                uow.withClient((c) => insertRecord(c, 2))
+                            )
+                        );
+
+                    expect(settlement).toStrictEqual({ value: "root result" });
+                    expect(statements).toEqual([
+                        "SAVEPOINT <savepoint>",
+                        `INSERT INTO ${TABLE} VALUES ($1);`,
+                        `INSERT INTO ${TABLE} VALUES ($1);`,
+                        "RELEASE SAVEPOINT <savepoint>",
+                    ]);
+                    expect(calls).toEqual({
+                        afterCommit: 1,
+                        afterRollback: 0,
+                        onEveryCommit: 1,
+                    });
+                    await expectRecordIds([1, 2]);
+                });
+
+                test("rolls back when the hook prevents the commit", async () => {
+                    const { settlement, statements, calls } =
+                        await runRootWithHook(() => uow.preventCommit());
+
+                    expect(settlement).toStrictEqual({ value: "root result" });
+                    expect(statements).toEqual(ROLLED_BACK_STATEMENTS);
+                    expect(calls).toEqual({
+                        afterCommit: 0,
+                        afterRollback: 1,
+                        onEveryCommit: 0,
+                    });
+                    await expectRecordIds([]);
+                });
+            });
         });
 
         describe("afterCommit", () => {
             test("executes after successful commit", async () => {
                 let called = false;
 
-                await uow.wrap(async (c) => {
+                await scopeWithClient(async (c) => {
                     uow.afterCommit(() => { called = true; });
                     await insertRecord(c, 1);
                 });
@@ -399,7 +585,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 let called = false;
 
                 try {
-                    await uow.wrap(async (c) => {
+                    await scopeWithClient(async (c) => {
                         uow.afterCommit(() => { called = true; });
                         await insertRecord(c, 1);
                         throw new Error("scope failure");
@@ -417,7 +603,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 let called = false;
 
                 try {
-                    await uow.wrap(async (c) => {
+                    await scopeWithClient(async (c) => {
                         uow.afterRollback(() => { called = true; });
                         await insertRecord(c, 1);
                         throw new Error("scope failure");
@@ -432,7 +618,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             test("does not execute on successful commit", async () => {
                 let called = false;
 
-                await uow.wrap(async (c) => {
+                await scopeWithClient(async (c) => {
                     uow.afterRollback(() => { called = true; });
                     await insertRecord(c, 1);
                 });
@@ -445,7 +631,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             test("keeps beforeCommit hooks inside the active test transaction", async () => {
                 let directClient!: pg.ClientBase;
 
-                await uow.wrap(async (c) => {
+                await scopeWithClient(async (c) => {
                     uow.beforeCommit(() => {
                         directClient = uow.getClient();
                     });
@@ -459,7 +645,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             test("runs afterCommit outside the completed test transaction context", async () => {
                 let directClientError: unknown;
 
-                await uow.wrap(async (c) => {
+                await scopeWithClient(async (c) => {
                     uow.afterCommit(async () => {
                         directClientError = captureSyncError(() =>
                             uow.getClient()
@@ -482,7 +668,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 let directClientError: unknown;
 
                 await expect(
-                    uow.wrap(async (c) => {
+                    scopeWithClient(async (c) => {
                         uow.afterRollback(async () => {
                             directClientError = captureSyncError(() =>
                                 uow.getClient()
@@ -528,7 +714,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 let secondHookCalled = false;
 
                 await expect(
-                    uow.wrap(async (c) => {
+                    scopeWithClient(async (c) => {
                         uow.afterCommit(() => {
                             throw new Error("first hook fails");
                         });
@@ -545,7 +731,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 let secondHookCalled = false;
 
                 await expect(
-                    uow.wrap(async (c) => {
+                    scopeWithClient(async (c) => {
                         uow.afterRollback(() => {
                             throw new Error("first hook fails");
                         });
@@ -565,7 +751,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 const scopeError = new Error("scope failure");
 
                 try {
-                    await uow.wrap(async (c) => {
+                    await scopeWithClient(async (c) => {
                         uow.afterRollback(() => {
                             throw new Error("hook failure");
                         });
@@ -582,7 +768,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
                 const beforeCommitError = new Error("beforeCommit failure");
 
                 try {
-                    await uow.wrap(async (c) => {
+                    await scopeWithClient(async (c) => {
                         uow.beforeCommit(() => { throw beforeCommitError; });
                         uow.afterRollback(() => {
                             throw new Error("hook failure");
@@ -597,7 +783,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
 
             test("afterCommit failure has no cause on success path", async () => {
                 try {
-                    await uow.wrap(async (c) => {
+                    await scopeWithClient(async (c) => {
                         uow.afterCommit(() => {
                             throw new Error("hook failure");
                         });
@@ -625,7 +811,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             });
 
             try {
-                await uow.wrap(async (c) => {
+                await scopeWithClient(async (c) => {
                     uow.afterCommit(() => { order.push("afterCommit"); });
                     await insertRecord(c, 1);
                 });
@@ -645,10 +831,10 @@ describe("PostgresUnitOfWorkForTesting", () => {
             });
 
             try {
-                await uow.wrap(async (root) => {
+                await scopeWithClient(async (root) => {
                     await insertRecord(root, 1);
 
-                    await uow.wrap(
+                    await scopeWithClient(
                         async (savepoint) => {
                             await insertRecord(savepoint, 2);
                         },
@@ -683,7 +869,7 @@ describe("PostgresUnitOfWorkForTesting", () => {
             });
 
             try {
-                const result = await uow.wrap(async (c) => {
+                const result = await scopeWithClient(async (c) => {
                     await insertRecord(c, 1);
                     return "ok";
                 });

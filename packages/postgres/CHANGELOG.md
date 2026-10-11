@@ -1,5 +1,235 @@
 # Changelog
 
+## [0.16.0] - 2026-10-12
+
+### Added
+
+- Added `IncompatibleIsolationLevelError`, thrown when a joining scope asks for
+  an isolation level other than the one of the transaction it joins.
+
+### Removed
+
+- Removed the deprecated `wrap()` from `DefaultPostgresUnitOfWork` and
+  `PostgresUnitOfWorkForTesting`. `PostgresUnitOfWork` now extends
+  `UnitOfWorkClientAccess` without `wrap()`. Use `scope()` with `withClient()`.
+
+### Fixed
+
+- Fixed queries from work that outlived its transaction reaching a connection
+  that had already gone back to the pool. When a scope failed (for example
+  through `Promise.all()`) while a sibling `withClient()` callback was still
+  running, the scope sent `ROLLBACK` and released the client while the callback
+  kept querying, so its later statements ran in whatever transaction borrowed
+  the connection next and could be committed there. Code inside a transaction
+  now gets a client that the transaction guards, from `withClient()` and
+  `getClient()` alike. Once the outcome is decided, its queries reject with
+  `TransactionClosedError`. The queries that got in before are sent first, then
+  `COMMIT` or `ROLLBACK`, and only then is the client released. The
+  transaction does not wait for the callback itself.
+- Fixed a transaction never ending, and its client never going back to the
+  pool, when a joining `EXISTING` scope waited for a `Propagation.NEW`
+  transaction on an exhausted pool after the scope that created the
+  transaction had failed, for example through `Promise.all()`. The failed
+  scope rejected at once, but the transaction was finalized only once its last
+  scope had left, and that joining scope waited for a client that only this
+  finalization could release, so the `Propagation.NEW` transaction never
+  started. The scope that creates a transaction now finalizes it as soon as its
+  own callback ends, so the client goes back to the pool and the
+  `Propagation.NEW` transaction starts on it.
+- Fixed a `COMMIT` that PostgreSQL answers with `ROLLBACK` being treated as a
+  successful commit. When a statement had failed inside the transaction and the
+  failure was caught, or nobody awaited it, PostgreSQL ends the transaction on
+  `COMMIT` with the command tag `ROLLBACK` and no error, and 0.15.x ran
+  `afterCommit` hooks and `onEveryCommit()` observers although nothing was
+  committed. The scope now rejects with `TransactionAbortedError`, whose
+  `cause` is the last query or savepoint statement that failed in the
+  transaction when there was one. `afterRollback` hooks run, and
+  `afterCommit` hooks and observers do not.
+- Fixed `beforeCommit` hooks re-entering finalization. A `scope()` opened from a
+  `beforeCommit` hook, for example by a composite application handling an event
+  there, finalized the transaction again: the hooks ran again, or `afterCommit`
+  hooks ran after a rollback. Only the scope that creates a transaction
+  finalizes it now, so a scope opened from a hook joins the transaction. A
+  failure that leaves a hook rolls the transaction back as before. Otherwise
+  the outcome is decided again after the hooks. If a joining scope failed by
+  then, even one the hook caught or did not await, the transaction rolls back
+  and the scope rejects with `TransactionAbortedError`. If a hook called
+  `preventCommit()`, the transaction rolls back and the scope resolves with its
+  result.
+- Fixed a joining scope that rejects with `undefined` not aborting the
+  transaction. Every rejection value aborts it now.
+- Fixed `PostgresUnitOfWorkForTesting` committing when a callback rejects with
+  `undefined`. The scope that created the transaction released its savepoint,
+  a joining scope left the transaction to commit, and a `NESTED` scope released
+  its savepoint. Every rejection value now rolls back, as it does in
+  `DefaultPostgresUnitOfWork`.
+- Fixed `PostgresUnitOfWorkForTesting` finalizing the transaction again when a
+  `beforeCommit` hook runs a `scope()`. The hook's scope ended the transaction
+  from inside the hooks: one that succeeded ran the hooks again without end,
+  and one that failed rolled back while the outer commit still ran
+  `afterCommit` hooks and `onEveryCommit()` observers and resolved, or ran
+  `afterRollback` hooks a second time when the failure left the hook. A scope
+  that ends during finalization now leaves the outcome to it, the outcome is
+  decided again after the hooks, and the commit counts only when
+  `RELEASE SAVEPOINT` was sent. If the hooks' work failed or a hook called
+  `preventCommit()`, the transaction rolls back and `afterRollback` hooks run
+  once; the scope rejects with the failure when it left the hook and otherwise
+  resolves with its result.
+- Fixed a client whose `connect()` fails during the transaction start never
+  being cleaned up. It now goes to the cleanup together with the failure.
+- Fixed `createPostgresUnitOfWork(pool)` returning a client to the pool when the
+  failure that left it in an unknown state was `undefined`, for example a query
+  that rejected with `undefined`. The client is now destroyed whenever a failure
+  is passed to the cleanup, whatever its value.
+
+### Changed
+
+- Only the `scope()` call that creates a transaction finalizes it, and it does
+  not wait for other work. When its callback ends, the outcome is decided at
+  once, and the scope settles after `COMMIT` or `ROLLBACK`, the client cleanup
+  and the after hooks. Joining scopes and `withClient()` callbacks that are
+  still running are not waited for: their queries that got in before the
+  decision are committed or rolled back with the transaction, their later use
+  of the transaction is refused with `TransactionClosedError`, and each settles
+  with its own callback's result. A `NESTED` scope that is still running can no
+  longer end its savepoint and, as in 0.15.1, rejects with
+  `TransactionClosedError` when its callback succeeds or with its own error
+  when it fails. In 0.15.x the last scope to leave the transaction finalized
+  it, so a root scope could settle before a joining scope that outlived it, and
+  that joining scope received the outcome. Waiting for running work would tie
+  the end of the transaction to code that may never finish, or that itself
+  waits for the connection the transaction holds.
+- Inside a transaction, `withClient()` and `getClient()` hand out a client that
+  the transaction guards instead of the client itself. It is a proxy of that
+  client: `instanceof`, events and the members other than `query()`,
+  `release()`, `end()` and `connect()` work as before, and a method that
+  returns the client returns the guarded one. Its queries go through the
+  transaction, including queries in callback form, which report their result
+  through the callback. `release()`, `end()` and `connect()` throw, because the
+  unit of work returns the client when the transaction ends, and a client
+  released early would hand the open transaction to the next borrower.
+  Listeners added through it are added to the client itself, and pg calls them
+  with that client as `this`, which the transaction does not guard.
+- A transaction sends its statements to the connection one at a time. Queries
+  made through its client at the same time, for example from `Promise.all()`,
+  are sent in the order they were made, each after the previous one has
+  finished, in one line with `BEGIN`, the savepoint statements and the final
+  `COMMIT` or `ROLLBACK`. A failed query does not hold up the ones behind it.
+  A submittable query, such as a cursor, takes its turn in the same line: the
+  client returns it at once and sends it when the queries before it have
+  finished, right away when none are running. A query keeps its config as it
+  was when `query()` was called, as pg reads it then. 0.15.x handed
+  overlapping queries to pg's own query queue, which pg deprecates and plans
+  to remove in pg 9.
+- A transaction whose outcome is decided accepts no new work. In its context,
+  `withClient()`, `scope()`, `getClient()`, hook registration,
+  `preventCommit()` and transaction resources reject or throw with
+  `TransactionClosedError`, and so do queries through its client. While
+  `beforeCommit` hooks run, only work started from those hooks is accepted,
+  including work a hook did not await, until the outcome is decided after the
+  hooks, so nothing else slips in between the hooks and `COMMIT`. Previously a
+  joining `EXISTING` scope entered after the outcome was decided still ran its
+  callback.
+- A scope that catches a failed transaction start now rolls back. 0.15.x
+  resolved a scope that swallowed a `BEGIN` failure without running hooks, and
+  after a swallowed `SET TRANSACTION` failure sent `COMMIT` and ran
+  `afterCommit` hooks and observers although nothing was committed. The scope
+  now rejects with `TransactionAbortedError` whose `cause` is the start
+  failure, and `afterRollback` hooks run; after `preventCommit()` it resolves
+  with its result instead.
+- A failed `ROLLBACK` or client cleanup no longer replaces the outcome. The
+  scope settles with the error that caused the rollback (its callback's error,
+  a `beforeCommit` hook's error or `TransactionAbortedError`), or resolves when
+  `preventCommit()` rolled it back, and the secondary failure is logged with
+  `console.error`. The original error is what explains the failure, and callers
+  that recognize their own errors, or map database error codes, keep working
+  when the connection also broke. `createPostgresUnitOfWork(pool)` still
+  destroys the client after a failed `ROLLBACK`. `afterRollback` hooks now run
+  even when `ROLLBACK` fails, since the transaction is discarded with the
+  destroyed connection either way. A cleanup failure after a successful
+  `COMMIT` keeps the result and still runs `afterCommit` hooks and observers. A
+  failed `COMMIT` still rejects with the `COMMIT` error and runs no after
+  hooks, because its outcome is unknown. Likewise, a `NESTED` scope whose
+  callback failed rejects with that failure when `ROLLBACK TO SAVEPOINT` fails
+  or is refused, and the savepoint failure is logged. In 0.15.1 the rule
+  depended on the path: a failed `ROLLBACK` usually replaced the callback's
+  error and skipped `afterRollback` hooks, except on a client that was already
+  closed, and a failed `ROLLBACK TO SAVEPOINT` replaced the callback's error.
+- A `withClient()` call that waited for the transaction start rejects with the
+  start failure, or with `TransactionClosedError` when the start succeeded but
+  the transaction stopped accepting work meanwhile. In 0.15.1 it could receive
+  the error of a `ROLLBACK` sent on behalf of the finalizing scope.
+  `TransactionClosedError` now names the operation that waited (`withClient()`
+  or `scope()`) rather than always `withClient()`, and a refused query through
+  the guarded client names `query()`.
+- A joining scope that asks for an isolation level other than the one of the
+  transaction it joins (`READ COMMITTED` when the creating scope named none)
+  rejects with `IncompatibleIsolationLevelError` without running its callback.
+  In 0.15.x the options of the last call to join before the lazy `BEGIN`
+  decided the isolation level, so a joining scope could silently weaken or
+  strengthen the transaction of the scope that created it, depending on timing.
+  Now the creating scope alone decides how the transaction starts, and a
+  joining scope that omits `isolationLevel` or names the same level joins as
+  before.
+- Opening a `Propagation.NESTED` scope while a sibling `NESTED` scope of the
+  same transaction is still running rejects with
+  `UnsupportedNestedTransactionCapabilityError`. Savepoints form a stack on one
+  connection, so concurrent siblings interleaved their `SAVEPOINT`,
+  `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT` statements. A `NESTED` scope
+  inside another one is still allowed. Run sibling savepoints one after the
+  other.
+- `preventCommit()`, `isCommitPrevented()` and transaction resources are
+  rejected only inside the callback of a `Propagation.NESTED` scope. They used
+  to be rejected anywhere in the transaction while any `NESTED` scope was
+  running, including in the root scope's own callback beside it. A
+  `Propagation.NEW` transaction opened inside a savepoint keeps them, as
+  before.
+
+### Migration Notes
+
+- Replace `wrap(fn, options)` with `scope(() => withClient(fn), options)`.
+  `scope()` sends `BEGIN` on the first `withClient()`, where `wrap()` sent it
+  at once. A `wrap()` nested inside a `Propagation.NESTED` scope joined that
+  savepoint, so its failure rolled back only the savepoint; a joining `scope()`
+  there aborts the whole transaction when it fails, as it does anywhere else.
+  Where only the savepoint should roll back, call `withClient(fn)` inside the
+  `NESTED` scope and let the error leave its callback.
+- Await the work you start inside a scope. Work that is still running when the
+  outcome is decided is not waited for: only what got in before the decision
+  belongs to the transaction, and its next query or other use of the
+  transaction rejects with `TransactionClosedError`. This covers joining
+  scopes and `withClient()` callbacks the scope did not await, the losing side
+  of a `Promise.race()`, a client kept from `getClient()`, and work a
+  `beforeCommit` hook started without awaiting it.
+- Do not call `release()`, `end()` or `connect()` on a client you get inside a
+  transaction. They throw; the unit of work releases the client itself.
+  `ensureConnection()` fails on such a client as well. The client is a proxy,
+  not the client object the factory or pool provided, though `instanceof`
+  still holds.
+- Finish or close a submittable query, such as a cursor from `pg-cursor`,
+  before the scope ends. The statements behind it in the transaction's line,
+  the final `COMMIT` or `ROLLBACK` included, wait until it is done, as they
+  did in pg's own query queue. As there, closing a cursor that still waits
+  behind other queries does nothing, so await those queries first. After the
+  outcome is decided it is refused with `TransactionClosedError`.
+- Remove event listeners you add to the client inside a transaction before the
+  scope ends, and do not query through `this` in them. They stay on the pooled
+  connection, and a query through `this` is not guarded, so after the
+  transaction it would reach whoever borrows the connection next.
+- Code that expected the `ROLLBACK` or `ROLLBACK TO SAVEPOINT` error from a
+  failed scope now receives the original error and finds the secondary failure
+  in the `console.error` log.
+- A joining scope that passes an `isolationLevel` other than the transaction's
+  now rejects with `IncompatibleIsolationLevelError`. Omit `isolationLevel` when
+  joining, or use `Propagation.NEW` for work that needs its own isolation level.
+- Run sibling `Propagation.NESTED` scopes one after the other; opening one while
+  another runs beside it now rejects.
+- The type declarations add `IncompatibleIsolationLevelError` and drop `wrap()`
+  from `DefaultPostgresUnitOfWork`, `PostgresUnitOfWorkForTesting` and
+  `PostgresUnitOfWork`. A `PostgresUnitOfWork` is therefore no longer
+  assignable to core's `UnitOfWorkClientAccess`, which still declares `wrap()`.
+  The rest of the public API is unchanged.
+
 ## [0.15.1] - 2026-10-09
 
 ### Fixed

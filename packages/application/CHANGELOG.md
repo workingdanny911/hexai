@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.3] - 2026-10-12
+
+### Changed
+
+- `SimpleCompositeApplication.handleEvent()` describes an application failure
+  that is not an `Error` more simply. A thrown string is still the message, and
+  an object's string `message` property is still used, so structured
+  rejections and errors from another realm keep their message. Any other value,
+  such as an object without a string `message`, a number, `null` or a symbol,
+  now gets the fixed message "Event handling failed with a non-Error value"
+  instead of a `String()` conversion such as `[object Object]`. The value stays
+  in the `cause` chain as before, and describing it still never throws.
+
+### Notes
+
+- With `@hexaijs/postgres` 0.16.0, a `ROLLBACK` that fails after an
+  application failure no longer rejects `handleEvent()`. The unit of work keeps
+  the error that caused the rollback and logs the `ROLLBACK` failure, so
+  `handleEvent()` returns the application's `ErrorResult`; nothing is committed
+  either way. Failures the unit of work reports itself, such as a failed
+  `COMMIT` or an `afterRollback` hook failure, still reject `handleEvent()`.
+
 ## [0.6.2] - 2026-10-09
 
 ### Fixed
