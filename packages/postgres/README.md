@@ -27,9 +27,10 @@ npm install @hexaijs/core ezcfg pg
 ### PostgresUnitOfWork
 
 The `PostgresUnitOfWork` implements the base `UnitOfWork` transaction boundary
-from `@hexaijs/core`, plus the core `UnitOfWorkClientAccess` and
-`TransactionLifecycle` capabilities. It also exposes the Postgres-local
-`PostgresUnitOfWorkObserver` API for instance-level commit observers.
+from `@hexaijs/core`, plus the core `UnitOfWorkClientAccess` capability without
+its deprecated `wrap()`, and `TransactionLifecycle`. It also exposes the
+Postgres-local `PostgresUnitOfWorkObserver` API for instance-level commit
+observers.
 
 `DefaultPostgresUnitOfWork` additionally implements Postgres-local capabilities
 such as `CommitControl` and `TransactionResources` for advanced in-transaction
@@ -62,7 +63,7 @@ const unitOfWork = new DefaultPostgresUnitOfWork(
 );
 ```
 
-The client factory creates a new client for each transaction. The optional cleanup function runs after the transaction completes (commit or rollback).
+The client factory creates a new client for each transaction. The optional cleanup function runs after the transaction completes (commit or rollback), exactly once per client, including a client whose transaction failed to start. When the cleanup fails after a transaction, the failure is logged with `console.error` and does not change the scope's result.
 
 ### Transaction Execution
 
@@ -97,18 +98,6 @@ await unitOfWork.scope(async () => {
 });
 ```
 
-#### wrap() (Deprecated)
-
-`wrap()` is the legacy API that eagerly starts a transaction and passes the client directly:
-
-```typescript
-/** @deprecated Use scope() for transaction boundaries and withClient() for client access. */
-const result = await unitOfWork.wrap(async (client) => {
-    await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", [orderId, "pending"]);
-    return { orderId };
-});
-```
-
 ### Client Access Without Transaction
 
 Use `withClient()` for operations without transaction overhead. Useful for read-only queries or when you need direct client access.
@@ -126,7 +115,7 @@ The `withClient()` method is context-aware:
 | Context | Behavior |
 |---------|----------|
 | Outside transaction | New connection from factory → work → cleanup |
-| Inside transaction | Reuses existing transaction's client |
+| Inside transaction | Uses the transaction's connection through a client the transaction guards (see [Finalization and Work in Flight](#finalization-and-work-in-flight)) |
 
 This means you can safely use `withClient()` anywhere in your code:
 
@@ -154,7 +143,6 @@ await unitOfWork.scope(async () => {
 | Method | Transaction | Connection | Use Case |
 |--------|-------------|------------|----------|
 | `scope()` | Yes (lazy) | On first `withClient()` | Commands — recommended |
-| `wrap()` | Yes (eager) | Immediate | Legacy — deprecated |
 | `withClient()` | No | Per-call | Queries (SELECT) |
 
 ### Transaction Propagation
@@ -190,6 +178,90 @@ await unitOfWork.scope(async () => {
     }
 });
 ```
+
+Only the scope that creates a transaction finalizes it. A scope that joins with
+`EXISTING` or `NESTED` takes part in the transaction, and nothing is committed
+when its callback returns. The creating scope settles after `COMMIT` or
+`ROLLBACK`, the client cleanup and the after hooks have run. It does not wait
+for joined work it did not await (see
+[Finalization and Work in Flight](#finalization-and-work-in-flight)).
+
+If a joining `EXISTING` scope fails, the transaction is aborted even when the
+outer scope catches the error (see [CommitControl](#commitcontrol)).
+
+Savepoints form a stack on one connection, so a `NESTED` scope can open inside
+another `NESTED` scope but not beside one. Opening a `NESTED` scope while a
+sibling `NESTED` scope of the same transaction is still running rejects with
+`UnsupportedNestedTransactionCapabilityError`; run sibling savepoints one after
+the other.
+
+A `Propagation.NEW` scope needs a connection of its own. A scope that holds a
+pooled client and awaits one can wait forever when every client of the pool is
+held that way. Size the pool for the connections one request holds at once, or
+set `connectionTimeoutMillis` so the wait fails instead.
+
+### Finalization and Work in Flight
+
+Inside a transaction, `withClient()` and `getClient()` give you a client that
+the transaction guards. It is a proxy of the client the factory or pool
+provided, so `instanceof`, events and its other members behave as usual, with
+two differences:
+
+- Its queries go through the transaction. They reach the connection one at a
+  time, in the order they were made, in one line with `BEGIN`, the savepoint
+  statements and the final `COMMIT` or `ROLLBACK`. A failed query does not
+  hold up the ones behind it. A query in callback form takes the same way and
+  reports its result through the callback.
+- `release()`, `end()` and `connect()` throw, because the unit of work returns
+  the client when the transaction ends. `ensureConnection()` fails on it for
+  the same reason.
+
+When the creating scope's callback ends, the transaction decides its outcome at
+once. It does not wait for work that is still running, such as a joining scope
+or a `withClient()` callback the scope did not await.
+
+- Queries that got in before the decision are sent first and are committed or
+  rolled back with the transaction. The final statement follows them, and only
+  then does the client go back to the pool, so nothing reaches the connection
+  after it has been returned.
+- After the decision, queries through a client the transaction handed out
+  reject with `TransactionClosedError`. So do `withClient()`, `scope()`,
+  `getClient()`, hook registration, `preventCommit()` and transaction resources
+  in the transaction's context. Work that is still running settles with its
+  own result; a joining scope that queries again rejects with
+  `TransactionClosedError`.
+- While `beforeCommit` hooks run, only work started from those hooks is
+  accepted, including work a hook did not await, until the outcome is decided
+  after the hooks.
+- A rejection that nobody awaits still surfaces as an unhandled rejection; the
+  unit of work does not attach handlers to the promises it returns.
+
+Await the work you start inside a scope, so that all of it belongs to the
+transaction.
+
+A submittable query, such as a cursor from `pg-cursor`, takes its turn in the
+same line. The client returns it at once and sends it when the queries before
+it have finished, right away when none are running. The statements behind it,
+the final `COMMIT` or `ROLLBACK` included, wait until it is done, so finish or
+close it before the scope ends. As with pg's own queue, closing a cursor that
+is still waiting behind other queries does nothing, so await those queries
+first.
+
+Event listeners added through the client are added to the client itself and
+stay on it after it returns to the pool. pg calls them with that client as
+`this`, which the transaction does not guard, so remove them before the scope
+ends and do not query through `this` in them.
+
+When the scope's callback or a `beforeCommit` hook fails, the scope rejects
+with that error even if the following `ROLLBACK` or the client cleanup fails as
+well. Those secondary failures are logged with `console.error`, and a client
+whose `ROLLBACK` failed is destroyed instead of being returned to the pool. A
+`NESTED` scope whose callback failed likewise rejects with that failure when
+`ROLLBACK TO SAVEPOINT` fails or is refused, and the savepoint failure is
+logged. A `COMMIT` failure rejects the scope with the `COMMIT` error. When
+PostgreSQL answers `COMMIT` with `ROLLBACK` because a statement had already
+failed inside the transaction, even one nobody awaited, the scope rejects with
+`TransactionAbortedError`.
 
 ### Transaction Lifecycle Hooks
 
@@ -233,6 +305,8 @@ await unitOfWork.scope(async () => {
 
 - `beforeCommit` hooks run **before** the `COMMIT` — if any hook throws, the transaction rolls back instead
 - `beforeCommit` drain hooks run after ordinary `beforeCommit` hooks and still inside the same transaction
+- A `scope()` opened from a `beforeCommit` hook joins the transaction. If it fails before the hooks have finished, or a hook calls `preventCommit()`, the transaction rolls back instead of committing
+- `afterRollback` hooks also run when the `ROLLBACK` statement fails; no after hook runs when `COMMIT` fails, because its outcome is unknown
 - `afterCommit` and `afterRollback` hooks run after the transaction is finalized and outside the completed transaction context
 - `afterCommit` and `afterRollback` hooks run **best-effort**: all hooks execute even if some fail, with errors collected into an `AggregateError`
 - `getClient()` is not available inside `afterCommit` or `afterRollback`; use `withClient()` for follow-up database work
@@ -308,10 +382,13 @@ If an `EXISTING` nested scope throws and the root scope catches that error, the
 root scope must either rethrow or call `preventCommit()`. Otherwise,
 `DefaultPostgresUnitOfWork` rejects root finalization with
 `TransactionAbortedError` to prevent accidentally committing a transaction that
-was already aborted.
+was already aborted. The same applies when the root scope catches a failed
+transaction start (`BEGIN` or `SET TRANSACTION`) from `withClient()`.
 
-`CommitControl` is not available inside `Propagation.NESTED` savepoints because
-savepoints do not own the root transaction outcome.
+`CommitControl` is not available inside the callback of a `Propagation.NESTED`
+scope because savepoints do not own the root transaction outcome. Code outside
+the savepoint, such as the root scope's own callback, can still use it while a
+`NESTED` scope runs.
 
 #### TransactionResources
 
@@ -342,7 +419,7 @@ await unitOfWork.scope(async () => {
 ```
 
 Transaction resources are root-transaction scoped and are not available inside
-`Propagation.NESTED` savepoints.
+the callback of a `Propagation.NESTED` scope.
 
 `TransactionResourceAware` remains available as a deprecated alias for
 backward compatibility. Prefer `TransactionResources` in new code.
@@ -362,6 +439,12 @@ await unitOfWork.scope(async () => {
     });
 }, { isolationLevel: IsolationLevel.SERIALIZABLE });
 ```
+
+The isolation level comes from the scope that creates the transaction. A joining
+scope that names a different `isolationLevel` rejects with
+`IncompatibleIsolationLevelError` without running its callback; omit the option
+when joining, or use `Propagation.NEW` for work that needs its own isolation
+level.
 
 Available levels:
 - `IsolationLevel.READ_UNCOMMITTED`
@@ -821,12 +904,12 @@ describe("OrderService", () => {
 
 **Key behaviors:**
 
-- **`withClient()` method**: Uses the test client directly, always within the external transaction context.
+- **`withClient()` method**: Uses the test client directly, always within the external transaction context. Unlike `DefaultPostgresUnitOfWork`, it does not guard the client.
 - **After hooks**: `afterCommit` and `afterRollback` run outside the completed UoW scope. `getClient()` throws there, while `withClient()` still uses the external test transaction client.
-- **abortError propagation**: When a nested `EXISTING` operation throws (even if caught), the entire transaction is marked as aborted and will rollback - matching production behavior.
+- **Abort propagation**: When a nested `EXISTING` operation rejects (with any value, `undefined` included, and even if caught), the entire transaction is marked as aborted and will rollback - matching production behavior.
 - **NESTED savepoints**: `Propagation.NESTED` creates independent savepoints that can rollback without affecting the parent.
 - **Propagation.NEW**: Logs a warning and creates a new savepoint instead (true separate transactions are not possible within the external transaction).
-- **Single client**: Does not support concurrent `Promise.all` wrap calls (PostgreSQL limitation with single connection).
+- **Single client**: Does not support concurrent `Promise.all` scope calls (PostgreSQL limitation with single connection).
 
 ```typescript
 // abortError behavior - matches production
@@ -877,8 +960,9 @@ await uow.scope(async () => {
 | `TransactionResourceAware` | Deprecated alias for `TransactionResources` |
 | `createTransactionResourceKey` | Creates typed keys for transaction-scoped resources |
 | `TransactionAbortedError` | Error thrown when an aborted root transaction would otherwise finalize normally |
-| `TransactionClosedError` | Error thrown when a leaked async context tries to use a finalized transaction client |
-| `UnsupportedNestedTransactionCapabilityError` | Error thrown when root-only transaction capabilities are used inside a nested savepoint |
+| `TransactionClosedError` | Error thrown when work, including a query through a client the transaction handed out, tries to use a transaction that no longer accepts work because it is finalizing or finalized |
+| `UnsupportedNestedTransactionCapabilityError` | Error thrown when root-only transaction capabilities are used inside a nested savepoint, or when a `NESTED` scope opens beside a running sibling |
+| `IncompatibleIsolationLevelError` | Error thrown when a joining scope asks for an isolation level other than its transaction's |
 | `PostgresEventStore` | Event store implementation with batch insert support |
 | `PostgresTransactionalEventStoreSink` | Transaction-local event-store sink with drain-phase append and optional `onStored` callback |
 | `attachPostgresEventStoreSink` | Attaches a `PostgresTransactionalEventStoreSink` to a subscribable event publisher |
@@ -943,7 +1027,7 @@ await unitOfWork.scope(async () => {
 | Client access | Passed as callback argument | Via `withClient()` |
 | Status | Deprecated | Recommended |
 
-**`wrap()` is deprecated** but continues to work. No urgent migration needed — update at your own pace.
+`wrap()` was deprecated here and removed in 0.16.0.
 
 **Peer dependency:** Update `@hexaijs/core` to `^0.7.0`.
 

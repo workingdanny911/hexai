@@ -214,18 +214,14 @@ describe("SimpleCompositeApplication with DefaultPostgresUnitOfWork", () => {
             await insertRecord(20);
             uow.beforeCommit(async () => {
                 hookEntries++;
-                if (hookEntries > 1) {
-                    throw new Error("beforeCommit hook re-entered");
-                }
                 await composite.handleEvent(event);
             });
         });
 
-        // A scope() opened from a beforeCommit hook re-enters Postgres
-        // transaction finalization, so how the outer scope itself settles is
-        // a separate Postgres concern. Only the committed data is asserted.
-        await outerScope.catch(() => undefined);
-
+        await expect(outerScope).rejects.toBeInstanceOf(
+            TransactionAbortedError
+        );
+        expect(hookEntries).toBe(1);
         expect(await committedIds()).toEqual([]);
     });
 });

@@ -151,13 +151,6 @@ export class PostgresUnitOfWorkForTesting
         fn: () => Promise<T>,
         options: Partial<PostgresTransactionOptions> = {}
     ): Promise<T> {
-        return this.wrap(fn, options);
-    }
-
-    async wrap<T = unknown>(
-        fn: (client: ClientBase) => Promise<T>,
-        options: Partial<PostgresTransactionOptions> = {}
-    ): Promise<T> {
         const resolvedOptions = this.resolveOptions(options);
         const executor = this.resolveExecutor(resolvedOptions);
 
@@ -242,10 +235,20 @@ export class PostgresUnitOfWorkForTesting
     }
 }
 
+// Thrown from inside TransactionHooks.executeCommit() so that afterCommit
+// hooks are skipped when the hooks' work turned the outcome into a rollback.
+class CommitWithdrawn extends Error {
+    constructor() {
+        super("Commit withdrawn");
+        this.name = "CommitWithdrawn";
+    }
+}
+
 class TestTransactionExecutor {
     private initialized = false;
+    private finalizationStarted = false;
     private closed = false;
-    private abortError?: Error;
+    private abort?: { readonly cause: unknown };
     private commitPrevented = false;
     private commitPreventionCause?: unknown;
 
@@ -319,7 +322,7 @@ class TestTransactionExecutor {
     }
 
     public async execute<T>(
-        fn: (client: ClientBase) => Promise<T>,
+        fn: () => Promise<T>,
         options: PostgresTransactionOptions
     ): Promise<T> {
         await this.ensureStarted();
@@ -344,12 +347,12 @@ class TestTransactionExecutor {
     }
 
     private async runWithLifecycle<T>(
-        fn: (client: ClientBase) => Promise<T>
+        fn: () => Promise<T>
     ): Promise<T> {
         try {
             return await this.executeWithNesting(fn);
         } catch (e) {
-            this.markAsAborted(e as Error);
+            this.markAsAborted(e);
             throw e;
         } finally {
             await this.finalizeIfRoot();
@@ -357,44 +360,67 @@ class TestTransactionExecutor {
     }
 
     private async executeWithNesting<T>(
-        fn: (client: ClientBase) => Promise<T>
+        fn: () => Promise<T>
     ): Promise<T> {
         this.nestingDepth++;
         try {
-            return await fn(this.client);
+            return await fn();
         } finally {
             this.nestingDepth--;
         }
     }
 
-    private markAsAborted(error: Error): void {
-        this.abortError = error;
+    private markAsAborted(cause: unknown): void {
+        this.abort = { cause };
     }
 
+    // A scope that a beforeCommit hook runs ends while this finalization is
+    // under way, so it must not finalize again; the outcome is decided once
+    // more after the hooks instead.
     private async finalizeIfRoot(): Promise<void> {
-        if (this.nestingDepth === 0) {
-            if (this.isAborted() || this.commitPrevented) {
-                await this.hooks.executeRollback(
-                    () => this.rollback(),
-                    this.abortError ?? this.commitPreventionCause
-                );
-            } else if (!this.closed) {
-                let committed = false;
-                try {
-                    await this.hooks.executeCommit(
-                        async () => {
-                            await this.commit();
-                            committed = true;
-                        },
-                        () => this.rollback()
-                    );
-                } finally {
-                    if (committed) {
-                        await this.notifyRootCommit();
+        if (this.nestingDepth !== 0 || this.finalizationStarted) {
+            return;
+        }
+        this.finalizationStarted = true;
+
+        if (this.mustRollBack()) {
+            await this.rollBackWithHooks();
+            return;
+        }
+
+        let committed = false;
+        try {
+            await this.hooks.executeCommit(
+                async () => {
+                    if (this.mustRollBack()) {
+                        throw new CommitWithdrawn();
                     }
-                }
+                    committed = await this.commit();
+                },
+                () => this.rollback()
+            );
+        } catch (e) {
+            if (e instanceof CommitWithdrawn) {
+                await this.rollBackWithHooks();
+                return;
+            }
+            throw e;
+        } finally {
+            if (committed) {
+                await this.notifyRootCommit();
             }
         }
+    }
+
+    private mustRollBack(): boolean {
+        return this.isAborted() || this.commitPrevented;
+    }
+
+    private async rollBackWithHooks(): Promise<void> {
+        await this.hooks.executeRollback(
+            () => this.rollback(),
+            this.abort ? this.abort.cause : this.commitPreventionCause
+        );
     }
 
     private resolveExecutor(
@@ -447,14 +473,15 @@ class TestTransactionExecutor {
         }
     }
 
-    private async commit(): Promise<void> {
+    private async commit(): Promise<boolean> {
         if (this.closed) {
-            return;
+            return false;
         }
 
         this.closed = true;
         await this.client.query(`RELEASE SAVEPOINT ${this.savepointName}`);
         this.resources.clear();
+        return true;
     }
 
     private async rollback(): Promise<void> {
@@ -470,14 +497,14 @@ class TestTransactionExecutor {
     }
 
     private isAborted(): boolean {
-        return this.abortError !== undefined && !this.closed;
+        return this.abort !== undefined && !this.closed;
     }
 }
 
 class TestSavepoint {
     private initialized = false;
     private closed = false;
-    private abortError?: Error;
+    private abort?: { readonly cause: unknown };
 
     private nestingDepth = 0;
 
@@ -488,7 +515,7 @@ class TestSavepoint {
     ) {}
 
     public async execute<T>(
-        fn: (client: ClientBase) => Promise<T>
+        fn: () => Promise<T>
     ): Promise<T> {
         await this.ensureStarted();
         return this.runWithLifecycle(fn);
@@ -508,13 +535,13 @@ class TestSavepoint {
     }
 
     private async runWithLifecycle<T>(
-        fn: (client: ClientBase) => Promise<T>
+        fn: () => Promise<T>
     ): Promise<T> {
         this.nestingDepth++;
         try {
-            return await fn(this.client);
+            return await fn();
         } catch (e) {
-            this.markAsAborted(e as Error);
+            this.markAsAborted(e);
             throw e;
         } finally {
             this.nestingDepth--;
@@ -522,8 +549,8 @@ class TestSavepoint {
         }
     }
 
-    private markAsAborted(error: Error): void {
-        this.abortError = error;
+    private markAsAborted(cause: unknown): void {
+        this.abort = { cause };
     }
 
     private async finalizeIfRoot(): Promise<void> {
@@ -553,6 +580,6 @@ class TestSavepoint {
     }
 
     private isAborted(): boolean {
-        return this.abortError !== undefined && !this.closed;
+        return this.abort !== undefined && !this.closed;
     }
 }
