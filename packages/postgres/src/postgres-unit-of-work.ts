@@ -33,15 +33,6 @@ type FailureAwareClientCleanUp = (
     failure?: unknown
 ) => void | Promise<void>;
 
-/**
- * What happens to a connection borrowed outside any scope when the work on it
- * fails. `db.query()` discards it, as `pool.query()` does, because the
- * connection may still be busy with the failed query, for example after pg's
- * `query_timeout`. `withClient()` releases it as usual, as code that releases
- * a client from `pool.connect()` in `finally` does, and as it always has.
- */
-type BorrowedClientOnFailure = "discard" | "release";
-
 declare const transactionResourceKeyBrand: unique symbol;
 
 export interface TransactionResourceKey<T> {
@@ -154,11 +145,14 @@ export class DefaultPostgresUnitOfWork
     readonly db: PostgresQueryable = {
         query: async (text, values) => {
             const query = singleStatementQuery(text, values);
-            return this.useClient(
-                (client) => client.query(query),
-                "db.query()",
-                "discard"
-            );
+            const transaction = this.getCurrentTransaction();
+            if (transaction) {
+                return transaction.useClient(
+                    (client) => client.query(query),
+                    "db.query()"
+                );
+            }
+            return this.queryOnOwnConnection(query);
         },
     };
 
@@ -266,42 +260,44 @@ export class DefaultPostgresUnitOfWork
 
     /** @deprecated Use `db` for queries. See `PostgresUnitOfWork.withClient()`. */
     withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T> {
-        return this.useClient(fn, "withClient()", "release");
-    }
-
-    private async useClient<T>(
-        fn: (client: pg.ClientBase) => Promise<T>,
-        operation: string,
-        borrowedClientOnFailure: BorrowedClientOnFailure
-    ): Promise<T> {
-        const currentTransaction = this.getCurrentTransaction();
-
-        if (currentTransaction) {
-            return currentTransaction.useClient(fn, operation);
+        const transaction = this.getCurrentTransaction();
+        if (transaction) {
+            return transaction.useClient(fn, "withClient()");
         }
-
-        return this.useBorrowedClient(fn, borrowedClientOnFailure);
+        return this.withOwnConnection(fn);
     }
 
-    private async useBorrowedClient<T>(
-        fn: (client: pg.ClientBase) => Promise<T>,
-        onFailure: BorrowedClientOnFailure
-    ): Promise<T> {
+    // Outside any scope, db.query() works as pool.query(): the connection
+    // goes back after the query, or is destroyed when the query failed, since
+    // it may still be busy with it, for example after pg's query_timeout.
+    private async queryOnOwnConnection(
+        query: pg.QueryConfig
+    ): Promise<pg.QueryResult> {
         const client = await this.clientFactory();
-        let result: T;
+        let result: pg.QueryResult;
         try {
             await ensureConnection(client);
-            result = await fn(client);
+            result = await client.query(query);
         } catch (failure) {
-            if (onFailure === "discard") {
-                await this.clientCleanUp?.(client, failure);
-            } else {
-                await this.clientCleanUp?.(client);
-            }
+            await this.clientCleanUp?.(client, failure);
             throw failure;
         }
         await this.clientCleanUp?.(client);
         return result;
+    }
+
+    // Outside any scope, withClient() works as pool.connect() with release()
+    // in finally: the connection goes back whether fn succeeds or fails.
+    private async withOwnConnection<T>(
+        fn: (client: pg.ClientBase) => Promise<T>
+    ): Promise<T> {
+        const client = await this.clientFactory();
+        try {
+            await ensureConnection(client);
+            return await fn(client);
+        } finally {
+            await this.clientCleanUp?.(client);
+        }
     }
 
     private getCurrentTransaction(): PostgresTransaction | null {
