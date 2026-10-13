@@ -1,17 +1,38 @@
 # Changelog
 
-## [0.16.0] - 2026-10-12
+## [0.16.0] - 2026-10-13
 
 ### Added
 
+- Added `db` to `PostgresUnitOfWork`, `DefaultPostgresUnitOfWork` and
+  `PostgresUnitOfWorkForTesting`, and its type `PostgresQueryable`, which has
+  only `query(text, values?)` and returns pg's `QueryResult`. `db` is always
+  the same object, so a repository can take it once and keep it: each query
+  goes to the transaction of the scope it is called in, and the first query in
+  a scope begins the transaction. In work that a scope did not await, a query
+  made after the scope's outcome is decided rejects with
+  `TransactionClosedError`. Outside any scope, a query borrows a connection for
+  itself, commits on its own and returns the connection, as `pool.query()`
+  does. Every call sends exactly one statement, and its values are copied when
+  it is called. pg's `Client`, `PoolClient` and `Pool` fit `PostgresQueryable`
+  as well. Inside a transaction, its queries share the line of the client that
+  `withClient()` hands out. `PostgresEventStore` now queries through `db`.
 - Added `IncompatibleIsolationLevelError`, thrown when a joining scope asks for
   an isolation level other than the one of the transaction it joins.
+
+### Deprecated
+
+- Deprecated `withClient()` and `getClient()`. They will be removed in the next
+  major version. Use `db` for queries. Work that needs the pg client itself,
+  such as `COPY`, can keep using `withClient()` for now; its replacement will
+  be decided before `withClient()` is removed.
 
 ### Removed
 
 - Removed the deprecated `wrap()` from `DefaultPostgresUnitOfWork` and
   `PostgresUnitOfWorkForTesting`. `PostgresUnitOfWork` now extends
-  `UnitOfWorkClientAccess` without `wrap()`. Use `scope()` with `withClient()`.
+  `UnitOfWorkClientAccess` without `wrap()`. Use `scope()` and query through
+  `db` inside it.
 
 ### Fixed
 
@@ -122,9 +143,9 @@
   overlapping queries to pg's own query queue, which pg deprecates and plans
   to remove in pg 9.
 - A transaction whose outcome is decided accepts no new work. In its context,
-  `withClient()`, `scope()`, `getClient()`, hook registration,
-  `preventCommit()` and transaction resources reject or throw with
-  `TransactionClosedError`, and so do queries through its client. While
+  queries through `db`, `withClient()`, `scope()`, `getClient()`, hook
+  registration, `preventCommit()` and transaction resources reject or throw
+  with `TransactionClosedError`, and so do queries through its client. While
   `beforeCommit` hooks run, only work started from those hooks is accepted,
   including work a hook did not await, until the outcome is decided after the
   hooks, so nothing else slips in between the hooks and `COMMIT`. Previously a
@@ -159,9 +180,9 @@
   start failure, or with `TransactionClosedError` when the start succeeded but
   the transaction stopped accepting work meanwhile. In 0.15.1 it could receive
   the error of a `ROLLBACK` sent on behalf of the finalizing scope.
-  `TransactionClosedError` now names the operation that waited (`withClient()`
-  or `scope()`) rather than always `withClient()`, and a refused query through
-  the guarded client names `query()`.
+  `TransactionClosedError` now names the operation that waited (`db.query()`,
+  `withClient()` or `scope()`) rather than always `withClient()`, and a refused
+  query through the guarded client names `query()`.
 - A joining scope that asks for an isolation level other than the one of the
   transaction it joins (`READ COMMITTED` when the creating scope named none)
   rejects with `IncompatibleIsolationLevelError` without running its callback.
@@ -185,20 +206,40 @@
   `Propagation.NEW` transaction opened inside a savepoint keeps them, as
   before.
 
+- The peer dependency on `pg` is now `^8.12.0`. `db` relies on pg's
+  `queryMode` option, added in pg 8.12, to send a query without values as a
+  single statement.
+
 ### Migration Notes
 
-- Replace `wrap(fn, options)` with `scope(() => withClient(fn), options)`.
-  `scope()` sends `BEGIN` on the first `withClient()`, where `wrap()` sent it
-  at once. A `wrap()` nested inside a `Propagation.NESTED` scope joined that
+- Move queries from `withClient((client) => client.query(text, values))` to
+  `db.query(text, values)`, and hand repositories `db` instead of the unit of
+  work where they only query. Outside any scope, `db` borrows a connection per
+  query, so consecutive queries may run on different connections: session
+  state such as `SET search_path`, temporary tables or session-level advisory
+  locks does not carry over, several writes commit one by one, and queries made
+  at the same time borrow a connection each. Open a scope where queries must
+  share a connection or succeed together. A unit of work created from a
+  connection string or `PostgresConfig` opens a new connection for each query
+  outside a scope; prefer a pool.
+- `db.query()` sends one statement per call. Split text with several
+  statements into separate calls; such a call rejects with a syntax error
+  (SQLSTATE `42601`).
+- A class that implements `PostgresUnitOfWork` itself must add `db`.
+- Replace `wrap(fn, options)` with `scope(fn, options)` and query through `db`
+  inside it, or with `scope(() => withClient(fn), options)` where `fn` needs
+  the pg client itself. `scope()` sends `BEGIN` on the first query, where
+  `wrap()` sent it at once. A `wrap()` nested inside a `Propagation.NESTED` scope joined that
   savepoint, so its failure rolled back only the savepoint; a joining `scope()`
   there aborts the whole transaction when it fails, as it does anywhere else.
-  Where only the savepoint should roll back, call `withClient(fn)` inside the
-  `NESTED` scope and let the error leave its callback.
+  Where only the savepoint should roll back, query inside the `NESTED` scope
+  and let the error leave its callback.
 - Await the work you start inside a scope. Work that is still running when the
   outcome is decided is not waited for: only what got in before the decision
   belongs to the transaction, and its next query or other use of the
   transaction rejects with `TransactionClosedError`. This covers joining
-  scopes and `withClient()` callbacks the scope did not await, the losing side
+  scopes, queries through `db` and `withClient()` callbacks the scope did not
+  await, the losing side
   of a `Promise.race()`, a client kept from `getClient()`, and work a
   `beforeCommit` hook started without awaiting it.
 - Do not call `release()`, `end()` or `connect()` on a client you get inside a
@@ -224,9 +265,10 @@
   joining, or use `Propagation.NEW` for work that needs its own isolation level.
 - Run sibling `Propagation.NESTED` scopes one after the other; opening one while
   another runs beside it now rejects.
-- The type declarations add `IncompatibleIsolationLevelError` and drop `wrap()`
-  from `DefaultPostgresUnitOfWork`, `PostgresUnitOfWorkForTesting` and
-  `PostgresUnitOfWork`. A `PostgresUnitOfWork` is therefore no longer
+- The type declarations add `db`, `PostgresQueryable` and
+  `IncompatibleIsolationLevelError`, mark `withClient()` and `getClient()`
+  deprecated, and drop `wrap()` from `DefaultPostgresUnitOfWork`,
+  `PostgresUnitOfWorkForTesting` and `PostgresUnitOfWork`. A `PostgresUnitOfWork` is therefore no longer
   assignable to core's `UnitOfWorkClientAccess`, which still declares `wrap()`.
   The rest of the public API is unchanged.
 

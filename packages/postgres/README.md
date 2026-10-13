@@ -67,22 +67,50 @@ The client factory creates a new client for each transaction. The optional clean
 
 ### Transaction Execution
 
-Use `scope()` to define a transaction boundary. Client access happens through `withClient()`:
+Use `scope()` to define a transaction boundary, and send queries through `db`:
 
 ```typescript
 // Execute within a transaction
 const result = await unitOfWork.scope(async () => {
-    await unitOfWork.withClient(async (client) => {
-        await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", [orderId, "pending"]);
-        await client.query("INSERT INTO order_items (order_id, product_id) VALUES ($1, $2)", [orderId, productId]);
-    });
+    await unitOfWork.db.query("INSERT INTO orders (id, status) VALUES ($1, $2)", [orderId, "pending"]);
+    await unitOfWork.db.query("INSERT INTO order_items (order_id, product_id) VALUES ($1, $2)", [orderId, productId]);
     return { orderId };
 });
 ```
 
+`db` is always the same object, so a repository can take it once and keep it.
+Each query goes to the transaction that is current when it is called:
+
+```typescript
+import type { PostgresQueryable } from "@hexaijs/postgres";
+
+class OrderRepository {
+    constructor(private readonly db: PostgresQueryable) {}
+
+    async updateStatus(id: string, status: string): Promise<void> {
+        await this.db.query("UPDATE orders SET status = $1 WHERE id = $2", [status, id]);
+    }
+}
+
+const orders = new OrderRepository(unitOfWork.db);
+
+await unitOfWork.scope(async () => {
+    await orders.updateStatus(orderId, "confirmed"); // runs in this scope's transaction
+});
+```
+
+`PostgresQueryable` has only `query()`. pg's `Client`, `PoolClient` and `Pool`
+fit it as well, so such a repository also runs against a plain pool, for
+example in a script.
+
+`db.query()` sends exactly one statement per call. Pass values as parameters
+(`$1`, `$2`, ...); a call with two statements rejects with a syntax error
+(SQLSTATE `42601`). The values are copied when `query()` is called, so changing
+the array afterwards does not change the query.
+
 #### Lazy Transaction Initialization
 
-`scope()` does **not** issue `BEGIN` immediately. The transaction starts lazily on the first `withClient()` call. This means if the scope exits without any client access, no database connection is acquired at all.
+`scope()` does **not** issue `BEGIN` immediately. The transaction starts lazily on the first query. This means if the scope exits without any query, no database connection is acquired at all.
 
 ```typescript
 await unitOfWork.scope(async () => {
@@ -90,60 +118,61 @@ await unitOfWork.scope(async () => {
 
     if (!needsUpdate) return;  // Early exit: no connection acquired
 
-    await unitOfWork.withClient(async (client) => {
-        // BEGIN is issued here, on first withClient() call
-        await client.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
-    });
+    // BEGIN is issued here, on the first query
+    await unitOfWork.db.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
     // COMMIT on scope exit
 });
 ```
 
-### Client Access Without Transaction
+### Queries Without a Transaction
 
-Use `withClient()` for operations without transaction overhead. Useful for read-only queries or when you need direct client access.
+Outside any scope, `db.query()` borrows a connection for that one query and
+returns it right after, as `pool.query()` does. The query commits on its own.
+This suits reads, which need no transaction:
 
 ```typescript
 // Simple read without transaction (autocommit)
-const user = await unitOfWork.withClient(async (client) => {
-    const result = await client.query("SELECT * FROM users WHERE id = $1", [userId]);
-    return result.rows[0];
-});
+const result = await unitOfWork.db.query("SELECT * FROM users WHERE id = $1", [userId]);
+const user = result.rows[0];
 ```
 
-The `withClient()` method is context-aware:
+Where a query goes depends on where it is called:
 
-| Context | Behavior |
-|---------|----------|
-| Outside transaction | New connection from factory → work → cleanup |
-| Inside transaction | Uses the transaction's connection through a client the transaction guards (see [Finalization and Work in Flight](#finalization-and-work-in-flight)) |
+| Context | `db.query()` |
+|---------|--------------|
+| Outside any scope | Borrows a connection for the query and returns it; the query commits on its own |
+| Inside a scope | Runs in the scope's transaction, in order with the transaction's other statements |
+| In work the scope did not await, after the scope's outcome is decided | Rejects with `TransactionClosedError` (see [Finalization and Work in Flight](#finalization-and-work-in-flight)) |
 
-This means you can safely use `withClient()` anywhere in your code:
+Outside a scope, keep in mind:
 
-```typescript
-// Outside any transaction - gets its own connection
-const users = await unitOfWork.withClient(async (client) => {
-    return await client.query("SELECT * FROM users");
-});
-
-// Inside scope() - reuses the transaction's client
-await unitOfWork.scope(async () => {
-    await unitOfWork.withClient(async (client) => {
-        await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
-    });
-
-    // Same transaction, sees uncommitted changes
-    const order = await unitOfWork.withClient(async (client) => {
-        return await client.query("SELECT * FROM orders WHERE id = $1", [orderId]);
-    });
-});
-```
+- Consecutive queries may run on different connections. Session state such as
+  `SET search_path`, temporary tables or session-level advisory locks does not
+  carry over; open a scope when it must.
+- Several writes commit one by one. Open a scope when they must succeed or fail
+  together.
+- Queries made at the same time borrow a connection each.
+- A unit of work created from a connection string or `PostgresConfig` opens and
+  closes a new connection for each such query. Prefer a pool.
 
 **When to use which method:**
 
 | Method | Transaction | Connection | Use Case |
 |--------|-------------|------------|----------|
-| `scope()` | Yes (lazy) | On first `withClient()` | Commands — recommended |
-| `withClient()` | No | Per-call | Queries (SELECT) |
+| `scope()` | Yes (lazy) | On the first query | Commands — recommended |
+| `db.query()` outside a scope | No | Per query | Queries (SELECT) |
+
+### Direct Client Access (Deprecated)
+
+`withClient()` and `getClient()` are deprecated and will be removed in the next
+major version. Use `db` for queries. Work that needs the pg client itself, such
+as `COPY`, can keep using `withClient()` for now; its replacement will be
+decided before `withClient()` is removed.
+
+`withClient(fn)` runs `fn` with a client. Inside a scope, it is a client the
+transaction guards (see [Finalization and Work in Flight](#finalization-and-work-in-flight)),
+and its queries share the transaction with `db`. Outside any scope, it is a new
+connection from the factory, cleaned up after `fn`.
 
 ### Transaction Propagation
 
@@ -202,8 +231,9 @@ set `connectionTimeoutMillis` so the wait fails instead.
 
 ### Finalization and Work in Flight
 
-Inside a transaction, `withClient()` and `getClient()` give you a client that
-the transaction guards. It is a proxy of the client the factory or pool
+Queries through `db` go through the transaction as described below. Inside a
+transaction, the deprecated `withClient()` and `getClient()` give you a client
+that the transaction guards. It is a proxy of the client the factory or pool
 provided, so `instanceof`, events and its other members behave as usual, with
 two differences:
 
@@ -218,14 +248,14 @@ two differences:
 
 When the creating scope's callback ends, the transaction decides its outcome at
 once. It does not wait for work that is still running, such as a joining scope
-or a `withClient()` callback the scope did not await.
+or a query the scope did not await.
 
 - Queries that got in before the decision are sent first and are committed or
   rolled back with the transaction. The final statement follows them, and only
   then does the client go back to the pool, so nothing reaches the connection
   after it has been returned.
-- After the decision, queries through a client the transaction handed out
-  reject with `TransactionClosedError`. So do `withClient()`, `scope()`,
+- After the decision, queries through `db` and through a client the transaction
+  handed out reject with `TransactionClosedError`. So do `withClient()`, `scope()`,
   `getClient()`, hook registration, `preventCommit()` and transaction resources
   in the transaction's context. Work that is still running settles with its
   own result; a joining scope that queries again rejects with
@@ -271,18 +301,13 @@ Register callbacks that execute at specific points in the transaction lifecycle:
 await unitOfWork.scope(async () => {
     // Validate before committing
     unitOfWork.beforeCommit(async () => {
-        const count = await unitOfWork.withClient(async (client) => {
-            const result = await client.query("SELECT count(*) FROM order_items WHERE order_id = $1", [orderId]);
-            return parseInt(result.rows[0].count);
-        });
-        if (count === 0) throw new Error("Order must have at least one item");
+        const result = await unitOfWork.db.query("SELECT count(*) FROM order_items WHERE order_id = $1", [orderId]);
+        if (parseInt(result.rows[0].count) === 0) throw new Error("Order must have at least one item");
     });
 
     // Flush buffered work after validation and still inside this transaction
     unitOfWork.beforeCommit(async () => {
-        await unitOfWork.withClient(async (client) => {
-            await client.query("INSERT INTO order_audit_log (order_id) VALUES ($1)", [orderId]);
-        });
+        await unitOfWork.db.query("INSERT INTO order_audit_log (order_id) VALUES ($1)", [orderId]);
     }, { phase: "drain" });
 
     // Send notification after successful commit
@@ -295,9 +320,7 @@ await unitOfWork.scope(async () => {
         await fileStorage.deleteUploadedFiles(orderId);
     });
 
-    await unitOfWork.withClient(async (client) => {
-        await client.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
-    });
+    await unitOfWork.db.query("UPDATE orders SET status = $1 WHERE id = $2", ["confirmed", orderId]);
 });
 ```
 
@@ -309,7 +332,7 @@ await unitOfWork.scope(async () => {
 - `afterRollback` hooks also run when the `ROLLBACK` statement fails; no after hook runs when `COMMIT` fails, because its outcome is unknown
 - `afterCommit` and `afterRollback` hooks run after the transaction is finalized and outside the completed transaction context
 - `afterCommit` and `afterRollback` hooks run **best-effort**: all hooks execute even if some fail, with errors collected into an `AggregateError`
-- `getClient()` is not available inside `afterCommit` or `afterRollback`; use `withClient()` for follow-up database work
+- Use `db` for follow-up database work in `afterCommit` or `afterRollback`; outside the completed transaction, each query runs on its own. `getClient()` is not available there
 - Hooks are **scope-local**: registered within a `scope()`, cleared after the transaction completes
 - Hooks registered inside `Propagation.NESTED` scopes are attached to the current root transaction and run when that root transaction finalizes
 - Calling hook registration methods outside a `scope()` throws an error
@@ -331,11 +354,11 @@ unsubscribe();
 Observers are instance-level and may be registered outside a transaction scope.
 They run after a root physical `COMMIT` succeeds, after transaction-local
 `afterCommit` hooks have run, and outside the completed transaction context.
-Use `withClient()` if an observer needs follow-up database work.
+Use `db` if an observer needs follow-up database work.
 
 Avoid opening a committing `scope()` on the same unit of work from an
 `onEveryCommit()` observer. That new commit would notify the same observer
-again. Use `withClient()` for follow-up database work, or register a separate
+again. Use `db` for follow-up database work, or register a separate
 post-commit coordinator when more transaction boundaries are needed.
 
 Observer failures are logged and do not change the already completed scope
@@ -383,7 +406,7 @@ root scope must either rethrow or call `preventCommit()`. Otherwise,
 `DefaultPostgresUnitOfWork` rejects root finalization with
 `TransactionAbortedError` to prevent accidentally committing a transaction that
 was already aborted. The same applies when the root scope catches a failed
-transaction start (`BEGIN` or `SET TRANSACTION`) from `withClient()`.
+transaction start (`BEGIN` or `SET TRANSACTION`) from its first query.
 
 `CommitControl` is not available inside the callback of a `Propagation.NESTED`
 scope because savepoints do not own the root transaction outcome. Code outside
@@ -432,11 +455,9 @@ Configure transaction isolation levels when stricter guarantees are needed:
 import { IsolationLevel } from "@hexaijs/postgres";
 
 await unitOfWork.scope(async () => {
-    await unitOfWork.withClient(async (client) => {
-        // Serializable isolation prevents phantom reads
-        const result = await client.query("SELECT * FROM inventory WHERE product_id = $1", [productId]);
-        // ...
-    });
+    // Serializable isolation prevents phantom reads
+    const result = await unitOfWork.db.query("SELECT * FROM inventory WHERE product_id = $1", [productId]);
+    // ...
 }, { isolationLevel: IsolationLevel.SERIALIZABLE });
 ```
 
@@ -507,7 +528,7 @@ on first publish. For any existing legacy or custom event table, seed or sync th
 counter to at least `COALESCE(MAX(position), 0)` before starting new writers and
 before legacy writes resume after a migration window.
 
-Inside a transaction scope, the event store shares the same client with repositories:
+Inside a transaction scope, the event store shares the scope's transaction with repositories:
 
 ```typescript
 await unitOfWork.scope(async () => {
@@ -880,9 +901,7 @@ describe("OrderService", () => {
 
     it("should create order", async () => {
         await uow.scope(async () => {
-            await uow.withClient(async (c) => {
-                await c.query("INSERT INTO orders (id) VALUES ($1)", ["order-1"]);
-            });
+            await uow.db.query("INSERT INTO orders (id) VALUES ($1)", ["order-1"]);
         });
 
         // Verify within the same transaction
@@ -904,8 +923,8 @@ describe("OrderService", () => {
 
 **Key behaviors:**
 
-- **`withClient()` method**: Uses the test client directly, always within the external transaction context. Unlike `DefaultPostgresUnitOfWork`, it does not guard the client.
-- **After hooks**: `afterCommit` and `afterRollback` run outside the completed UoW scope. `getClient()` throws there, while `withClient()` still uses the external test transaction client.
+- **`db` and `withClient()`**: Use the test client directly, inside or outside a scope, always within the external transaction context. Unlike `DefaultPostgresUnitOfWork`, they do not guard the client, and `db` sends one statement per call as in production.
+- **After hooks**: `afterCommit` and `afterRollback` run outside the completed UoW scope. `getClient()` throws there, while `db` and `withClient()` still use the external test transaction client.
 - **Abort propagation**: When a nested `EXISTING` operation rejects (with any value, `undefined` included, and even if caught), the entire transaction is marked as aborted and will rollback - matching production behavior.
 - **NESTED savepoints**: `Propagation.NESTED` creates independent savepoints that can rollback without affecting the parent.
 - **Propagation.NEW**: Logs a warning and creates a new savepoint instead (true separate transactions are not possible within the external transaction).
@@ -951,7 +970,8 @@ await uow.scope(async () => {
 | Export | Description |
 |--------|-------------|
 | `createPostgresUnitOfWork` | Factory function to create PostgresUnitOfWork from Pool or Config |
-| `PostgresUnitOfWork` | Interface combining base `UnitOfWork`, client access, transaction lifecycle hooks, and Postgres commit observers |
+| `PostgresUnitOfWork` | Interface combining base `UnitOfWork`, `db` for queries, transaction lifecycle hooks, and Postgres commit observers |
+| `PostgresQueryable` | Type of `db`: only `query()`, which pg's `Client`, `PoolClient` and `Pool` also fit |
 | `PostgresUnitOfWorkObserver` | Postgres-local capability for instance-level `onEveryCommit()` observers |
 | `DefaultPostgresUnitOfWork` | Default implementation of PostgresUnitOfWork with transaction management |
 | `PostgresUnitOfWorkForTesting` | Test-specific PostgresUnitOfWork that runs inside external transaction |
@@ -977,6 +997,37 @@ await uow.scope(async () => {
 | `ensureConnection` | Safe connection helper |
 
 ## Migration Guide
+
+### v0.15.x → v0.16.0
+
+**New: `db` for queries**
+
+Send queries through `db` instead of a client callback. `db` routes each query
+to the transaction of the current scope, or runs it on its own outside any
+scope, so a repository can take it once:
+
+```typescript
+// Before
+await unitOfWork.withClient((client) =>
+    client.query("INSERT INTO orders (id) VALUES ($1)", [orderId])
+);
+
+// After
+await unitOfWork.db.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+```
+
+`withClient()` and `getClient()` are deprecated. Keep `withClient()` only for
+work that needs the pg client itself, such as `COPY`.
+
+**Removed: `wrap()`**
+
+Replace `wrap(fn, options)` with `scope(fn, options)` and query through `db`
+inside it.
+
+The other behavior changes of 0.16.0 are listed with migration notes in the
+CHANGELOG.
+
+**Peer dependency:** `pg` `^8.12.0`.
 
 ### v0.6.0 → v0.8.0
 

@@ -1,5 +1,3 @@
-import type * as pg from "pg";
-
 import {
     Message,
     EventStore,
@@ -50,62 +48,56 @@ export class PostgresEventStore implements EventStore {
             return [];
         }
 
-        return this.uow.scope(async () => {
-            return this.uow.withClient(async (client) => {
-                return this.appender.appendAll(events, client);
-            });
-        });
+        return this.uow.scope(() =>
+            this.appender.appendAll(events, this.uow.db)
+        );
     }
 
     async fetch(
         afterPosition: number,
         limit?: number
     ): Promise<EventStoreFetchResult> {
-        return this.uow.withClient(async (client) => {
-            let eventsQuery = `
-                SELECT position, message_type, headers, payload
-                FROM ${this.appender.tableName}
-                WHERE position > $1
-                ORDER BY position ASC
-            `;
-            const params: unknown[] = [afterPosition];
+        let eventsQuery = `
+            SELECT position, message_type, headers, payload
+            FROM ${this.appender.tableName}
+            WHERE position > $1
+            ORDER BY position ASC
+        `;
+        const params: unknown[] = [afterPosition];
 
-            if (limit !== undefined) {
-                eventsQuery += ` LIMIT $2`;
-                params.push(limit);
-            }
+        if (limit !== undefined) {
+            eventsQuery += ` LIMIT $2`;
+            params.push(limit);
+        }
 
-            const result = await client.query<FetchRow>(
-                `WITH event_rows AS (
-                     ${eventsQuery}
-                 ),
-                 last_position AS (
-                     SELECT COALESCE(MAX(position), 0) AS value
-                     FROM ${this.appender.tableName}
-                 )
-                 SELECT
-                     event_rows.position,
-                     event_rows.message_type,
-                     event_rows.headers,
-                     event_rows.payload,
-                     last_position.value AS last_position
-                 FROM last_position
-                 LEFT JOIN event_rows ON true
-                 ORDER BY event_rows.position ASC`,
-                params
-            );
+        const result = await this.uow.db.query<FetchRow>(
+            `WITH event_rows AS (
+                 ${eventsQuery}
+             ),
+             last_position AS (
+                 SELECT COALESCE(MAX(position), 0) AS value
+                 FROM ${this.appender.tableName}
+             )
+             SELECT
+                 event_rows.position,
+                 event_rows.message_type,
+                 event_rows.headers,
+                 event_rows.payload,
+                 last_position.value AS last_position
+             FROM last_position
+             LEFT JOIN event_rows ON true
+             ORDER BY event_rows.position ASC`,
+            params
+        );
 
-            const events: StoredEvent[] = result.rows
-                .filter(
-                    (row): row is EventRow & FetchRow => row.position !== null
-                )
-                .map((row) => this.deserializeRow(row));
+        const events: StoredEvent[] = result.rows
+            .filter((row): row is EventRow & FetchRow => row.position !== null)
+            .map((row) => this.deserializeRow(row));
 
-            return {
-                events,
-                lastPosition: Number(result.rows[0].last_position),
-            };
-        });
+        return {
+            events,
+            lastPosition: Number(result.rows[0].last_position),
+        };
     }
 
     async *stream(
@@ -132,41 +124,31 @@ export class PostgresEventStore implements EventStore {
         }
     }
 
-    private fetchBatch(
+    private async fetchBatch(
         afterPosition: number,
         limit: number
     ): Promise<StoredEvent[]> {
-        return this.uow.withClient(async (client) => {
-            const result = await client.query<EventRow>(
-                `SELECT position, message_type, headers, payload
-                 FROM ${this.appender.tableName}
-                 WHERE position > $1
-                 ORDER BY position ASC
-                 LIMIT $2`,
-                [afterPosition, limit]
-            );
-            return result.rows.map((row) => this.deserializeRow(row));
-        });
+        const result = await this.uow.db.query<EventRow>(
+            `SELECT position, message_type, headers, payload
+             FROM ${this.appender.tableName}
+             WHERE position > $1
+             ORDER BY position ASC
+             LIMIT $2`,
+            [afterPosition, limit]
+        );
+        return result.rows.map((row) => this.deserializeRow(row));
     }
 
     async getEventCount(afterPosition: number): Promise<number> {
-        return this.uow.withClient(async (client) => {
-            const result = await client.query<{ count: string }>(
-                `SELECT COUNT(*) as count FROM ${this.appender.tableName} WHERE position > $1`,
-                [afterPosition]
-            );
-            return Number(result.rows[0].count);
-        });
+        const result = await this.uow.db.query<{ count: string }>(
+            `SELECT COUNT(*) as count FROM ${this.appender.tableName} WHERE position > $1`,
+            [afterPosition]
+        );
+        return Number(result.rows[0].count);
     }
 
     async getLastPosition(): Promise<number> {
-        return this.uow.withClient(async (client) => {
-            return this.queryLastPosition(client);
-        });
-    }
-
-    private async queryLastPosition(client: pg.ClientBase): Promise<number> {
-        const result = await client.query<{ max: string | null }>(
+        const result = await this.uow.db.query<{ max: string | null }>(
             `SELECT MAX(position) as max FROM ${this.appender.tableName}`
         );
 

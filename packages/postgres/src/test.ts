@@ -8,6 +8,10 @@ import { PostgresConfig } from "./config/index.js";
 import { runHexaiMigrations } from "./run-hexai-migrations.js";
 import { PostgresTransactionOptions } from "./types.js";
 import {
+    type PostgresQueryable,
+    singleStatementQuery,
+} from "./postgres-queryable.js";
+import {
     PostgresUnitOfWork,
     UnsupportedNestedTransactionCapabilityError,
 } from "./postgres-unit-of-work.js";
@@ -62,8 +66,14 @@ export class PostgresUnitOfWorkForTesting
     private executorStorage = new AsyncLocalStorage<TestTransactionExecutor>();
     private everyCommitObservers = new Set<TransactionHook>();
 
+    readonly db: PostgresQueryable = {
+        query: async (text, values) =>
+            this.client.query(singleStatementQuery(text, values)),
+    };
+
     constructor(private client: ClientBase) {}
 
+    /** @deprecated Use `db`. getClient() will be removed in the next major version. */
     public getClient(): ClientBase {
         const executor = this.getCurrentExecutor();
         if (!executor) {
@@ -143,6 +153,7 @@ export class PostgresUnitOfWorkForTesting
         executor.setResource(key, value);
     }
 
+    /** @deprecated Use `db` for queries. See `PostgresUnitOfWork.withClient()`. */
     async withClient<T>(fn: (client: ClientBase) => Promise<T>): Promise<T> {
         return fn(this.client);
     }

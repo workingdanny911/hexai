@@ -399,6 +399,40 @@ describe("PostgresUnitOfWorkForTesting", () => {
         });
     });
 
+    describe("db", () => {
+        async function insertWithDb(id: number): Promise<void> {
+            await uow.db.query(`INSERT INTO ${TABLE} VALUES ($1);`, [id]);
+        }
+
+        test("runs queries in the scope and rolls them back when the scope fails", async () => {
+            await uow.scope(() => insertWithDb(1));
+            try {
+                await uow.scope(async () => {
+                    await insertWithDb(2);
+                    throw new Error("transaction failure");
+                });
+            } catch {
+                // expected
+            }
+
+            await expectRecordIds([1]);
+        });
+
+        test("runs queries outside a scope on the test client", async () => {
+            await insertWithDb(1);
+
+            await expectRecordIds([1]);
+        });
+
+        test("rejects two statements in one call", async () => {
+            await expect(
+                uow.db.query(
+                    `INSERT INTO ${TABLE} VALUES (1); INSERT INTO ${TABLE} VALUES (2);`
+                )
+            ).rejects.toMatchObject({ code: "42601" });
+        });
+    });
+
     describe("transaction lifecycle hooks", () => {
         describe("beforeCommit", () => {
             test("executes before commit", async () => {
