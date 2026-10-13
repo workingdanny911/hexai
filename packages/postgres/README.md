@@ -128,7 +128,10 @@ await unitOfWork.scope(async () => {
 
 Outside any scope, `db.query()` borrows a connection for that one query and
 returns it right after, as `pool.query()` does. The query commits on its own.
-This suits reads, which need no transaction:
+When the query fails, the connection is destroyed instead of returned, as
+`pool.query()` also does, since it may still be busy with the failed query
+(for example after pg's `query_timeout`). This suits reads, which need no
+transaction:
 
 ```typescript
 // Simple read without transaction (autocommit)
@@ -140,7 +143,7 @@ Where a query goes depends on where it is called:
 
 | Context | `db.query()` |
 |---------|--------------|
-| Outside any scope | Borrows a connection for the query and returns it; the query commits on its own |
+| Outside any scope | Borrows a connection for the query and returns it, or destroys it when the query fails; the query commits on its own |
 | Inside a scope | Runs in the scope's transaction, in order with the transaction's other statements |
 | In work the scope did not await, after the scope's outcome is decided | Rejects with `TransactionClosedError` (see [Finalization and Work in Flight](#finalization-and-work-in-flight)) |
 
@@ -172,7 +175,8 @@ decided before `withClient()` is removed.
 `withClient(fn)` runs `fn` with a client. Inside a scope, it is a client the
 transaction guards (see [Finalization and Work in Flight](#finalization-and-work-in-flight)),
 and its queries share the transaction with `db`. Outside any scope, it is a new
-connection from the factory, cleaned up after `fn`.
+connection from the factory, cleaned up after `fn` the same way whether `fn`
+succeeds or fails.
 
 ### Transaction Propagation
 

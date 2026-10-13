@@ -74,6 +74,13 @@ async function transactionId(db: PostgresQueryable): Promise<string> {
     return result.rows[0].id;
 }
 
+async function connectionId(db: PostgresQueryable): Promise<number> {
+    const result = await db.query<{ pid: number }>(
+        "SELECT pg_backend_pid() AS pid"
+    );
+    return result.rows[0].pid;
+}
+
 describe("PostgresUnitOfWork db", () => {
     const databaseUrl = useDatabase(DATABASE).toString();
     const admin = useClient(DATABASE);
@@ -230,7 +237,7 @@ describe("PostgresUnitOfWork db", () => {
             expectEveryConnectionReturned();
         });
 
-        test("returns the connection when a query fails", async () => {
+        test("keeps no connection checked out when a query fails", async () => {
             for (let attempt = 1; attempt <= POOL_SIZE + 1; attempt++) {
                 const error = await captureRejection(
                     uow.db.query("SELECT * FROM missing_table")
@@ -239,6 +246,27 @@ describe("PostgresUnitOfWork db", () => {
             }
 
             expectEveryConnectionReturned();
+        });
+
+        test("discards the connection of a failed query instead of reusing it, as pool.query() does", async () => {
+            const connection = await connectionId(uow.db);
+            expect(await connectionId(uow.db)).toBe(connection);
+
+            await captureRejection(uow.db.query("SELECT * FROM missing_table"));
+
+            expect(await connectionId(uow.db)).not.toBe(connection);
+        });
+
+        test("keeps reusing the connection of a failed withClient() callback, which releases it as usual", async () => {
+            const connection = await connectionId(uow.db);
+
+            await captureRejection(
+                uow.withClient((client) =>
+                    client.query("SELECT * FROM missing_table")
+                )
+            );
+
+            expect(await connectionId(uow.db)).toBe(connection);
         });
     });
 

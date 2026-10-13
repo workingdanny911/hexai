@@ -12,8 +12,8 @@
   a scope begins the transaction. In work that a scope did not await, a query
   made after the scope's outcome is decided rejects with
   `TransactionClosedError`. Outside any scope, a query borrows a connection for
-  itself, commits on its own and returns the connection, as `pool.query()`
-  does. Every call sends exactly one statement, and its values are copied when
+  itself, commits on its own and returns the connection, or destroys it when
+  the query fails, as `pool.query()` does. Every call sends exactly one statement, and its values are copied when
   it is called. pg's `Client`, `PoolClient` and `Pool` fit `PostgresQueryable`
   as well. Inside a transaction, its queries share the line of the client that
   `withClient()` hands out. `PostgresEventStore` now queries through `db`.
