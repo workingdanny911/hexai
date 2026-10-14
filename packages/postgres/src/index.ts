@@ -1,4 +1,5 @@
 export * from "./postgres-unit-of-work.js";
+export type { PostgresQueryable } from "./postgres-queryable.js";
 export * from "./run-migrations.js";
 export * from "./run-hexai-migrations.js";
 export {

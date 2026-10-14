@@ -11,6 +11,10 @@ import {
     PostgresTransactionOptions,
 } from "./types.js";
 import { ensureConnection } from "./helpers.js";
+import {
+    type PostgresQueryable,
+    singleStatementQuery,
+} from "./postgres-queryable.js";
 import type {
     BeforeCommitOptions,
     TransactionLifecycle,
@@ -111,7 +115,26 @@ export interface PostgresUnitOfWork
         >,
         TransactionLifecycle,
         PostgresUnitOfWorkObserver {
+    /**
+     * Runs queries in the transaction of the current scope. It is always the
+     * same object, so keep it and use it at any time: each query goes to the
+     * transaction that is current when it is called. Inside a scope, the first
+     * query begins the transaction, and a query made after the scope's outcome
+     * is decided rejects with `TransactionClosedError`. Outside any scope, each
+     * query borrows a connection for itself and commits on its own, as
+     * `pool.query()` does. Every call sends exactly one statement.
+     */
+    readonly db: PostgresQueryable;
+
+    /**
+     * @deprecated Use `db` for queries. Work that needs the pg client itself,
+     * such as COPY, can keep using withClient() for now; its replacement will
+     * be decided before withClient() is removed in the next major version.
+     */
     withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T>;
+
+    /** @deprecated Use `db`. getClient() will be removed in the next major version. */
+    getClient(): pg.ClientBase;
 }
 
 export class DefaultPostgresUnitOfWork
@@ -119,11 +142,30 @@ export class DefaultPostgresUnitOfWork
     private transactionStorage = new AsyncLocalStorage<PostgresTransaction>();
     private everyCommitObservers = new Set<TransactionHook>();
 
+    readonly db: PostgresQueryable = {
+        query: async (text, values) => {
+            const query = singleStatementQuery(text, values);
+            const transaction = this.getCurrentTransaction();
+            if (transaction) {
+                return transaction.useClient(
+                    (client) => client.query(query),
+                    "db.query()"
+                );
+            }
+            return this.queryOnOwnConnection(query);
+        },
+    };
+
+    private readonly clientCleanUp?: FailureAwareClientCleanUp;
+
     constructor(
         private clientFactory: ClientFactory,
-        private clientCleanUp?: ClientCleanUp
-    ) {}
+        clientCleanUp?: ClientCleanUp
+    ) {
+        this.clientCleanUp = clientCleanUp;
+    }
 
+    /** @deprecated Use `db`. getClient() will be removed in the next major version. */
     public getClient(): pg.ClientBase {
         const current = this.getCurrentTransaction();
 
@@ -216,13 +258,39 @@ export class DefaultPostgresUnitOfWork
         tx.setResource(key, value);
     }
 
-    async withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T> {
-        const currentTransaction = this.getCurrentTransaction();
-
-        if (currentTransaction) {
-            return currentTransaction.useClient(fn);
+    /** @deprecated Use `db` for queries. See `PostgresUnitOfWork.withClient()`. */
+    withClient<T>(fn: (client: pg.ClientBase) => Promise<T>): Promise<T> {
+        const transaction = this.getCurrentTransaction();
+        if (transaction) {
+            return transaction.useClient(fn, "withClient()");
         }
+        return this.withOwnConnection(fn);
+    }
 
+    // Outside any scope, db.query() works as pool.query(): the connection
+    // goes back after the query, or is destroyed when the query failed, since
+    // it may still be busy with it, for example after pg's query_timeout.
+    private async queryOnOwnConnection(
+        query: pg.QueryConfig
+    ): Promise<pg.QueryResult> {
+        const client = await this.clientFactory();
+        let result: pg.QueryResult;
+        try {
+            await ensureConnection(client);
+            result = await client.query(query);
+        } catch (failure) {
+            await this.clientCleanUp?.(client, failure);
+            throw failure;
+        }
+        await this.clientCleanUp?.(client);
+        return result;
+    }
+
+    // Outside any scope, withClient() works as pool.connect() with release()
+    // in finally: the connection goes back whether fn succeeds or fails.
+    private async withOwnConnection<T>(
+        fn: (client: pg.ClientBase) => Promise<T>
+    ): Promise<T> {
         const client = await this.clientFactory();
         try {
             await ensureConnection(client);
@@ -535,12 +603,13 @@ class PostgresTransaction {
     }
 
     public async useClient<T>(
-        fn: (client: pg.ClientBase) => Promise<T>
+        fn: (client: pg.ClientBase) => Promise<T>,
+        operation: string
     ): Promise<T> {
-        this.assertAdmits("withClient()");
-        const client = await this.waitForStart("withClient()");
+        this.assertAdmits(operation);
+        const client = await this.waitForStart(operation);
         // The outcome may have been decided while the start was pending.
-        this.assertAdmits("withClient()");
+        this.assertAdmits(operation);
         return fn(client);
     }
 
@@ -548,7 +617,7 @@ class PostgresTransaction {
         this.assertAdmits("getClient()");
         if (!this.gatedClient) {
             throw new Error(
-                "Transaction not initialized. Use withClient() inside scope() to trigger lazy initialization."
+                "Transaction not initialized: no query has started it yet. getClient() is deprecated; use db, whose first query inside scope() starts the transaction."
             );
         }
         return this.gatedClient;

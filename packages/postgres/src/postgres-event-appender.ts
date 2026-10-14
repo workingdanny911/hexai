@@ -1,6 +1,8 @@
-import * as pg from "pg";
+import type * as pg from "pg";
 
 import { Message, StoredEvent } from "@hexaijs/core";
+
+import type { PostgresQueryable } from "./postgres-queryable.js";
 
 const DEFAULT_TABLE_NAME = "hexai__events";
 const DEFAULT_POSITION_COUNTER_TABLE_NAME = "hexai__event_position_counter";
@@ -28,16 +30,13 @@ export class PostgresEventAppender {
 
     async appendAll(
         events: Message[],
-        client: pg.ClientBase
+        db: PostgresQueryable
     ): Promise<StoredEvent[]> {
         if (events.length === 0) {
             return [];
         }
 
-        const firstPosition = await this.allocatePositions(
-            client,
-            events.length
-        );
+        const firstPosition = await this.allocatePositions(db, events.length);
         const values: unknown[] = [];
         const placeholders: string[] = [];
 
@@ -56,7 +55,7 @@ export class PostgresEventAppender {
             );
         });
 
-        await client.query(
+        await db.query(
             `INSERT INTO ${this.tableName} (position, message_type, headers, payload)
              VALUES ${placeholders.join(", ")}`,
             values
@@ -81,7 +80,7 @@ export class PostgresEventAppender {
     }
 
     private async allocatePositions(
-        client: pg.ClientBase,
+        db: PostgresQueryable,
         count: number
     ): Promise<number> {
         // PostgreSQL holds this row lock until the surrounding transaction ends.
@@ -89,7 +88,7 @@ export class PostgresEventAppender {
         // before any higher position can be assigned and become visible.
         let result: pg.QueryResult<{ last_position: string }>;
         try {
-            result = await client.query<{ last_position: string }>(
+            result = await db.query<{ last_position: string }>(
                 `UPDATE ${this.positionCounterTableName}
                  SET last_position = last_position + $1
                  WHERE id = 1

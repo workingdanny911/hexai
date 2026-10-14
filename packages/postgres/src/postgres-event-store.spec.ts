@@ -409,17 +409,15 @@ describe("PostgresEventStore", () => {
             );
 
             const timeline: string[] = [];
-            const original = uow.withClient.bind(uow);
+            const original = uow.db.query.bind(uow.db);
             const spy = vi
-                .spyOn(uow, "withClient")
-                .mockImplementation(
-                    async <T>(fn: (client: any) => Promise<T>): Promise<T> => {
-                        timeline.push("fetch-start");
-                        const result = await original(fn);
-                        timeline.push("fetch-end");
-                        return result;
-                    }
-                );
+                .spyOn(uow.db, "query")
+                .mockImplementation(async (text, values) => {
+                    timeline.push("fetch-start");
+                    const result = await original(text, values);
+                    timeline.push("fetch-end");
+                    return result;
+                });
 
             for await (const event of eventStore.stream(0, 2)) {
                 timeline.push(`event-${event.position}`);
