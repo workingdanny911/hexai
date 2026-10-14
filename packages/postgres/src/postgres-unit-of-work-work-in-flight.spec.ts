@@ -17,10 +17,11 @@ import {
     waitUntil,
 } from "./test-fixtures/async.fixtures.js";
 import {
+    captureReportedErrors,
     type CleanUpCall,
     createScriptedUnitOfWork,
     ScriptedClient,
-    scriptedUnitOfWorkChecks,
+    scriptedUnitOfWorkHelpers,
 } from "./test-fixtures/scripted-client.fixtures.js";
 
 describe("PostgresUnitOfWork client cleanup on finalization", () => {
@@ -48,11 +49,10 @@ describe("PostgresUnitOfWork client cleanup on finalization", () => {
 
     const {
         holdClientAcquisition,
-        captureReportedErrors,
         expectCleanedUpOnceWithoutFailure,
         useClientInScope,
         expectNoStatementAfterCleanUp,
-    } = scriptedUnitOfWorkChecks(() => ({
+    } = scriptedUnitOfWorkHelpers(() => ({
         client,
         uow,
         cleanUps,

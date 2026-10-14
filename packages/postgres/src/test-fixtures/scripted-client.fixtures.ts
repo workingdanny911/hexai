@@ -160,15 +160,16 @@ export interface ScriptedUnitOfWorkState {
     cleanUpFailure: unknown;
 }
 
-// The checks the scripted specs share. Each one reads the running test's
-// state when it is called.
-export function scriptedUnitOfWorkChecks(state: () => ScriptedUnitOfWorkState) {
+// Helpers bound to the running test's scripted unit of work. Each one reads
+// the test's state when it is called, because beforeEach replaces that state
+// for every test.
+export function scriptedUnitOfWorkHelpers(
+    state: () => ScriptedUnitOfWorkState
+) {
     return {
         holdClientAcquisition(): Deferred {
             return state().client.holdAcquisition();
         },
-
-        captureReportedErrors,
 
         expectCleanedUpOnceWithoutFailure(): void {
             const { cleanUps, client } = state();
