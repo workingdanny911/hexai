@@ -26,6 +26,9 @@ export interface TransactionLifecycle {
 }
 
 export interface UnitOfWork<
+    // Unused here, but kept so existing `UnitOfWork<Client, Options>`
+    // references keep compiling.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     Client = unknown,
     Options extends BaseUnitOfWorkOptions = BaseUnitOfWorkOptions,
 > {

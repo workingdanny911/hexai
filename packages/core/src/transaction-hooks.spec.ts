@@ -10,7 +10,14 @@ function createCommitScenario() {
     const hooks = new TransactionHooks();
     const record = (event: string) => () => { events.push(event); };
     const executeCommit = () =>
-        hooks.executeCommit(record("commit"), record("rollback"));
+        hooks.executeCommit(
+            async () => {
+                events.push("commit");
+            },
+            async () => {
+                events.push("rollback");
+            }
+        );
 
     return {
         events,

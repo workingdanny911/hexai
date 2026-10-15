@@ -6,7 +6,7 @@ This guide explains how to set up the repository, build it, run the tests and pr
 
 The repository is a pnpm workspace: every directory under `packages/` is one package (see `pnpm-workspace.yaml`).
 
-- Each published package has `src/`, `README.md`, `CHANGELOG.md` and two TypeScript configs: `tsconfig.json` covers all of `src/`, tests included, and `tsconfig.build.json` builds `dist/` without the tests.
+- Each published package has `src/`, `README.md`, `CHANGELOG.md` and two TypeScript configs: `tsconfig.json` covers the code and its tests (see [Type check and lint](#type-check-and-lint)), and `tsconfig.build.json` builds `dist/` without the tests.
 - Tests sit next to the code they test, as `*.spec.ts` or `*.test.ts` files. `@hexaijs/plugin-contracts-generator` also has end-to-end tests in `e2e/`.
 - `packages/tooling` (`@hexaijs/tooling`) is private and never published. It holds the shared TypeScript configs (`tsconfig/base.json` and `tsconfig/node.json`) that the packages extend.
 
@@ -91,9 +91,20 @@ docker run --rm -p 5432:5432 \
     postgres:18
 ```
 
+## Type check and lint
+
+```bash
+pnpm typecheck
+pnpm lint
+```
+
+- `pnpm typecheck` runs `tsgo -p tsconfig.json --noEmit` in every package, so it checks the tests as well as the code. Like the tests, it reads other workspace packages from their built `dist/`, so build first.
+- `@hexaijs/plugin-application-builder` and `@hexaijs/plugin-contracts-generator` leave their fixture projects out of `tsconfig.json`. The generators read those files as input, and some are invalid on purpose.
+- `pnpm lint` runs ESLint with the root `.eslintrc.js` on `packages/*/src`. It skips tests (`*.spec.ts`, `*.test.ts`) and fixture directories. A parameter whose name starts with `_` may stay unused.
+
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and on every push to `master`. It runs two jobs, one on Node.js 24 with PostgreSQL 17 and one on Node.js 26 with PostgreSQL 18. Each job runs:
+`.github/workflows/ci.yml` runs on every pull request and on every push to `master`. Its two `test` jobs, one on Node.js 24 with PostgreSQL 17 and one on Node.js 26 with PostgreSQL 18, each run:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -101,9 +112,18 @@ pnpm build
 pnpm test
 ```
 
+A third job, `check`, runs once on Node.js 26:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm typecheck
+pnpm lint
+```
+
 - `--frozen-lockfile` fails when `pnpm-lock.yaml` does not match the package manifests, so commit the updated lockfile with any dependency change.
-- Each job reports on its own: one failing job does not cancel the other. A job stops after 30 minutes.
-- CI does not check formatting or run a linter.
+- Each job reports on its own: a failing job does not cancel the others. A job stops after 30 minutes.
+- CI does not check formatting.
 
 ## Code style
 

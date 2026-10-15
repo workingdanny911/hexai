@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { beforeEach, describe, expect, test } from "vitest";
@@ -6,7 +7,6 @@ import { beforeEach, describe, expect, test } from "vitest";
 import { useClient, useDatabase, useTableManager } from "./test-fixtures/index.js";
 import { runMigrations } from "./run-migrations.js";
 
-const MIGRATIONS_DIR = "test_migrations";
 const DATABASE = "test_hexai__running_migration";
 
 type TableColumn = {
@@ -26,12 +26,20 @@ function useMigrationTestContext() {
     const url = useDatabase(DATABASE);
     const conn = useClient(DATABASE);
     const tableManager = useTableManager(DATABASE);
+    // node-pg-migrate loads JS migrations with require(), which caches each
+    // file by its path. A fresh directory per test keeps a migration written
+    // by one test from being reused by a later test with the same file name.
+    let migrationsDir = "";
 
     beforeEach(async () => {
-        await Promise.all([createMigrationsDir(), tableManager.dropAllTables()]);
+        const [dir] = await Promise.all([
+            fs.mkdtemp(path.join(os.tmpdir(), "hexai-migrations-")),
+            tableManager.dropAllTables(),
+        ]);
+        migrationsDir = dir;
 
         return async () => {
-            await deleteMigrationsDir();
+            await fs.rm(dir, { recursive: true, force: true });
         };
     });
 
@@ -44,12 +52,46 @@ function useMigrationTestContext() {
     }: MigrateOptions = {}): Promise<void> {
         await runMigrations({
             namespace: namespace ?? "",
-            dir: dir ? path.join(MIGRATIONS_DIR, dir) : MIGRATIONS_DIR,
+            dir: dir ? path.join(migrationsDir, dir) : migrationsDir,
             url,
             direction,
             count,
             dryRun,
         });
+    }
+
+    async function createJsMigration(
+        name: string,
+        upCode: string,
+        downCode: string,
+        subDir?: string
+    ): Promise<void> {
+        const dir = subDir ? path.join(migrationsDir, subDir) : migrationsDir;
+        await fs.mkdir(dir, { recursive: true });
+
+        const content = `
+exports.up = (pgm) => {
+    ${upCode}
+};
+
+exports.down = (pgm) => {
+    ${downCode}
+};
+`;
+        await fs.writeFile(path.join(dir, `${name}.cjs`), content);
+    }
+
+    async function createSqlMigration(
+        name: string,
+        sql: string,
+        subDir?: string
+    ): Promise<void> {
+        const baseDir = subDir
+            ? path.join(migrationsDir, subDir)
+            : migrationsDir;
+        const migrationDir = path.join(baseDir, name);
+        await fs.mkdir(migrationDir, { recursive: true });
+        await fs.writeFile(path.join(migrationDir, "migration.sql"), sql);
     }
 
     async function getAppliedMigrations(tableName: string): Promise<string[]> {
@@ -162,7 +204,9 @@ function useMigrationTestContext() {
     return {
         conn,
         createFailingLedgerInsertTrigger,
+        createJsMigration,
         createMigrationLedgerTable,
+        createSqlMigration,
         dropFailingLedgerInsertTrigger,
         migrate,
         expectMigrationToBeApplied,
@@ -177,6 +221,7 @@ function useMigrationTestContext() {
 describe("running JS-based migrations", () => {
     const {
         conn,
+        createJsMigration,
         migrate,
         expectMigrationToBeApplied,
         expectTableDoesNotExist,
@@ -407,6 +452,7 @@ describe("running SQL-based migrations", () => {
         conn,
         createFailingLedgerInsertTrigger,
         createMigrationLedgerTable,
+        createSqlMigration,
         dropFailingLedgerInsertTrigger,
         migrate,
         expectMigrationToBeApplied,
@@ -749,43 +795,3 @@ describe("running SQL-based migrations", () => {
         await expectTableSchema("bar", [{ column: "id", type: "integer" }]);
     });
 });
-
-async function createMigrationsDir(): Promise<void> {
-    await fs.mkdir(MIGRATIONS_DIR, { recursive: true });
-}
-
-async function deleteMigrationsDir(): Promise<void> {
-    await fs.rm(MIGRATIONS_DIR, { recursive: true });
-}
-
-async function createJsMigration(
-    name: string,
-    upCode: string,
-    downCode: string,
-    subDir?: string
-): Promise<void> {
-    const dir = subDir ? `${MIGRATIONS_DIR}/${subDir}` : MIGRATIONS_DIR;
-    await fs.mkdir(dir, { recursive: true });
-
-    const content = `
-exports.up = (pgm) => {
-    ${upCode}
-};
-
-exports.down = (pgm) => {
-    ${downCode}
-};
-`;
-    await fs.writeFile(`${dir}/${name}.cjs`, content);
-}
-
-async function createSqlMigration(
-    name: string,
-    sql: string,
-    subDir?: string
-): Promise<void> {
-    const baseDir = subDir ? `${MIGRATIONS_DIR}/${subDir}` : MIGRATIONS_DIR;
-    const migrationDir = `${baseDir}/${name}`;
-    await fs.mkdir(migrationDir, { recursive: true });
-    await fs.writeFile(`${migrationDir}/migration.sql`, sql);
-}

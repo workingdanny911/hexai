@@ -267,12 +267,12 @@ describe("CLI Entry Point", () => {
         });
     });
     describe("handleError", () => {
-        let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+        const silenceConsoleError = () =>
+            vi.spyOn(console, "error").mockImplementation(() => {});
+        let consoleErrorSpy: ReturnType<typeof silenceConsoleError>;
 
         beforeEach(() => {
-            consoleErrorSpy = vi
-                .spyOn(console, "error")
-                .mockImplementation(() => {});
+            consoleErrorSpy = silenceConsoleError();
         });
 
         afterEach(() => {

@@ -2,6 +2,9 @@ export type MessageContractKind = "command" | "query" | "event";
 
 export type BuiltInContractKind = MessageContractKind | "contract";
 
+// `string & {}` keeps editor completion for the built-in kinds while still
+// accepting any other string.
+// eslint-disable-next-line @typescript-eslint/ban-types
 export type ContractKind = BuiltInContractKind | (string & {});
 
 export type ContractVisibility = "public" | "internal";
