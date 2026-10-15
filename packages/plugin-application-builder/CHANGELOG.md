@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2] - 2026-10-15
+
+### Changed
+
+- Peer dependency: `@hexaijs/core` `^0.9.0 || ^0.10.0` → `^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0`
+- Peer dependency: `@hexaijs/application` `^0.5.0` → `^0.5.0 || ^0.6.0`
+
 ## [0.3.1] - 2026-06-24
 
 ### Changed
