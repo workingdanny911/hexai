@@ -6,8 +6,9 @@
 
 - Corrected the documentation comment on the `visibility` option. It said
   internal contracts are emitted only on explicit opt-in, but the contracts
-  generator's single-output mode emits them too. Only an output whose
-  `select.visibility` omits `"internal"` leaves them out.
+  generator emits them in single-output mode and in any output that does not
+  filter by visibility. The comment now says to set `select.visibility` to
+  `["public"]` to keep them out.
 
 ## [0.3.3] - 2026-10-15
 
