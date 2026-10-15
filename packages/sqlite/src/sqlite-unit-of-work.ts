@@ -59,6 +59,7 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
         return this.wrap(fn);
     }
 
+    /** @deprecated Use scope(), and getClient() inside it to reach the Database. */
     async wrap<T>(fn: (client: Database) => Promise<T>): Promise<T> {
         const current = SqliteUnitOfWork.transactions.get(this.db)!;
         // Count the scope only once BEGIN has succeeded: a failed BEGIN never
