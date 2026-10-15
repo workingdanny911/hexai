@@ -164,6 +164,26 @@ describe("unit of work", () => {
                 const rows = db.prepare("SELECT * FROM test").all();
                 expect(rows).toEqual([]);
             });
+
+            test("a scope that cannot begin inside a hook leaves later scopes transactional", async () => {
+                await expect(
+                    uow.scope(async () => {
+                        uow.beforeCommit(async () => {
+                            await uow.scope(async () => {});
+                        });
+                    })
+                ).rejects.toThrowError();
+
+                await expect(
+                    uow.scope(async () => {
+                        db.prepare("INSERT INTO test VALUES ('foo')").run();
+                        throw new Error("rollback");
+                    })
+                ).rejects.toThrowError("rollback");
+
+                const rows = db.prepare("SELECT * FROM test").all();
+                expect(rows).toEqual([]);
+            });
         });
 
         describe("afterCommit", () => {

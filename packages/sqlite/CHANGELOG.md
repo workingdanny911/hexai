@@ -2,6 +2,17 @@
 
 ## [0.6.1] - 2026-10-15
 
+### Fixed
+
+- A scope whose `BEGIN` failed no longer leaves later scopes on the same
+  database without a transaction. `SqliteUnitOfWork` counted the scope before
+  sending `BEGIN`, and a failed `BEGIN` skipped the code that undoes the count,
+  so every later scope on that database joined a transaction that did not
+  exist: its writes committed one by one, and a failing scope kept them. One
+  way to hit it was opening a scope from a `beforeCommit` hook, where SQLite
+  rejects the nested `BEGIN`. That scope still fails, but later scopes now run
+  in their own transactions again.
+
 ### Changed
 
 - Peer dependency: `@hexaijs/core` `^0.10.0` → `^0.10.0 || ^0.11.0 || ^0.12.0`
