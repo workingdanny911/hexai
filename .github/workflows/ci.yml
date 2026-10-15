@@ -64,3 +64,29 @@ jobs:
             - run: pnpm build
 
             - run: pnpm test
+
+    # Type-checks every package, tests included, and lints the sources.
+    # Neither depends on the Node.js or PostgreSQL version, so it runs once.
+    check:
+        name: lint and typecheck
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v7
+
+            # Version comes from package.json "packageManager".
+            - uses: pnpm/action-setup@v6
+
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: 26
+                  cache: pnpm
+
+            - run: pnpm install --frozen-lockfile
+
+            # Packages type-check against other workspace packages' built declarations.
+            - run: pnpm build
+
+            - run: pnpm typecheck
+
+            - run: pnpm lint
