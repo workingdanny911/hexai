@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.1] - 2026-10-15
+
+### Fixed
+
+- The `generate-contracts` binary now runs when npm installed it. npm installs
+  a bin as a symlink, and the CLI compared the symlink's path with its own
+  real path, so it decided it was not the entry script and exited without
+  doing anything or printing a message. pnpm's bin shim, running `dist/cli.js`
+  directly, and running the generator as a `hexai` plugin were not affected.
+
 ## [0.7.0] - 2026-06-21
 
 ### Changed
