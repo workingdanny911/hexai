@@ -61,9 +61,13 @@ export class SqliteUnitOfWork implements UnitOfWork<Database> {
 
     async wrap<T>(fn: (client: Database) => Promise<T>): Promise<T> {
         const current = SqliteUnitOfWork.transactions.get(this.db)!;
-        if (++current.level === 1) {
+        // Count the scope only once BEGIN has succeeded: a failed BEGIN never
+        // reaches the finally below, so counting it first would leave every
+        // later scope on this database without a transaction.
+        if (current.level === 0) {
             this.db.exec("BEGIN TRANSACTION");
         }
+        current.level++;
 
         let abortError: unknown;
         try {
