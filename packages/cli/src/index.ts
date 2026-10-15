@@ -4,9 +4,8 @@ export * from "./types.js";
 export * from "./config-loader.js";
 export * from "./plugin-loader.js";
 
-import { fileURLToPath } from "node:url";
 import * as path from "node:path";
-import { realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import {
     loadConfig,
@@ -20,6 +19,7 @@ import {
     PluginExportError,
     PluginValidationError,
 } from "./plugin-loader.js";
+import { isMainModule } from "./main-module.js";
 import type { HexaiCliPlugin, CliOption, HexaiConfig } from "./types.js";
 
 const EXIT_CODE_ERROR = 1;
@@ -82,7 +82,7 @@ export async function createProgram(
     program
         .name("hexai")
         .description("Unified CLI tool for hexai plugins")
-        .version("0.1.0")
+        .version(readPackageVersion())
         .option("-c, --config <path>", "Path to hexai config file");
 
     const argv = options.argv ?? process.argv;
@@ -96,6 +96,19 @@ export async function createProgram(
     }
 
     return program;
+}
+
+/**
+ * Reads this package's version from its package.json.
+ *
+ * package.json sits one level above both `src/` and the published `dist/`.
+ */
+function readPackageVersion(): string {
+    const packageJsonUrl = new URL("../package.json", import.meta.url);
+    const packageJson = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as {
+        version: string;
+    };
+    return packageJson.version;
 }
 
 /**
@@ -236,6 +249,6 @@ export default {
 }
 
 // Run the CLI when this file is executed directly
-if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
     main();
 }

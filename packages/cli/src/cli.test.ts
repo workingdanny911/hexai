@@ -266,6 +266,25 @@ describe("CLI Entry Point", () => {
             expect(program).toBeDefined();
         });
     });
+
+    describe("version", () => {
+        it("should report the version in package.json", async () => {
+            const configPath = path.join(tempDir, "hexai.config.json");
+            fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }));
+            const packageJson = JSON.parse(
+                fs.readFileSync(
+                    new URL("../package.json", import.meta.url),
+                    "utf8"
+                )
+            );
+
+            const { createProgram } = await import("./index.js");
+
+            const program = await createProgram({ configPath });
+            expect(program.version()).toBe(packageJson.version);
+        });
+    });
+
     describe("handleError", () => {
         const silenceConsoleError = () =>
             vi.spyOn(console, "error").mockImplementation(() => {});
