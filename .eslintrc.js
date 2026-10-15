@@ -11,8 +11,17 @@ module.exports = {
         "vitest.workspace.ts",
         "dist/",
         "*.js",
+        // Fixture projects are test inputs that the generators read.
+        "**/fixtures/**",
     ],
     rules: {
         "@typescript-eslint/no-explicit-any": "off",
+        // A leading underscore marks a parameter that is unused on purpose.
+        "@typescript-eslint/no-unused-vars": [
+            "error",
+            { argsIgnorePattern: "^_" },
+        ],
+        // `while (true)` with an explicit break is an intended loop.
+        "no-constant-condition": ["error", { checkLoops: false }],
     },
 };
