@@ -1,0 +1,66 @@
+name: ci
+
+on:
+    push:
+        branches: [master]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    # Builds every package and runs every package's tests.
+    test:
+        name: test (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
+        runs-on: ubuntu-latest
+        # A hung test would otherwise hold the runner for the six-hour default.
+        timeout-minutes: 30
+        strategy:
+            # Each run reports on its own, so one failure does not cancel the other.
+            fail-fast: false
+            # The current and the previous release lines of Node and PostgreSQL.
+            matrix:
+                include:
+                    - node: 24
+                      postgres: 17
+                    - node: 26
+                      postgres: 18
+        # The postgres package's tests create and drop their own test_hexai__* databases on this server,
+        # which needs a user allowed to create databases.
+        services:
+            postgres:
+                image: postgres:${{ matrix.postgres }}
+                env:
+                    POSTGRES_USER: hexai
+                    POSTGRES_PASSWORD: hexai
+                    POSTGRES_DB: hexai
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U hexai -d hexai"
+                    --health-interval 2s
+                    --health-timeout 3s
+                    --health-retries 30
+        env:
+            HEXAI_DB_URL: postgres://hexai:hexai@localhost:5432/hexai
+        steps:
+            - uses: actions/checkout@v7
+
+            # Version comes from package.json "packageManager".
+            - uses: pnpm/action-setup@v6
+
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ matrix.node }}
+                  cache: pnpm
+
+            - run: pnpm install --frozen-lockfile
+
+            # Some tests import other workspace packages, which resolve to their built dist.
+            - run: pnpm build
+
+            - run: pnpm test

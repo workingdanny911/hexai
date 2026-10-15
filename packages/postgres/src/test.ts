@@ -4,7 +4,7 @@ import { Client, ClientBase } from "pg";
 import { Propagation, TransactionHooks } from "@hexaijs/core";
 import type { BeforeCommitOptions, TransactionHook } from "@hexaijs/core";
 import { DatabaseManager, isDatabaseError, TableManager } from "./helpers.js";
-import { PostgresConfig } from "./config/index.js";
+import { PostgresConfig } from "ezcfg/postgres";
 import { runHexaiMigrations } from "./run-hexai-migrations.js";
 import { PostgresTransactionOptions } from "./types.js";
 import {

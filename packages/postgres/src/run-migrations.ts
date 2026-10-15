@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as pg from "pg";
 import { runner } from "node-pg-migrate";
 
-import { PostgresConfig } from "./config/index.js";
+import { PostgresConfig } from "ezcfg/postgres";
 
 const MIGRATION_LOCK_CLASS_ID = 0x68657861;
 
