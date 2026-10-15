@@ -2,72 +2,93 @@
 
 > Unified CLI tool for hexai plugins
 
-A Commander.js-based CLI that dynamically loads and runs hexai plugins registered in `hexai.config.ts`.
-
-## Features
-
-- **Plugin-based architecture**: Register plugins via configuration
-- **Unified interface**: Single `hexai` command for all plugins
-- **Type-safe configuration**: Full TypeScript support
-- **Extensible**: Easy to add new plugins
+`@hexaijs/cli` provides the `hexai` command. The command does nothing by itself: each plugin you list in `hexai.config.ts` adds one subcommand, such as `hexai generate-contracts`. Use it to run the hexai code generators from one place, or to give your own build tools the same command line.
 
 ## Installation
 
-```bash
-# In your project
-pnpm add -D @hexaijs/cli
+Install the CLI together with the plugins you want to run:
 
-# The CLI is automatically available as `hexai` after installation
+```bash
+pnpm add -D @hexaijs/cli @hexaijs/plugin-contracts-generator
 ```
+
+The CLI has one peer dependency, `typescript`. The supported versions are the `peerDependencies` range in `package.json`.
+
+The CLI loads `hexai.config.ts` with Node's own `import()`, so Node.js must be able to run TypeScript files. Node.js 22.18+ and 23.6+ do this by default by stripping types. Keep the file to syntax that can be erased, such as type annotations, `import type` and `satisfies`. On older Node.js versions, use `hexai.config.js` or `hexai.config.json` instead.
+
+These first-party plugins work with the CLI:
+
+| Plugin package | Command | What it does |
+|----------------|---------|--------------|
+| [`@hexaijs/plugin-contracts-generator`](../plugin-contracts-generator/README.md) | `hexai generate-contracts` | Extracts contract declarations from bounded contexts into a contracts package |
+| [`@hexaijs/plugin-application-builder`](../plugin-application-builder/README.md) | `hexai generate-app-builder` | Generates `ApplicationBuilder` registration code from decorated handlers |
 
 ## Quick Start
 
-1. Create a `hexai.config.ts` in your project root:
+1. Create `hexai.config.ts` in your project root:
 
-```typescript
-export default {
-    plugins: [
-        {
-            plugin: "@hexaijs/plugin-contracts-generator",
-            config: {
-                contexts: [
-                    {
-                        name: "my-context",
-                        sourceDir: "packages/my-context/src",
-                        tsconfigPath: "packages/my-context/tsconfig.json",
-                    },
-                ],
+    ```typescript
+    import type { HexaiConfig } from "@hexaijs/cli";
+
+    export default {
+        plugins: [
+            {
+                plugin: "@hexaijs/plugin-contracts-generator",
+                config: {
+                    contexts: ["packages/orders"],
+                },
             },
-        },
-    ],
-};
-```
+        ],
+    } satisfies HexaiConfig;
+    ```
 
-2. Run a command:
+    Each entry names a plugin package and the `config` object to pass to it. Here the contracts generator scans the `src/` directory of `packages/orders`.
 
-```bash
-hexai generate-contracts -o packages/contracts/src
-```
+2. Run the plugin's command from the same directory:
+
+    ```bash
+    pnpm hexai generate-contracts -o packages/contracts/src
+    ```
+
+3. List the commands your plugins provide, or the options of one command:
+
+    ```bash
+    pnpm hexai --help
+    pnpm hexai generate-contracts --help
+    ```
 
 ## Configuration
 
-### Config File Location
+### Where the CLI looks for the config
 
-The CLI searches for config files in this order:
+The CLI looks in the current directory for these files, in this order, and loads the first one it finds:
+
 1. `hexai.config.ts`
 2. `hexai.config.js`
 3. `hexai.config.json`
 
-You can also specify a custom path:
+If the current directory has none of them, the CLI repeats the search in each parent directory up to the filesystem root.
+
+To load a specific file instead, pass `-c, --config <path>`. A relative path is resolved against the current directory. The flag works before or after the command name:
 
 ```bash
-hexai --config custom/path/config.ts generate-contracts -o dist
+pnpm hexai --config tools/hexai.config.ts generate-contracts -o packages/contracts/src
 ```
 
-### Config Structure
+A `.ts` or `.js` config exports the config object as its default export. A `.json` config holds the object itself.
+
+### Config shape
+
+The config is a `HexaiConfig` object with one property, `plugins`. Each entry in `plugins` is a `PluginEntry`:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `plugin` | `string` | Package name of the plugin. The package must export `cliPlugin`. |
+| `config` | `unknown` | Required. Passed unchanged to the plugin when its command runs. Use `{}` if the plugin needs no configuration. |
+
+This config registers both first-party plugins:
 
 ```typescript
-// hexai.config.ts
 import type { HexaiConfig } from "@hexaijs/cli";
 
 export default {
@@ -75,239 +96,158 @@ export default {
         {
             plugin: "@hexaijs/plugin-contracts-generator",
             config: {
-                // Plugin-specific configuration
-                contexts: [...],
-                responseNamingConventions: [...],
+                contexts: ["packages/*"],
             },
         },
         {
             plugin: "@hexaijs/plugin-application-builder",
-            config: {
-                // Plugin-specific configuration
-            },
+            config: {},
         },
     ],
 } satisfies HexaiConfig;
 ```
 
-### Plugin Entry
+The CLI checks only the shape above. Each plugin validates its own `config` when its command runs; see the plugin's README for the options it accepts.
 
-Each plugin entry has two properties:
+### Run from the directory that holds the config
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `plugin` | `string` | Package name (must export `cliPlugin`) |
-| `config` | `unknown` | Plugin-specific configuration passed to `run()` |
+Both first-party plugins resolve relative paths, such as `contexts` entries and `-o`, against the current directory, not against the config file. If you run `hexai` from a subdirectory, the CLI still finds the config in a parent directory, but the paths point somewhere else and the generator finds nothing. Run `hexai` from the directory that holds `hexai.config.ts`, for example through a `package.json` script in that directory.
 
-## Available Commands
+## Commands
 
-### `hexai generate-contracts`
+The CLI itself has these options:
 
-Extract domain events, commands, and queries from bounded contexts.
-
-```bash
-hexai generate-contracts -o <output-dir> [options]
-```
-
-**Options:**
 | Option | Description |
 |--------|-------------|
-| `-o, --output-dir <path>` | (Required) Output directory for generated contracts |
-| `-m, --message-types <types>` | Filter message types (comma-separated: event,command,query) |
-| `--generate-message-registry` | Generate message registry index.ts file |
+| `-c, --config <path>` | Load this config file instead of searching for one |
+| `-h, --help` | List the commands registered by your plugins |
 
-**Examples:**
-```bash
-# Generate all contracts
-hexai generate-contracts -o packages/contracts/src
-
-# Generate only events
-hexai generate-contracts -o packages/contracts/src -m event
-
-# Generate events and commands with registry
-hexai generate-contracts -o packages/contracts/src -m event,command --generate-message-registry
-```
-
-### `hexai generate-app-builder`
-
-Generate ApplicationBuilder code for a bounded context.
+Every other command comes from a plugin, and the plugin's README documents its options: see [`@hexaijs/plugin-contracts-generator`](../plugin-contracts-generator/README.md) for `generate-contracts` and [`@hexaijs/plugin-application-builder`](../plugin-application-builder/README.md) for `generate-app-builder`.
 
 ```bash
-hexai generate-app-builder -p <context-path> [options]
+pnpm hexai generate-contracts -o packages/contracts/src --registry
+pnpm hexai generate-app-builder --context-path packages/orders
 ```
 
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `-p, --context-path <path>` | (Required) Path to the bounded context |
-| `-f, --config-file <name>` | Config file name in context (default: `hexai.config.ts`) |
+The CLI loads the config and every plugin before it reads the command line. If the config is missing or a plugin fails to load, even `hexai --help` fails.
 
-**Examples:**
-```bash
-# Generate ApplicationBuilder for assignment context
-hexai generate-app-builder -p packages/assignment
-```
+## Errors
 
-## Plugin Development
+On any of these errors the CLI prints a message and exits with code 1:
 
-### Creating a Plugin
+| Situation | Message |
+|-----------|---------|
+| No config file found | `Configuration Error: No hexai config file found. Searched for:` followed by every path it checked, and a sample config |
+| The config file fails to load or has the wrong shape | `Configuration Error: Failed to load config from <path>: <reason>`, for example `plugins[0].config is required (use empty object {} if no config needed)` |
+| A plugin package cannot be imported | `Plugin Error: Plugin "<name>" not found: <reason>`, followed by an install hint |
+| A plugin package has no `cliPlugin` export | `Plugin Error: Plugin "<name>" does not export 'cliPlugin'. ...` |
+| `cliPlugin` has the wrong shape | `Plugin Error: Plugin "<name>" has invalid cliPlugin: <reason>`, for example `'run' must be a function` |
+| A command fails while it runs | `Error running <command>: <error message>` |
 
-1. **Define the plugin interface**:
+## Writing a Plugin
+
+A plugin is an npm package whose main entry point exports `cliPlugin`, an object that implements `HexaiCliPlugin`. The CLI imports the package by the name given in `plugin`, reads `cliPlugin` and registers it as a Commander.js subcommand.
 
 ```typescript
-// src/hexai-plugin.ts
-import type { HexaiCliPlugin, CliOption } from "@hexaijs/cli";
+import type { CliOption, HexaiCliPlugin } from "@hexaijs/cli";
 
-export interface MyPluginConfig {
-    // Your plugin's configuration type
-    option1: string;
-    option2: boolean;
+export interface GreetPluginConfig {
+    greeting: string;
 }
 
-export const cliPlugin: HexaiCliPlugin<MyPluginConfig> = {
-    name: "my-command",
-    description: "Description shown in help",
+export const cliPlugin: HexaiCliPlugin<GreetPluginConfig> = {
+    name: "greet",
+    description: "Print a greeting",
     options: [
         {
-            flags: "-o, --output <path>",
-            description: "Output path",
+            flags: "-n, --name <name>",
+            description: "Who to greet",
             required: true,
         },
         {
-            flags: "-v, --verbose",
-            description: "Enable verbose output",
+            flags: "--shout",
+            description: "Print the greeting in upper case",
         },
     ] satisfies CliOption[],
     run: async (args, config) => {
-        // args: parsed CLI arguments { output: string, verbose: boolean }
-        // config: MyPluginConfig from hexai.config.ts
-        console.log("Output:", args.output);
-        console.log("Config:", config);
+        const message = `${config.greeting}, ${String(args.name)}!`;
+        console.log(args.shout === true ? message.toUpperCase() : message);
     },
 };
 ```
 
-2. **Export the plugin**:
+With `{ plugin: "my-hexai-plugin", config: { greeting: "Hello" } }` in `hexai.config.ts`, `pnpm hexai greet --name Ada --shout` prints `HELLO, ADA!`.
 
-```typescript
-// src/index.ts
-export { cliPlugin, type MyPluginConfig } from "./hexai-plugin";
-```
-
-3. **Add peer dependency**:
+Declare the CLI as a peer dependency, with the range the first-party plugins use:
 
 ```json
 {
     "peerDependencies": {
-        "@hexaijs/cli": "^0.1.0"
+        "@hexaijs/cli": "^0.2.0"
     }
 }
 ```
 
-### Plugin Interface
+If your package also works without the CLI, mark the peer as optional with `peerDependenciesMeta`, as `@hexaijs/plugin-contracts-generator` does.
+
+### `HexaiCliPlugin<TConfig>`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `name` | `string` | Subcommand name: `"greet"` becomes `hexai greet`. Must not be empty. |
+| `description` | `string` | Shown in `hexai --help` |
+| `options` | `CliOption[]` | The command's options |
+| `run` | `(args: Record<string, unknown>, config: TConfig) => Promise<void>` | Runs the command with the parsed options and the plugin's `config` from `hexai.config.ts` |
+
+### `CliOption`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `flags` | `string` | Commander.js flag syntax, for example `"-o, --output-dir <path>"` |
+| `description` | `string` | Shown in the command's help |
+| `required` | `boolean` | If `true`, the command fails when the option is missing. Defaults to `false`. |
+| `defaultValue` | `string` | Value used when the option is not given |
+
+Commander.js decides what lands in `args`:
+
+| Flag pattern | Example | Value in `args` |
+|--------------|---------|-----------------|
+| `--flag` | `--shout` | `true` when given, otherwise absent |
+| `--option <value>` | `-n, --name <name>` | The string given; the value is required when the option is used |
+| `--option [value]` | `--report [path]` | The string given, or `true` when used without a value |
+
+Keys are the long flag names in camelCase: `--output-dir` becomes `args.outputDir`. Values arrive as strings or booleans, so convert and validate them in `run`.
+
+Do not use `-c` or `--config` as plugin flags. The CLI reads them as the config path before Commander.js parses the command line.
+
+## Programmatic API
+
+The package also exports the pieces the `hexai` command is built from:
 
 ```typescript
-interface HexaiCliPlugin<TConfig = unknown> {
-    /** Command name (e.g., "my-command" → `hexai my-command`) */
-    name: string;
+import { loadConfig, loadPlugins } from "@hexaijs/cli";
 
-    /** Description shown in help output */
-    description: string;
+const { config, configPath } = await loadConfig({ searchParents: true });
+const plugins = await loadPlugins(config.plugins);
 
-    /** CLI options for this command */
-    options: CliOption[];
-
-    /**
-     * Entry point called when command runs
-     * @param args - Parsed CLI arguments
-     * @param config - Plugin configuration from hexai.config.ts
-     */
-    run: (args: Record<string, unknown>, config: TConfig) => Promise<void>;
-}
-
-interface CliOption {
-    /** Commander.js-style flag (e.g., "-o, --output <path>") */
-    flags: string;
-
-    /** Description shown in help */
-    description: string;
-
-    /** Whether this option is required */
-    required?: boolean;
-
-    /** Default value */
-    defaultValue?: string;
+for (const { plugin } of plugins) {
+    console.log(`${plugin.name} (from ${configPath})`);
 }
 ```
 
-### Flag Syntax
-
-The `flags` property follows Commander.js conventions:
-
-| Pattern | Meaning | Example |
-|---------|---------|---------|
-| `-s, --short` | Boolean flag | `-v, --verbose` |
-| `-o, --option <value>` | Required value | `-o, --output <path>` |
-| `-o, --option [value]` | Optional value | `-c, --config [path]` |
-
-## Error Handling
-
-The CLI provides user-friendly error messages:
-
-### Config Not Found
-```
-Configuration Error: No hexai config file found...
-
-To use hexai, create a hexai.config.ts file:
-export default {
-    plugins: [...]
-};
-```
-
-### Plugin Not Found
-```
-Plugin Error: Plugin "@hexaijs/plugin-xxx" not found...
-
-Make sure the plugin is installed:
-  pnpm add @hexaijs/plugin-xxx
-```
-
-### Plugin Export Error
-```
-Plugin Error: Plugin "@hexaijs/plugin-xxx" does not export "cliPlugin"...
-```
-
-## API Reference
-
-The package exports the following for programmatic use:
-
-```typescript
-import {
-    // Types
-    HexaiConfig,
-    HexaiCliPlugin,
-    CliOption,
-    PluginEntry,
-
-    // Config loader
-    loadConfig,
-    loadConfigFromPath,
-    findConfigFile,
-    ConfigNotFoundError,
-    ConfigLoadError,
-
-    // Plugin loader
-    loadPlugin,
-    loadPlugins,
-    PluginNotFoundError,
-    PluginExportError,
-    PluginValidationError,
-
-    // CLI
-    createProgram,
-    main,
-} from "@hexaijs/cli";
-```
+| Export | Description |
+|--------|-------------|
+| `loadConfig(options?)` | Finds and loads the config. Options: `cwd` (default `process.cwd()`) and `searchParents` (default `false`; the `hexai` command passes `true`). Returns `{ config, configPath }`. |
+| `loadConfigFromPath(path)` | Loads and validates one config file. Pass an absolute path. |
+| `findConfigFile(options?)` | Returns the config path that `loadConfig()` would use, or `null` |
+| `CONFIG_FILE_NAMES` | The file names searched, in order |
+| `loadPlugin(entry)`, `loadPlugins(entries)` | Import plugin packages and validate their `cliPlugin`. Return `{ pluginName, plugin, config }` for each. |
+| `createProgram(options?)` | Builds the Commander.js program with every plugin registered. Options: `configPath`, `argv`. |
+| `main()` | Runs the `hexai` command with `process.argv` |
+| `handleError(error)` | Prints the messages listed under [Errors](#errors) |
+| `ConfigNotFoundError`, `ConfigLoadError` | Thrown by the config loader |
+| `PluginNotFoundError`, `PluginExportError`, `PluginValidationError` | Thrown by the plugin loader |
+| `HexaiConfig`, `PluginEntry`, `HexaiCliPlugin`, `CliOption`, `LoadConfigOptions`, `LoadConfigResult`, `LoadPluginResult`, `CreateProgramOptions` | Types |
 
 ## License
 

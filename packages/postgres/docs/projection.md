@@ -1,25 +1,28 @@
 # Projection Infrastructure
 
 `@hexaijs/postgres/projection` turns the append-only `PostgresEventStore` stream
-into queryable read models. It is a **single-process, single-owner** projection
-engine: exactly one process owns the projection workers for a given database.
+into queryable read models. A read model is a table shaped for queries; a
+projection keeps it up to date by applying each stored event to it. The engine
+is **single-process, single-owner**: exactly one process owns the projection
+workers for a given database. Running projections from several processes is not
+supported yet (see [Scope and non-goals](#scope-and-non-goals)).
 
-This document explains how the pieces fit together, the guarantees it provides,
-and the failure modes you should design for. For the multi-process roadmap
-(lease, fencing, checkpoint compare-and-swap), see the workspace `docs/`.
+This document explains how the pieces fit together, the guarantees the engine
+provides, and the failure modes to design for. For installation and a setup
+example, see the [package README](../README.md#projections).
 
 ## Components
 
-| Component | Responsibility |
-| --- | --- |
-| `ProjectionEngine` | Owns runners, drives polling, coordinates startup/version rebuilds, exposes `start`/`stop`/`poll`/`resetProjection`/`getStatus`. |
-| `IPostgresReadModel` | Your read model: `canHandle(storedEvent)`, `apply(storedEvent, client)`, `reset(client)`. |
-| `SelectorBasedReadModel` | Optional base class: declare handlers with the `@When(...)` decorator and `eventTypeMatches(...)`. |
-| `ProjectionRunner` | Per-read-model state machine (mode/health/position) for the live path. |
-| `ProjectionRebuildContext` | Batched catch-up apply for one read model during a rebuild. |
-| `StartupRebuildCoordinator` | Streams the event store once and fans each event out to all rebuilding contexts. |
-| `CheckpointStore` | Reads/writes `projection__checkpoints` (`last_position`, `version`, `status`). |
-| `ProjectionWakeQueue` | Coalesces "new events" signals into `poll()` calls. |
+| Component | Exported | Responsibility |
+| --- | --- | --- |
+| `ProjectionEngine` | Yes | Owns runners, drives polling, coordinates startup and version rebuilds, exposes `start`/`stop`/`poll`/`resetProjection`/`getStatus`. |
+| `IPostgresReadModel` | Yes (type) | Your read model: `name`, `version`, `canHandle(storedEvent)`, `apply(storedEvent, client)`, `reset(client)`. |
+| `SelectorBasedReadModel` | Yes | Optional base class: declare handlers with the `@When(...)` decorator and `eventTypeMatches(...)`. |
+| `ProjectionWakeQueue` | Yes | Coalesces "new events" signals into `poll()` calls. Create it with `engine.createWakeQueue()`. |
+| `ProjectionRunner` | No | Per-read-model state machine (mode, health, position) for the live path. |
+| `ProjectionRebuildContext` | No | Batched catch-up apply for one read model during a rebuild. |
+| `StartupRebuildCoordinator` | No | Streams the event store once and fans each event out to all rebuilding contexts. |
+| `CheckpointStore` | No | Reads and writes `projection__checkpoints` (`last_position`, `version`, `status`). |
 
 ## Read model API
 
@@ -27,6 +30,15 @@ A read model receives the full `StoredEvent`, so it can persist the global
 `position` alongside its own data:
 
 ```typescript
+import {
+    SelectorBasedReadModel,
+    When,
+    eventTypeMatches,
+} from "@hexaijs/postgres/projection";
+
+import type { StoredEvent } from "@hexaijs/core";
+import type { ClientBase } from "pg";
+
 class OrderSummary extends SelectorBasedReadModel {
     readonly name = "order-summary";
     readonly version = 1;
@@ -48,34 +60,55 @@ class OrderSummary extends SelectorBasedReadModel {
 }
 ```
 
+`@When` is a legacy TypeScript decorator, so the project needs
+`experimentalDecorators` enabled. `eventTypeMatches()` accepts an event type, an
+array of types or a regular expression. When more than one handler of a
+`SelectorBasedReadModel` matches an event, `apply()` throws, and the engine
+treats that as a failed event (see [Failure handling](#failure-handling)).
+
+`apply()` and `reset()` receive the client of the projection transaction. Write
+through it, and do not release or end it: the unit of work owns it.
+
 The engine deduplicates at the checkpoint level, so `apply()` runs effectively
-once per event; keeping it idempotent is still recommended — see
-[Delivery semantics](#delivery-semantics).
+once per event; keeping it idempotent is still recommended (see
+[Delivery semantics](#delivery-semantics)).
 
 ## Lifecycle
 
-```
+```text
 register(readModel)        // before start; duplicate names fail fast
   -> start()               // initialize() each runner, then background rebuild
-       -> poll() (loop)     // safety interval + wake queue
-  -> stop()                // drain in-flight poll/rebuild/reset, then halt
+       -> poll() (loop)    // safety interval + wake queue
+  -> stop()                // cancel the rebuild, wait for in-flight poll/reset/rebuild, then halt
 ```
+
+`register()` throws when a read model with the same name is already registered,
+or when the engine has already started.
 
 On `start()`, each runner calls `initialize()`, which reads its checkpoint:
 
-- **no checkpoint, or `version` mismatch** → reset the read model + checkpoint and
-  rebuild from position 0.
-- **`status = 'rebuilding'`** → resume the rebuild.
-- **`status = 'isolated'`** → stay isolated (excluded from polling until reset).
-- **`status = 'running'`** → resume live polling from `last_position`.
+- **no checkpoint, or `version` mismatch**: reset the read model and checkpoint,
+  and rebuild from position 0.
+- **`status = 'rebuilding'`**: resume the rebuild.
+- **`status = 'isolated'`**: stay isolated (excluded from polling until reset).
+- **`status = 'running'`**: resume live polling from `last_position`.
+
+`start()` returns once every runner is initialized; rebuilds continue in the
+background. `getStatus()` reports each projection's `mode`, `health`,
+`lastPosition` and `retryCount`.
 
 ## Live polling
 
-`poll()` is serialized (one poll at a time) and is triggered two ways:
+`poll()` is triggered two ways:
 
 1. A safety interval (`safetyIntervalMs`).
-2. `ProjectionWakeQueue.wake()`, typically from an `afterCommit` hook right after
-   you append events.
+2. `ProjectionWakeQueue.wake()`, typically from an `afterCommit` hook or an
+   `onEveryCommit()` observer right after you append events.
+
+Only one poll runs at a time. A `poll()` call made while another poll runs, or
+while a projection is being reset, returns without polling. Events that the
+running poll does not reach are picked up by a later poll, at the latest on the
+safety interval.
 
 Postgres `afterCommit` hooks run outside the completed transaction context, so a
 wake can trigger polling without reusing the command transaction client that just
@@ -113,9 +146,9 @@ Consequences:
 ### Effectively-once processing
 
 Atomic commits alone still leave one duplicate window: an **in-process retry
-after a commit-ambiguous failure** — the server commits, but the client sees an
-error (e.g. the connection drops before the `COMMIT` acknowledgement arrives),
-so the engine retries an event that already landed.
+after a commit-ambiguous failure**. The server commits, but the client sees an
+error (for example, the connection drops before the `COMMIT` acknowledgement
+arrives), so the engine retries an event that already landed.
 
 The engine closes this window with a **checkpoint-guarded transaction**: inside
 the same transaction as the mutation, it locks the checkpoint row
@@ -138,8 +171,8 @@ three invariants:
    accidental concurrent writers, but it is a safety net, not a multi-process
    ownership mechanism.
 
-Keep `apply()` idempotent as defense-in-depth (prefer upserts / `ON CONFLICT`)
-— it costs little and protects you if an implementation ever violates
+Keep `apply()` idempotent as defense-in-depth (prefer upserts or `ON CONFLICT`).
+It costs little and protects you if an implementation ever violates
 invariant 2.
 
 ## Failure handling
@@ -147,36 +180,48 @@ invariant 2.
 Failures on the live path act as an **ordering barrier**. When `apply()` throws:
 
 - The transaction rolls back (no partial write, checkpoint unchanged).
-- The runner retries the same position on subsequent polls, up to `maxRetries`.
-- Other runners keep progressing; only the failing runner is blocked for that poll.
-- After `maxRetries`, the runner becomes **isolated**: `status = 'isolated'` is
-  upserted into the checkpoint (durable even if no checkpoint row existed yet),
-  the runner stops polling, and it stays isolated across restarts until
-  `resetProjection()` is called. Failures to persist isolation are surfaced via
-  `logger.pollError`.
+- The runner tries the same position again on later polls.
+- Other runners keep progressing; only the failing runner is blocked for that
+  poll.
+- After `maxRetries` failed attempts at the same position, the runner becomes
+  **isolated**: `status = 'isolated'` is upserted into the checkpoint (durable
+  even if no checkpoint row existed yet), the runner stops polling, and it stays
+  isolated across restarts until `resetProjection()` is called. Failures to
+  persist isolation are reported through `logger.pollError`.
 
 ## Rebuilds
 
 A rebuild streams the event store once (via `StartupRebuildCoordinator`) and
 applies events in batches per read model, advancing the checkpoint with
-`status = 'rebuilding'`. A batch that fails the configured retries falls back to
-single-event application; an event that still fails isolates that read model.
+`status = 'rebuilding'`. It runs up to the last position at the time it starts;
+live polling takes over from there. A batch that still fails after `maxRetries`
+attempts falls back to applying its events one at a time; an event that still
+fails isolates that read model.
 
 Rebuilds happen on:
 
 - **Startup**, for any read model whose checkpoint is `rebuilding` or absent.
 - **Version change**, when `readModel.version` differs from the stored checkpoint.
-- **`resetProjection(name)`**, which resets the read model + checkpoint and
+- **`resetProjection(name)`**, which resets the read model and checkpoint and
   rebuilds from scratch. Resets are serialized and awaited by `stop()`.
 
-If a rebuild ends without reaching the target position (e.g. a non-monotonic
-event store) or throws, the runner is not left silently stuck in `rebuilding`:
-it is activated at its current position or surfaced as isolated, and logged.
+If a rebuild ends without reaching the target position (for example with a
+non-monotonic event store) or throws, the runner is not left silently stuck in
+`rebuilding`: it is activated at its current position or surfaced as isolated,
+and the problem is logged.
 
 ## Configuration
 
-`ProjectionEngineOptions`: `streamBatchSize`, `maxRetries`, `safetyIntervalMs`,
-`rebuildBatchSize`, `rebuildFlushConcurrency` (all positive integers).
+Pass `ProjectionEngineOptions` as the fourth argument of the `ProjectionEngine`
+constructor. Every option must be a positive integer.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `streamBatchSize` | `100` | Events fetched per batch when streaming the event store |
+| `maxRetries` | `3` | Failed attempts at one position (or one rebuild batch) before giving up on it |
+| `safetyIntervalMs` | `1000` | Interval of the safety poll, in milliseconds |
+| `rebuildBatchSize` | `100` | Events applied per transaction during a rebuild |
+| `rebuildFlushConcurrency` | `3` | Rebuild batches of different read models flushed at the same time |
 
 ## Migrations
 
@@ -188,12 +233,11 @@ import { runProjectionMigrations } from "@hexaijs/postgres/projection";
 await runProjectionMigrations("postgres://user:pass@localhost:5432/mydb");
 ```
 
-This creates `projection__checkpoints` (`projection_name` PK, `last_position`,
-`version`, `status`).
+This creates `projection__checkpoints` (`projection_name` primary key,
+`last_position`, `version`, `status`, `updated_at`).
 
 ## Scope and non-goals
 
 This engine assumes a single owning process. It does **not** provide
 multi-process ownership, leases, fencing tokens, or checkpoint compare-and-swap;
 running two engines against the same projection on the same database is unsafe.
-Those guarantees are tracked on the roadmap.

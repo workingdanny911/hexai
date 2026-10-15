@@ -2,17 +2,9 @@
 
 > Build plugin for generating ApplicationBuilder code from decorated handlers
 
-## Overview
+An `ApplicationBuilder` from [`@hexaijs/application`](../application/README.md) builds an application from registered handlers: you call `.withCommandHandler()`, `.withQueryHandler()` and `.withEventHandler()` once per handler. A handler is the class that executes one command or query, or reacts to events. This plugin writes those calls for you. You mark each handler class with a decorator, and the generator scans your handler files and writes a `createApplicationBuilder()` function that registers every marked handler. The decorators do nothing at runtime; the generator reads them from the TypeScript source.
 
-`@hexaijs/plugin-application-builder` eliminates the boilerplate of manually registering every handler with `ApplicationBuilder`. Instead of maintaining a growing list of `.withCommandHandler()` and `.withEventHandler()` calls, you decorate your handler classes and let the build tool generate the registration code automatically.
-
-The plugin works at build time by:
-
-1. Scanning your TypeScript files for handler classes decorated with marker decorators
-2. Extracting metadata using TypeScript's AST (Abstract Syntax Tree) parser
-3. Generating a `createApplicationBuilder()` function with all handlers properly registered
-
-This approach keeps your handler files self-documenting (the decorator shows what type of handler it is) while centralizing the wiring in a generated file that stays in sync automatically.
+Use it when a bounded context has enough handlers that keeping the registration list by hand becomes a chore. A bounded context here is one package of your system with its own handlers, for example `packages/orders`.
 
 ## Installation
 
@@ -20,192 +12,240 @@ This approach keeps your handler files self-documenting (the decorator shows wha
 npm install @hexaijs/plugin-application-builder
 ```
 
-**Peer dependencies:**
-- `@hexaijs/core`
-- `@hexaijs/application`
-- `typescript ^5.0.0 || ^6.0.0`
+| Peer dependency | Used for |
+|-----------------|----------|
+| `@hexaijs/core` | Parameter types of the marker decorators |
+| `@hexaijs/application` | The `ApplicationBuilder` that the generated code registers handlers with |
+| `@hexaijs/cli` | The `hexai generate-app-builder` command |
+| `typescript` | Reading handler files and the context config |
 
-## Core Concepts
+The supported versions are the `peerDependencies` ranges in `package.json`.
 
-### Marker Decorators
+## Quick Start
 
-The package provides three decorators that serve as markers for the code generator. These decorators have **no runtime behavior** - they simply tag classes for discovery during the build process.
+This example uses a bounded context in `packages/orders`.
 
-```typescript
-import {
-    CommandHandlerMarker,
-    QueryHandlerMarker,
-    EventHandlerMarker
-} from "@hexaijs/plugin-application-builder";
-```
+1. Create the context config, `packages/orders/hexai.config.ts`:
 
-**CommandHandlerMarker** - Marks a class as a command handler and links it to its request type:
+    ```typescript
+    import type { RawBuildPluginConfig } from "@hexaijs/plugin-application-builder";
 
-```typescript
-import { CommandHandlerMarker } from "@hexaijs/plugin-application-builder";
-import { CreateOrderRequest } from "./request";
+    const config: RawBuildPluginConfig = {
+        handlers: ["src/**/*.handler.ts"],
+        applicationBuilderImportPath: "@hexaijs/application",
+    };
 
-@CommandHandlerMarker(CreateOrderRequest)
-export class CreateOrderHandler extends BaseHandler<
-    CreateOrderRequest,
-    CreateOrderResponse,
-    OrderApplicationContext
-> {
-    protected async doExecute(
-        request: CreateOrderRequest,
-        ctx: OrderApplicationContext
-    ): Promise<CreateOrderResponse> {
-        // Implementation
+    export default config;
+    ```
+
+2. Mark a handler, `packages/orders/src/create-order.handler.ts`:
+
+    ```typescript
+    import type { CommandHandler } from "@hexaijs/application";
+    import { CommandHandlerMarker } from "@hexaijs/plugin-application-builder";
+
+    import {
+        CreateOrderCommand,
+        type CreateOrderResult,
+    } from "./create-order.command.js";
+
+    @CommandHandlerMarker(CreateOrderCommand)
+    export class CreateOrderHandler implements CommandHandler<CreateOrderCommand> {
+        async execute(command: CreateOrderCommand): Promise<CreateOrderResult> {
+            return { orderId: `order-of-${command.getPayload().customerId}` };
+        }
     }
-}
-```
+    ```
 
-**QueryHandlerMarker** - Marks a class as a query handler:
+    `CreateOrderCommand` is an ordinary command class:
+
+    ```typescript
+    import { Command } from "@hexaijs/application";
+
+    export type CreateOrderResult = { orderId: string };
+
+    export class CreateOrderCommand extends Command<
+        { customerId: string },
+        CreateOrderResult
+    > {
+        static readonly type = "orders.create-order";
+    }
+    ```
+
+3. Generate the builder:
+
+    ```bash
+    npx generate-app-builder --context-path packages/orders
+    ```
+
+    This writes `packages/orders/src/.generated/application-builder.ts`:
+
+    ```typescript
+    import { ApplicationBuilder } from '@hexaijs/application';
+    import { CreateOrderHandler } from '../create-order.handler.js';
+    import { CreateOrderCommand } from '../create-order.command.js';
+
+    export function createApplicationBuilder(): ApplicationBuilder {
+      return new ApplicationBuilder()
+        .withCommandHandler(CreateOrderCommand, () => new CreateOrderHandler());
+    }
+    ```
+
+4. Build the application from the generated builder:
+
+    ```typescript
+    import { createApplicationBuilder } from "./.generated/application-builder.js";
+
+    const application = createApplicationBuilder()
+        .withApplicationContext({})
+        .build();
+    ```
+
+    `withApplicationContext()` takes your application context, the object handlers receive as their second argument. See [@hexaijs/application](../application/README.md) for what to put in it and how to execute commands.
+
+Run the generator again whenever you add, remove or rename a handler.
+
+## Marker Decorators
+
+Import the decorators from `@hexaijs/plugin-application-builder` or `@hexaijs/plugin-application-builder/decorators`.
+
+| Decorator | Put it on | Generated registration |
+|-----------|-----------|------------------------|
+| `@CommandHandlerMarker(CommandClass)` | A command handler | `.withCommandHandler(CommandClass, () => new Handler())` |
+| `@QueryHandlerMarker(QueryClass)` | A query handler | `.withQueryHandler(QueryClass, () => new Handler())` |
+| `@EventHandlerMarker(options?)` | An event handler | `.withEventHandler(() => new Handler())`, plus the name when `options.name` is set |
+
+A query handler looks like a command handler:
 
 ```typescript
+import type { QueryHandler } from "@hexaijs/application";
 import { QueryHandlerMarker } from "@hexaijs/plugin-application-builder";
-import { GetOrderQuery } from "./query";
+
+import { GetOrderQuery, type OrderSummary } from "./get-order.query.js";
 
 @QueryHandlerMarker(GetOrderQuery)
-export class GetOrderHandler extends BaseHandler<
-    GetOrderQuery,
-    OrderDto,
-    OrderApplicationContext
-> {
-    protected async doExecute(
-        query: GetOrderQuery,
-        ctx: OrderApplicationContext
-    ): Promise<OrderDto> {
-        // Implementation
+export class GetOrderHandler implements QueryHandler<GetOrderQuery> {
+    async execute(query: GetOrderQuery): Promise<OrderSummary> {
+        return { orderId: query.getPayload().orderId, status: "placed" };
     }
 }
 ```
 
-**EventHandlerMarker** - Marks a class as an event handler:
+An event handler takes no message class. It decides in `canHandle()` which events it handles:
 
 ```typescript
-import { Message } from "@hexaijs/core";
+import type { EventHandler } from "@hexaijs/application";
+import type { Message } from "@hexaijs/core";
 import { EventHandlerMarker } from "@hexaijs/plugin-application-builder";
 
-@EventHandlerMarker()
-export class HandleOrderPlaced extends BaseEventHandler<OrderApplicationContext> {
-    canHandle(message: Message): message is OrderPlaced {
+import { OrderPlaced } from "./order-placed.js";
+
+@EventHandlerMarker({ name: "send-order-confirmation" })
+export class SendOrderConfirmation implements EventHandler<OrderPlaced> {
+    canHandle(message: Message): boolean {
         return message.getMessageType() === OrderPlaced.getType();
     }
 
-    async handle(
-        event: OrderPlaced,
-        ctx: OrderApplicationContext
-    ): Promise<void> {
-        const payload = event.getPayload();
-        // React to event
+    async handle(event: OrderPlaced): Promise<void> {
+        console.log(`Order placed: ${event.getPayload().orderId}`);
     }
 }
 ```
 
-For event handlers that need a unique identifier (useful for idempotency tracking), provide a `name` option:
+`name` is the only option `@EventHandlerMarker` accepts. It gives the handler a unique name: the generator and `ApplicationBuilder` both reject two event handlers with the same name. The generated registration passes the name as the second argument: `.withEventHandler(() => new SendOrderConfirmation(), 'send-order-confirmation')`.
 
-```typescript
-@EventHandlerMarker({ name: "send-order-confirmation" })
-export class SendOrderConfirmationEmail extends BaseEventHandler<OrderApplicationContext> {
-    // ...
-}
-```
+### What the generator expects
 
-### Configuration
+The generator reads source text; it does not run or type-check your code. A handler is found only when:
 
-Create a `hexai.config.ts` file in each bounded context root:
+- its file matches one of the `handlers` patterns;
+- it is a top-level class declaration;
+- the decorator is called with parentheses under its own name (`@CommandHandlerMarker(...)`, not an alias);
+- the command or query class in the decorator is declared in the same file, or imported with a named import from a relative path or a `tsconfig.json` path alias. An import from a package name produces a broken import path in the generated file.
+
+The generated file imports each handler and each command or query class by name, so export them from their files.
+
+The generated code creates every handler with `new Handler()`, without arguments. Give handlers what they need through the application context instead of the constructor.
+
+## Context Configuration
+
+Each bounded context has its own config file, `hexai.config.ts` in the context root by default. It exports a `RawBuildPluginConfig` object as its default export:
 
 ```typescript
 import type { RawBuildPluginConfig } from "@hexaijs/plugin-application-builder";
 
 const config: RawBuildPluginConfig = {
-    // Glob patterns to find handler files
-    handlers: [
-        "src/commands/**/*.ts",
-        "src/queries/**/*.ts",
-        "src/event-handlers/**/*.ts"
-    ],
-
-    // Import path for ApplicationBuilder in generated code
-    applicationBuilderImportPath: "@/application-builder",
-
-    // Output file path (optional, defaults to "src/.generated/application-builder.ts")
+    handlers: ["src/commands/**/*.ts", "src/queries/**/*.ts", "src/event-handlers/**/*.ts"],
+    applicationBuilderImportPath: "../application-builder.js",
     outputFile: "src/.generated/application-builder.ts",
-
-    // Relative generated import style (optional, defaults to "js")
-    outputModuleSpecifiers: "js"
+    outputModuleSpecifiers: "js",
 };
 
 export default config;
 ```
 
+Here the context's own `src/application-builder.ts` exports the `ApplicationBuilder` class, and the import path starts from the generated file in `src/.generated/`.
+
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
-| `handlers` | Yes | - | Glob patterns for files containing decorated handlers |
-| `applicationBuilderImportPath` | Yes | - | Import path for your `ApplicationBuilder` class |
-| `outputFile` | No | `src/.generated/application-builder.ts` | Where to write the generated code |
-| `outputModuleSpecifiers` | No | `"js"` | Relative generated import style: `"js"` emits explicit `.js` extensions; `"extensionless"` keeps the legacy extensionless output |
+| `handlers` | Yes | | Glob patterns, relative to the context root, for the files that contain handlers. Must not be empty. |
+| `applicationBuilderImportPath` | Yes | | Module the generated file imports `ApplicationBuilder` from: `"@hexaijs/application"` or your own module that exports a class named `ApplicationBuilder`. The generator copies this specifier into the generated file and only adjusts the extension of a relative path to the import style, so a relative path must start from the generated file. |
+| `outputFile` | No | `src/.generated/application-builder.ts` | Where to write the generated code, relative to the context root |
+| `outputModuleSpecifiers` | No | `"js"` | Style of relative imports in the generated file: `"js"` adds `.js` extensions, as NodeNext and native ESM require; `"extensionless"` leaves them off for older bundler setups |
 
-The default `"js"` output matches NodeNext and ESM runtime resolution by emitting relative imports such as `../commands/create-order/handler.js`. Set `outputModuleSpecifiers: "extensionless"` only when a legacy bundler pipeline still expects extensionless generated imports.
+The generator compiles this file with TypeScript and evaluates it on its own. Keep it a plain object; type-only imports are fine, but value imports would resolve from the plugin's install location rather than from your context.
 
-### Code Generation
+This file shares its default name with the `hexai` CLI config, but it is a different file: the CLI config at your project root lists plugins, and this one configures one bounded context. Run `hexai` from the project root so the CLI does not pick up a context config by mistake.
 
-Run the generator using the CLI:
+### Path aliases
 
-```bash
-npx generate-app-builder
-```
+When a handler imports its command or query through a path alias, the generator resolves the alias with `compilerOptions.paths` and `compilerOptions.baseUrl` from the context's own `tsconfig.json`, and writes a relative import into the generated file:
 
-Or specify a context path:
-
-```bash
-npx generate-app-builder --context-path ./packages/my-bounded-context
-```
-
-Use `--output-module-specifiers=extensionless` as a CLI opt-out for legacy generated output:
-
-```bash
-npx generate-app-builder --context-path ./packages/my-bounded-context --output-module-specifiers=extensionless
-```
-
-The generator produces a file like:
-
-```typescript
-// src/.generated/application-builder.ts (auto-generated)
-import { ApplicationBuilder } from '@/application-builder';
-import { CreateOrderHandler } from '../commands/create-order/handler.js';
-import { CreateOrderRequest } from '../commands/create-order/request.js';
-import { GetOrderHandler } from '../queries/get-order/handler.js';
-import { GetOrderQuery } from '../queries/get-order/query.js';
-import { HandleOrderPlaced } from '../event-handlers/handle-order-placed.js';
-
-export function createApplicationBuilder(): ApplicationBuilder {
-  return new ApplicationBuilder()
-    .withCommandHandler(CreateOrderRequest, () => new CreateOrderHandler())
-    .withQueryHandler(GetOrderQuery, () => new GetOrderHandler())
-    .withEventHandler(() => new HandleOrderPlaced());
+```json
+{
+    "compilerOptions": {
+        "baseUrl": ".",
+        "paths": {
+            "@/*": ["src/*"]
+        }
+    }
 }
 ```
 
-### Programmatic API
+The generator reads only `<context>/tsconfig.json` itself; it does not follow `extends`. `baseUrl` defaults to the context root.
 
-For custom build scripts, use the `generateApplicationBuilder` function:
+## Running the Generator
 
-```typescript
-import { generateApplicationBuilder } from "@hexaijs/plugin-application-builder";
+### `generate-app-builder` command
 
-await generateApplicationBuilder("./packages/order", {
-    configFile: "hexai.config.ts",
-    outputModuleSpecifiers: "js"
-});
+The package installs a `generate-app-builder` command:
+
+```bash
+npx generate-app-builder --context-path packages/orders
+npx generate-app-builder --context-path packages/orders --output-module-specifiers extensionless
 ```
 
-Both options are optional. `configFile` defaults to `"hexai.config.ts"`, and `outputModuleSpecifiers` defaults to the context config value or `"js"`. Pass `"extensionless"` for legacy generated imports.
+| Option | Description |
+|--------|-------------|
+| `--context-path <path>` | Bounded context root. Defaults to the current directory. |
+| `--output-module-specifiers <style>` | `js` or `extensionless`. Overrides the context config. |
 
-### Hexai CLI Plugin
+This command always reads `hexai.config.ts`. To use another file name, use the `hexai` command or the programmatic API.
 
-Register the plugin with `@hexaijs/cli` when you want to run it through the unified `hexai` command:
+To regenerate before every build, run it from the context's `package.json`. The context path then defaults to the package directory:
+
+```json
+{
+    "scripts": {
+        "prebuild": "generate-app-builder",
+        "build": "tsc"
+    }
+}
+```
+
+### `hexai generate-app-builder` command
+
+With [`@hexaijs/cli`](../cli/README.md), register the plugin in the CLI config at your project root:
 
 ```typescript
 import type { HexaiConfig } from "@hexaijs/cli";
@@ -215,113 +255,75 @@ export default {
         {
             plugin: "@hexaijs/plugin-application-builder",
             config: {
-                configFile: "hexai.config.ts",
-                outputModuleSpecifiers: "js"
-            }
-        }
-    ]
+                outputModuleSpecifiers: "js",
+            },
+        },
+    ],
 } satisfies HexaiConfig;
 ```
 
-Run generation for a bounded context:
-
 ```bash
-hexai generate-app-builder --context-path packages/order
+pnpm hexai generate-app-builder --context-path packages/orders
 ```
 
-The Hexai CLI plugin also accepts `--config-file <name>` and `--output-module-specifiers <js|extensionless>`:
+| Option | Description |
+|--------|-------------|
+| `-p, --context-path <path>` | Required. Bounded context root, relative to the current directory. |
+| `-f, --config-file <name>` | Context config file name. Defaults to `hexai.config.ts`. |
+| `--output-module-specifiers <style>` | `js` or `extensionless` |
 
-```bash
-hexai generate-app-builder --context-path packages/order --output-module-specifiers extensionless
-```
+The plugin's `config` in the CLI config accepts the same two settings as defaults for every context:
 
-For `outputModuleSpecifiers`, command-line options override plugin config, plugin config overrides the bounded context config, and the final default is `"js"`.
+| Plugin config | Description |
+|---------------|-------------|
+| `configFile` | Context config file name, used when `--config-file` is not given |
+| `outputModuleSpecifiers` | Import style, used when `--output-module-specifiers` is not given |
 
-## Usage
+For the import style, the command-line option wins over the plugin config, the plugin config wins over the context config, and `"js"` applies when none sets it.
 
-### Integrating into Your Build
-
-Add the generator to your build scripts:
-
-```json
-{
-  "scripts": {
-    "prebuild": "generate-app-builder",
-    "build": "tsc"
-  }
-}
-```
-
-This ensures the generated file is always up-to-date before compilation.
-
-### Using the Generated Builder
-
-Import and use the generated function in your application setup:
+### Programmatic API
 
 ```typescript
-import { createApplicationBuilder } from "./.generated/application-builder.js";
+import { generateApplicationBuilder } from "@hexaijs/plugin-application-builder";
 
-// The generated builder has all handlers registered
-const builder = createApplicationBuilder();
-
-// Add your application context and build
-const application = builder
-    .withApplicationContext(new OrderApplicationContext())
-    .build();
+await generateApplicationBuilder("packages/orders", {
+    configFile: "hexai.config.ts",
+    outputModuleSpecifiers: "js",
+});
 ```
 
-### Path Alias Support
+Both options are optional. `configFile` defaults to `"hexai.config.ts"`. `outputModuleSpecifiers` overrides the context config, which defaults to `"js"`.
 
-The generator respects TypeScript path aliases defined in your `tsconfig.json`:
+## Errors
 
-```json
-{
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    }
-  }
-}
-```
+The generator stops and writes nothing when it finds one of these problems:
 
-When handlers import request classes using aliases (e.g., `import { CreateOrderRequest } from "@/commands/create-order/request"`), the generator correctly resolves these paths.
+| Error | When | Message |
+|-------|------|---------|
+| `DuplicateCommandHandlerError` | Two handlers are marked for the same command class | `Duplicate command handlers for "CreateOrderCommand": CreateOrderHandler, AnotherCreateOrderHandler` |
+| `DuplicateQueryHandlerError` | Two handlers are marked for the same query class | `Duplicate query handlers for "<query>": <handlers>` |
+| `DuplicateEventHandlerError` | Two event handlers share a `name` | `Duplicate event handlers for event "<name>": <handlers>` |
+| `MessageClassNotFoundError` | The class in a marker is neither imported nor declared in the handler's file | `Cannot find "CreateOrderCommand" - not imported and not defined in "<file>"` |
+| `Error` | The context config misses `applicationBuilderImportPath` or `handlers`, has an unknown `outputModuleSpecifiers` value, or an `@EventHandlerMarker` has options other than `name` | A message naming the problem |
 
-## Error Handling
+The package exports the three `Duplicate*Error` classes. `MessageClassNotFoundError` is not exported; check its `name` property if you need to tell it apart.
 
-The generator validates your configuration and throws descriptive errors:
-
-**DuplicateCommandHandlerError** - Thrown when multiple handlers are registered for the same command:
-
-```
-Duplicate command handlers for "CreateOrderRequest": CreateOrderHandler, AnotherCreateOrderHandler
-```
-
-**DuplicateQueryHandlerError** - Thrown when multiple handlers are registered for the same query.
-
-**DuplicateEventHandlerError** - Thrown when multiple event handlers share the same `name` option.
-
-**MessageClassNotFoundError** - Thrown when a decorator references a class that cannot be found:
-
-```
-Cannot find "CreateOrderRequest" - not imported and not defined in "src/commands/create-order/handler.ts"
-```
-
-## API Highlights
+## API Reference
 
 | Export | Description |
 |--------|-------------|
-| `generateApplicationBuilder(path, options?)` | Programmatic API to run code generation |
-| `CommandHandlerMarker` | Decorator to mark command handlers |
-| `QueryHandlerMarker` | Decorator to mark query handlers |
-| `EventHandlerMarker` | Decorator to mark event handlers |
-| `EventHandlerOptions` | Type for event handler decorator options |
-| `DuplicateCommandHandlerError` | Error for duplicate command handler registration |
-| `DuplicateQueryHandlerError` | Error for duplicate query handler registration |
-| `DuplicateEventHandlerError` | Error for duplicate event handler registration |
-| `HandlerMetadataExtractor` | Class for extracting handler metadata from TypeScript files |
+| `CommandHandlerMarker`, `QueryHandlerMarker`, `EventHandlerMarker` | Marker decorators, also exported from `./decorators` |
+| `EventHandlerOptions` | Options type of `EventHandlerMarker` |
+| `generateApplicationBuilder(contextPath, options?)` | Runs the generator for one bounded context |
+| `GenerateApplicationBuilderOptions` | Options type of `generateApplicationBuilder` |
+| `RawBuildPluginConfig` | Type of the context config file |
+| `BuildPluginConfig` | Validated context config with defaults applied; `BuildPluginConfig.fromRawConfig(raw)` creates one |
+| `OutputModuleSpecifiers` | `"js" \| "extensionless"` |
+| `cliPlugin`, `ApplicationBuilderPluginConfig` | The `hexai` CLI plugin and its config type |
+| `DuplicateCommandHandlerError`, `DuplicateQueryHandlerError`, `DuplicateEventHandlerError` | Errors for duplicate registrations |
 
 ## See Also
 
-- [@hexaijs/application](../application/README.md) - The ApplicationBuilder this plugin generates code for
-- [@hexaijs/core](../core/README.md) - Core domain primitives used by handlers
+- [@hexaijs/application](../application/README.md): `ApplicationBuilder`, handlers and the application context
+- [@hexaijs/cli](../cli/README.md): the `hexai` command
+- [@hexaijs/contracts](../contracts/README.md): `Command` and `Query` base classes
