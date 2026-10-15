@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PostgresConfig } from "./config/index.js";
+import { PostgresConfig } from "ezcfg/postgres";
 import { runMigrations } from "./run-migrations.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

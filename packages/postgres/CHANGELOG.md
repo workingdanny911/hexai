@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.16.1] - 2026-10-15
+
+### Fixed
+
+- `createPostgresUnitOfWork()`, `DatabaseManager` and `TableManager` now accept
+  the `PostgresConfig` this package exports. They checked a config with
+  `instanceof` against an older copy of the class that stayed inside the
+  package when the config code moved to `ezcfg`, so the exported class failed
+  the check: the unit of work's first query threw
+  `TypeError: str.charAt is not a function`, and the managers treated the
+  config as a pg client. The old copy is removed, and the package uses the
+  class from `ezcfg/postgres` everywhere. Passing a pool or a connection
+  string was not affected.
+
+### Notes
+
+- Since 0.16.0, pg's `query_timeout` does not count the time a query waits in
+  its transaction's line behind earlier statements. pg starts the timer when
+  `query()` is called, and the transaction calls it only when the query's turn
+  comes. In 0.15.x, overlapping queries waited in pg's own query queue, where
+  the timer was already running.
+
 ## [0.16.0] - 2026-10-13
 
 ### Added
