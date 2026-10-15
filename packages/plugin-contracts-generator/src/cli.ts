@@ -2,7 +2,6 @@
 
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { resolve, join, relative } from "node:path";
 import {
     ConfigLoader,
@@ -19,6 +18,7 @@ import { RegistryGenerator, ContextMessages } from "./registry-generator.js";
 import { ReexportGenerator } from "./reexport-generator.js";
 import { nodeFileSystem } from "./file-system.js";
 import { formatRelativeIndexSpecifier } from "./module-specifier.js";
+import { isMainModule } from "./main-module.js";
 import type {
     ContractMarkerNames,
     ContractOutputConfig,
@@ -904,6 +904,6 @@ async function main(): Promise<void> {
     }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
     main();
 }
