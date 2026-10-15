@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import * as pg from "pg";
 
 import { Propagation, TransactionHooks } from "@hexaijs/core";
-import { PostgresConfig } from "./config/index.js";
+import { PostgresConfig } from "ezcfg/postgres";
 import { IsolationLevel } from "./types.js";
 import {
     ClientCleanUp,
