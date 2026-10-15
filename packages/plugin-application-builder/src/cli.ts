@@ -18,14 +18,24 @@ async function main() {
 
         if (arg === "--context-path") {
             contextPath = path.resolve(
-                readOptionValue(args, index, "--context-path")
+                readOptionValue(
+                    args,
+                    index,
+                    "--context-path",
+                    "a directory path"
+                )
             );
             index++;
         } else if (arg.startsWith("--context-path=")) {
             contextPath = path.resolve(arg.slice("--context-path=".length));
         } else if (arg === "--output-module-specifiers") {
             outputModuleSpecifiers = parseOutputModuleSpecifiers(
-                readOptionValue(args, index, "--output-module-specifiers")
+                readOptionValue(
+                    args,
+                    index,
+                    "--output-module-specifiers",
+                    '"js" or "extensionless"'
+                )
             );
             index++;
         } else if (arg.startsWith("--output-module-specifiers=")) {
@@ -62,12 +72,13 @@ function parseOutputModuleSpecifiers(value: string): OutputModuleSpecifiers {
 function readOptionValue(
     args: string[],
     index: number,
-    optionName: string
+    optionName: string,
+    expectedValue: string
 ): string {
     const value = args[index + 1];
     if (!value || value.startsWith("--")) {
         throw new Error(
-            `${optionName} requires a value. Expected "js" or "extensionless".`
+            `${optionName} requires a value. Expected ${expectedValue}.`
         );
     }
 

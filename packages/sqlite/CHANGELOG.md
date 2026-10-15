@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2] - 2026-10-15
+
+### Changed
+
+- `wrap()` now has a `@deprecated` tag, so editors and linters flag its use.
+  It has been deprecated since 0.3.0: use `scope()`, and `getClient()` inside
+  it to reach the `Database`.
+
 ## [0.6.1] - 2026-10-15
 
 ### Fixed

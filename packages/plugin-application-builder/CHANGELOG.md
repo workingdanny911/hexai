@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.3] - 2026-10-15
+
+### Changed
+
+- The package no longer ships `dist/test.js`, a test helper for this
+  package's own tests. It was never exported.
+
+### Fixed
+
+- `generate-app-builder --context-path` without a value now says the option
+  expects a directory path. The message said it expected `"js"` or
+  `"extensionless"`, the values of `--output-module-specifiers`.
+
 ## [0.3.2] - 2026-10-15
 
 ### Changed

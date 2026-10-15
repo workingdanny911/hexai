@@ -11,7 +11,11 @@ export type ContractVisibility = "public" | "internal";
 
 export interface ContractBaseOptions {
   /**
-   * Public contracts are emitted by default. Internal contracts require explicit opt-in.
+   * Defaults to `"public"`. To keep internal contracts out of a contracts
+   * generator output, set its `select.visibility` to `["public"]`. An output
+   * without `select.visibility`, or with an empty list, does not filter by
+   * visibility, and single-output mode (`-o` without `outputs[]`) emits every
+   * contract, internal ones included.
    * @example @ContractCommand({ visibility: "internal" })
    */
   visibility?: ContractVisibility;
