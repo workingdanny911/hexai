@@ -65,6 +65,18 @@ describe.sequential("Build Plugin CLI", () => {
         }
     });
 
+    test("exits with code 1 when --context-path has no value", () => {
+        try {
+            execSync(`node ${CLI_PATH} --context-path`, { encoding: "utf-8" });
+            expect.fail("CLI should have exited with code 1");
+        } catch (error: unknown) {
+            expect((error as { status: number }).status).toBe(EXIT_CODE_ERROR);
+            expect(String((error as { stderr: Buffer }).stderr)).toContain(
+                "--context-path requires a value. Expected a directory path."
+            );
+        }
+    });
+
     test("exits with code 1 when context has no config file", () => {
         const missingContextPath = path.join("./fixtures/non-existent-context");
 
