@@ -10,6 +10,7 @@
         "dist",
         "**/*.spec.ts",
         "**/*.test.ts",
-        "**/*.fixtures.ts"
+        "**/*.fixtures.ts",
+        "src/test-fixtures"
     ]
 }

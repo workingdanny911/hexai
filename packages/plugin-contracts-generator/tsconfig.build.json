@@ -12,6 +12,7 @@
         "e2e",
         "**/*.spec.ts",
         "**/*.test.ts",
-        "**/*.fixtures.ts"
+        "**/*.fixtures.ts",
+        "src/test-utils.ts"
     ]
 }
