@@ -16,6 +16,10 @@ import {
     TransactionClosedError,
 } from "./postgres-unit-of-work.js";
 import type { PostgresQueryable } from "./postgres-queryable.js";
+import {
+    captureRejection,
+    createDeferred,
+} from "./test-fixtures/async.fixtures.js";
 import { useClient, useDatabase } from "./test-fixtures/index.js";
 
 const DATABASE = "test_hexai__uow_db";
@@ -39,28 +43,6 @@ class RowRepository {
     async add(id: number): Promise<void> {
         await this.db.query(INSERT_ROW, [id]);
     }
-}
-
-interface Deferred {
-    promise: Promise<void>;
-    resolve(): void;
-}
-
-function createDeferred(): Deferred {
-    let resolve!: () => void;
-    const promise = new Promise<void>((r) => {
-        resolve = r;
-    });
-    return { promise, resolve };
-}
-
-async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
-    try {
-        await promise;
-    } catch (e) {
-        return e;
-    }
-    throw new Error("Expected the operation to reject, but it resolved");
 }
 
 async function insertRow(db: PostgresQueryable, id: number): Promise<void> {

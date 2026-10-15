@@ -14,6 +14,7 @@ import {
     DefaultPostgresUnitOfWork,
     TransactionAbortedError,
 } from "./postgres-unit-of-work.js";
+import { createDeferred } from "./test-fixtures/async.fixtures.js";
 import {
     newClient,
     useClient,
@@ -26,14 +27,6 @@ const TABLE = "_composite_writes";
 
 class SomethingHappened extends Message<Record<never, never>> {
     static type = "test.something-happened";
-}
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-    let resolve!: () => void;
-    const promise = new Promise<void>((r) => {
-        resolve = r;
-    });
-    return { promise, resolve };
 }
 
 describe("SimpleCompositeApplication with DefaultPostgresUnitOfWork", () => {
