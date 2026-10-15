@@ -1,140 +1,227 @@
 # @hexaijs/plugin-contracts-generator
 
-> Extract message contracts and general TypeScript contracts from backend source code to generate frontend-compatible types
-
-## Overview
-
-`@hexaijs/plugin-contracts-generator` solves the problem of keeping frontend and backend type definitions in sync. In a hexagonal architecture, your backend defines domain events, commands, queries, and shared public contracts - but your frontend also needs type-safe access to these message types and general contract declarations for API calls, event handling, and validation.
-
-Instead of manually duplicating type definitions (which inevitably drift out of sync), this plugin scans your backend source code for contract decorators and contract markers, then extracts the matching declarations into one or more standalone contracts packages. The generated package can contain the public API surface, an internal build-tool surface, or both via configured outputs - message types, their payloads, response types, and explicitly marked general contracts - without backend implementation details.
-
-The plugin works at build time by:
-
-1. Scanning TypeScript files for message classes decorated with `@ContractEvent()`, `@ContractCommand()`, or `@ContractQuery()`, generic `@Contract({ kind })` declarations, plus leading `@Contract(...)` comment markers
-2. Resolving all type dependencies (including response types, shared value objects, and general contract declarations)
-3. Generating clean contracts packages with namespace exports and, when requested, a MessageRegistry for selected decorated messages only
+A build-time tool that copies the contracts of your backend into a separate TypeScript package that a frontend can import. You mark the commands, queries and events that clients may use, plus any other types they need; the generator copies those declarations and the local types they depend on, and leaves handlers, repositories and other backend code behind. Use it when a TypeScript client must share exact payload, response and event types with a hexai backend without re-declaring them by hand.
 
 ## Installation
 
 ```bash
-npm install @hexaijs/plugin-contracts-generator
+npm install --save-dev @hexaijs/plugin-contracts-generator typescript
+npm install @hexaijs/contracts
 ```
 
-**Peer dependencies:**
-- `typescript ^5.0.0 || ^6.0.0`
-- `@hexaijs/cli ^0.2.0` is optional and only needed for `pnpm hexai generate-contracts` plugin integration
+| Package | Why you need it |
+|---------|-----------------|
+| `typescript` | Required peer dependency. The generator reads your source with the TypeScript compiler API. |
+| `@hexaijs/cli` | Optional peer dependency. Install it only to run the generator as `hexai generate-contracts` (see [Run as a hexai CLI plugin](#run-as-a-hexai-cli-plugin)). |
+| `@hexaijs/contracts` | Provides the marker decorators and the `Command` and `Query` base classes your backend imports. The generator already depends on it; add it to every backend package that imports it. See the [`@hexaijs/contracts` README](../contracts/README.md). |
 
-## Core Concepts
+The package has two entry points and one binary:
 
-### Contract Decorators
+- `@hexaijs/plugin-contracts-generator`: the programmatic API (build time only).
+- `@hexaijs/plugin-contracts-generator/runtime`: `MessageRegistry`, which generated code imports at runtime.
+- `generate-contracts`: the standalone CLI.
 
-The package provides message-specific decorators and a generic contract decorator. These decorators have **no runtime overhead** - they simply tag classes for discovery during the build process. Selected message contracts are the only generated contracts registered in `MessageRegistry`.
+The generated package needs its own dependencies; see [What the generated package needs](#what-the-generated-package-needs).
 
-```typescript
-import {
-    Contract,
-    ContractCommand,
-    ContractEvent,
-    ContractQuery,
-} from "@hexaijs/contracts/decorators";
-```
+## Quick start
 
-**@ContractEvent()** - Marks a domain event contract:
+1. Mark a command in your backend. A command is a message that asks the backend to do something.
+
+    ```typescript
+    // packages/orders/src/messages/place-order.ts
+    import { Command } from "@hexaijs/contracts";
+    import { ContractCommand } from "@hexaijs/contracts/decorators";
+
+    import type { Money } from "../domain/money.js";
+
+    @ContractCommand({ response: "PlaceOrderResult" })
+    export class PlaceOrderCommand extends Command<
+        { customerId: string; total: Money },
+        PlaceOrderResult
+    > {
+        static readonly type = "orders.place-order";
+    }
+
+    type PlaceOrderResult = {
+        orderId: string;
+    };
+
+    export class PlaceOrderHandler {
+        async execute(command: PlaceOrderCommand): Promise<PlaceOrderResult> {
+            return { orderId: "order-1" };
+        }
+    }
+    ```
+
+    ```typescript
+    // packages/orders/src/domain/money.ts
+    export type Currency = "KRW" | "USD";
+
+    export interface Money {
+        amount: number;
+        currency: Currency;
+    }
+
+    export function formatMoney(money: Money): string {
+        return `${money.amount} ${money.currency}`;
+    }
+    ```
+
+2. Create `application.config.ts` at the monorepo root.
+
+    ```typescript
+    export default {
+        contracts: {
+            contexts: ["packages/orders"],
+        },
+    };
+    ```
+
+3. Run the generator from the same directory.
+
+    ```bash
+    npx generate-contracts -o packages/contracts/src --registry
+    ```
+
+4. Look at the result.
+
+    ```text
+    packages/contracts/src/
+    ├── index.ts                     # namespace export and messageRegistry (written because of --registry)
+    └── orders/
+        ├── index.ts                 # export * from every copied file
+        ├── domain/money.ts          # Currency and Money only; formatMoney is not used, so it is left out
+        └── messages/place-order.ts
+    ```
+
+    ```typescript
+    // packages/contracts/src/orders/messages/place-order.ts
+    import { Command } from "@hexaijs/contracts";
+    import type { Money } from "../domain/money.js";
+    export type PlaceOrderResult = {
+        orderId: string;
+    };
+    export class PlaceOrderCommand extends Command<{
+        customerId: string;
+        total: Money;
+    }, PlaceOrderResult> {
+        static readonly type = "orders.place-order";
+    }
+    ```
+
+    The decorator and its import are gone, `PlaceOrderHandler` stayed in the backend, and `PlaceOrderResult` gained `export`.
+
+5. Give `packages/contracts` a `package.json` and the dependencies listed in [What the generated package needs](#what-the-generated-package-needs); the generator writes only `.ts` files. Then import it from the frontend (here it is named `@acme/contracts`).
+
+    ```typescript
+    import type { MessageHeaders } from "@hexaijs/plugin-contracts-generator/runtime";
+    import { messageRegistry, orders } from "@acme/contracts";
+
+    const command = new orders.PlaceOrderCommand({
+        customerId: "customer-1",
+        total: { amount: 12000, currency: "KRW" },
+    });
+
+    // Turn a message that arrives as headers and body back into a class instance.
+    function receive(headers: MessageHeaders, body: Record<string, unknown>) {
+        return messageRegistry.dehydrate(headers, body);
+    }
+    ```
+
+## Concepts
+
+- **Contract**: a declaration that the generator copies into the generated package. There are two kinds:
+  - **Message contract**: a command, query or event class marked with a decorator. Message contracts can be registered in `MessageRegistry`.
+  - **General contract**: any other marked class, interface, type alias or enum, such as a read model or a value object. General contracts are copied and exported, but never registered.
+- **Marker**: how you mark a contract. Classes take a decorator; any declaration can take a comment marker. Markers do nothing at runtime.
+- **Kind**: the role of a contract. `command`, `query` and `event` are message kinds. Every other value (`contract` by default, or your own, such as `read-model`) makes a general contract.
+- **Visibility**: `public` (default) or `internal`. Outputs use it to keep internal contracts out of the public package.
+- **Tags**: free labels for extra output filters. Tags are not a security boundary; use visibility for that.
+- **Context**: one bounded context, usually one backend package. Each context gets its own folder in the output, named after the context.
+- **Entry file**: a source file that contains at least one marker. The generator copies only the marked declarations from it, plus the local declarations they use.
+- **Dependency file**: a local file that an entry file imports. The generator copies the parts that are used (see [Dependency strategies](#dependency-strategies)).
+- **Output**: a directory that receives generated files. A run writes one output (`-o`) or several (`outputs[]`).
+
+A run works in this order for every context and output:
+
+1. **Scan** `<context>/<sourceDir>/**/*.ts` for files that contain markers.
+2. **Parse** those files and collect the marked contracts.
+3. **Select** the contracts that the output asks for.
+4. **Copy** the selected declarations, the local types they use and their dependency files into `<output>/<context>/`, keeping the source folder layout.
+5. **Write** `<output>/<context>/index.ts`, and `<output>/index.ts` when the registry is on.
+
+## Marking contracts
+
+### Message decorators
+
+Import the decorators from `@hexaijs/contracts/decorators` (or `@hexaijs/contracts`).
+
+| Decorator | Marks | Options |
+|-----------|-------|---------|
+| `@ContractCommand(options?)` | a command | `response`, `visibility`, `tags`, `context` |
+| `@ContractQuery(options?)` | a query | `response`, `visibility`, `tags`, `context` |
+| `@ContractEvent(options?)` | an event | `version`, `visibility`, `tags`, `context` |
+| `@Contract(options?)` | a message when `kind` is `"command"`, `"query"` or `"event"`; a general contract otherwise | `kind`, `response`, `version`, `visibility`, `tags`, `context` |
+
+| Option | Effect |
+|--------|--------|
+| `visibility` | `"public"` (default) or `"internal"`. Matched by `outputs[].select.visibility`. |
+| `tags` | String array. Matched by `outputs[].select.tags`. |
+| `kind` | `Contract` only. The contract role; defaults to `"contract"`. |
+| `response` | Commands and queries. Names the response type, which must live in the same file. See [Response types](#response-types). |
+| `version` | Events. Recorded as `version` on the parse result only. It changes neither the generated files nor the registry, which keys messages by the class's static `type` and `schemaVersion`. |
+| `context` | Recorded as `context` on the parse result only. The output folder name comes from the context configuration. |
+
+The generator reads options from the source text, so only literal values count: strings, numbers, booleans and arrays of them. A constant such as `tags: BUS_TAGS` is ignored.
 
 ```typescript
 import { DomainEvent } from "@hexaijs/core";
-import { ContractEvent } from "@hexaijs/contracts/decorators";
+import { Command, Query } from "@hexaijs/contracts";
+import { Contract, ContractEvent, ContractQuery } from "@hexaijs/contracts/decorators";
 
 @ContractEvent()
 export class OrderPlaced extends DomainEvent<{
     orderId: string;
     customerId: string;
-    totalAmount: number;
 }> {
-    static readonly type = "order.order-placed";
+    static readonly type = "orders.order-placed";
 }
-```
-
-**@ContractCommand()** - Marks a command contract:
-
-```typescript
-import { ContractCommand } from "@hexaijs/contracts/decorators";
-
-@ContractCommand({ response: "CreateOrderResponse" })
-export class CreateOrderRequest extends BaseRequest<{
-    customerId: string;
-    items: OrderItem[];
-}> {
-    static type = "order.create-order";
-}
-
-export type CreateOrderResponse = {
-    orderId: string;
-};
-```
-
-**@ContractQuery()** - Marks a query contract:
-
-```typescript
-import { ContractQuery } from "@hexaijs/contracts/decorators";
 
 @ContractQuery({ response: "OrderDetails" })
-export class GetOrderQuery extends BaseRequest<{
-    orderId: string;
-}> {}
+export class GetOrderQuery extends Query<{ orderId: string }, OrderDetails> {
+    static readonly type = "orders.get-order";
+}
 
 type OrderDetails = {
     orderId: string;
-    status: string;
-    items: OrderItem[];
+    status: "placed" | "shipped";
 };
+
+@Contract({ kind: "command", visibility: "internal", tags: ["bus"] })
+export class RebuildOrderIndexCommand extends Command<{ since: string }> {
+    static readonly type = "orders.rebuild-order-index";
+}
 ```
 
-**@Contract({ kind })** - Marks a generic contract role. Built-in message kinds are `command`, `query`, and `event`; custom kinds such as `read-model`, `value-object`, `dto`, or `snapshot` are treated as general contracts unless they are one of the built-in message kinds.
+A message needs a decorator. A comment marker with a message kind, such as `// @Contract({ kind: "command" })`, is ignored.
+
+### General contracts
+
+Mark a class with `@Contract(...)`. Interfaces, type aliases and enums cannot carry decorators, so they use a comment marker instead. Classes accept comment markers too.
 
 ```typescript
 import { Contract } from "@hexaijs/contracts/decorators";
 
-@Contract({ kind: "read-model", tags: ["frontend"] })
-export class OrderListItem {
-    orderId!: string;
-    status!: string;
-    totalAmount!: number;
-}
-
-@Contract({ kind: "command", visibility: "internal" })
-export class RebuildOrderProjectionCommand {
-    static type = "order.rebuild-projection";
-}
-```
-
-Each decorator accepts optional configuration:
-- `context` - Override the context name for this message
-- `version` - Specify a version number for versioned events
-- `response` - Explicitly name the response type (for commands/queries)
-- `visibility` - Select the boundary for output filtering. Defaults to `"public"`; use `"internal"` for contracts that must not be emitted to public outputs unless selected explicitly
-- `tags` - Auxiliary labels for additional output filters. Tags are not a security boundary
-- `kind` - Generic contract role/discriminator for `@Contract(...)`; message-specific decorators provide it implicitly
-
-Use `visibility` for public/internal separation. Use `tags` only for secondary grouping such as `"frontend"`, `"bus"`, `"admin"`, or `"experimental"`.
-
-### Contract Comment Markers
-
-General contracts that are not messages can be exposed with `@Contract({ kind: "contract" })` or a custom `kind`. Classes support the no-op runtime decorator form. Interfaces, type aliases, and enums do not support TypeScript decorators, so they must use a leading comment marker.
-
-Comment markers can be line comments, block comments, or JSDoc comments placed immediately before a `class`, `interface`, `type`, or `enum` declaration. Interfaces, type aliases, and enums are comment-marker only. Comment markers require no import. They must use call syntax such as `// @Contract({ kind: "dto" })` or `// @PublicContract()`; bare markers such as `// @PublicContract` are not supported. If the marked declaration is not exported in the source file, the generator adds `export` in the generated contracts output.
-
-```typescript
 @Contract({ kind: "snapshot" })
-export class OrderSnapshotContract {
+export class OrderSnapshot {
     constructor(public readonly orderId: string) {}
 }
 
-// @Contract({ kind: "snapshot", visibility: "public", tags: ["frontend"] })
-interface OrderSnapshot {
+// @Contract({ kind: "read-model", tags: ["frontend"] })
+interface OrderSummary {
     orderId: string;
     status: OrderStatus;
-    totalAmount: number;
+    channel: OrderChannel;
 }
 
 /* @Contract({ kind: "value-object" }) */
@@ -143,345 +230,240 @@ enum OrderChannel {
     Store = "store",
 }
 
-/** @Contract({ kind: "read-model", visibility: "internal", tags: ["admin"] }) */
+/**
+ * Lifecycle of an order.
+ * @Contract({ kind: "value-object", visibility: "internal", tags: ["admin"] })
+ */
 type OrderStatus = "draft" | "placed" | "cancelled";
 ```
 
-General contracts are included in the generated contracts output, but they are not message contracts and are never registered in `MessageRegistry`. `MessageRegistry` registers selected decorated messages only.
+Comment marker rules:
 
-Legacy `@PublicContract()` comment markers still work and map to `@Contract({ kind: "contract", visibility: "public" })`.
+- The marker must be in a comment directly attached to the declaration: a line comment, a block comment or a JSDoc comment.
+- One line of that comment must hold exactly `@Contract(...)`, options included. Other JSDoc lines may surround it; options cannot span lines.
+- The parentheses are required. `// @Contract` without `()` is not a marker.
+- A comment marker needs no import.
+- If the marked declaration is not exported, the generator adds `export` in the output.
 
-### Configuration
+### Where decorators may come from
 
-Create an `application.config.ts` file in your monorepo root:
+The generator recognizes `ContractEvent`, `ContractCommand`, `ContractQuery` and `Contract` only when the file imports them as named value imports from a trusted source:
+
+- `@hexaijs/contracts`
+- `@hexaijs/contracts/decorators`
+- any entry in `contracts.trustedDecoratorSources`
+
+Named aliases work:
+
+```typescript
+import { ContractCommand as InternalCommand } from "@hexaijs/contracts/decorators";
+
+@InternalCommand({ visibility: "internal", tags: ["bus"] })
+export class RebuildSearchIndexCommand {}
+```
+
+These forms are not recognized:
+
+- A same-named decorator from another package, or a name with no import at all.
+- A type-only import.
+- A namespace import, such as `@Contracts.ContractCommand()` after `import * as Contracts from "@hexaijs/contracts/decorators"`. (Namespace imports of ordinary types still work in copied files.)
+- A re-export through your own barrel file, unless you add that module to `trustedDecoratorSources`. The generator does not follow re-export chains.
+- An import from `@hexaijs/plugin-contracts-generator`. The package re-exports the decorators, but the scanner and parser do not trust it as a source. Import from `@hexaijs/contracts/decorators` instead.
+
+The deprecated `Public*` names are matched by name alone, wherever they are imported from (see [Migrating from `Public*` markers](#migrating-from-public-markers)).
+
+### Response types
+
+A command or query can have a response type. The generator finds it in one of two ways:
+
+1. The `response` option names it: `@ContractCommand({ response: "PlaceOrderResult" })`.
+2. A configured naming convention matches it. With `responseNamingConventions: [{ messageSuffix: "Query", responseSuffix: "QueryResult" }]`, `GetOrderQuery` matches `GetOrderQueryResult`.
+
+The `response` option wins when both apply. The response type must be a `type` alias or an `interface` in the same file as the message. The generator copies it and adds `export` when the source does not export it.
+
+The generator also keeps same-file declarations whose names follow fixed patterns, even when nothing references them: `<Message>Response` and `<Message>Payload`, `<Base>Response` and `<Base>Payload` for a `<Base>Request`, and `<Base>QueryResult` and `<Base>Payload` for a `<Base>Query`.
+
+## Configuration
+
+The standalone CLI reads `application.config.ts` from the current directory by default (`-c` picks another file). The file must default-export an object with a `contracts` section.
 
 ```typescript
 // application.config.ts
 export default {
     contracts: {
-        // Context definitions (required)
         contexts: [
-            {
-                name: "order",
-                path: "packages/order",
-                tsconfigPath: "tsconfig.json", // optional, relative to path
-            },
+            "packages/orders",
             {
                 name: "inventory",
                 path: "packages/inventory",
-                sourceDir: "lib", // optional, defaults to "src"
+                sourceDir: "lib",
+                tsconfigPath: "tsconfig.build.json",
             },
         ],
-
-        // Path alias rewrite rules (optional)
-        pathAliasRewrites: {
-            "@myorg/": "@/",
-        },
-
-        // Additional dependencies for contracts package (optional)
-        externalDependencies: {
-            "@hexaijs/core": "workspace:*",
-        },
-
-        // Multiple outputs are optional. If omitted, use --output-dir.
-        outputs: [
-            {
-                name: "public",
-                path: "packages/contracts/src",
-                select: {
-                    visibility: ["public"],
-                },
-            },
-            {
-                name: "internal",
-                path: "packages/contracts-internal/src",
-                registry: true,
-                select: {
-                    visibility: ["internal"],
-                    messageKinds: ["command"],
-                    tags: { include: ["bus"] },
-                },
-            },
-        ],
-
-        // Response type naming conventions (optional)
         responseNamingConventions: [
             { messageSuffix: "Command", responseSuffix: "CommandResult" },
             { messageSuffix: "Query", responseSuffix: "QueryResult" },
-            { messageSuffix: "Request", responseSuffix: "Response" },
         ],
-
-        // Legacy custom decorator names (optional, defaults shown)
-        decoratorNames: {
-            event: "PublicEvent",
-            command: "PublicCommand",
-            query: "PublicQuery",
-        },
-
-        // Legacy custom comment marker names for general contracts (optional, defaults shown)
-        contractMarkerNames: {
-            contract: "PublicContract",
-        },
-
-        // Trusted local barrels that re-export Contract* decorators (optional)
-        trustedDecoratorSources: ["@app/contracts"],
-
-        // Dependency strategy (optional, default: "safe-symbols")
-        // Use "file" only for compatibility with barrel-heavy or unsafe dependency modules.
-        dependencyStrategy: "safe-symbols",
-
-        // Generated relative import/export specifiers (optional, default: "js")
-        // Use "extensionless" only for legacy generated packages.
-        outputModuleSpecifiers: "js",
-
-        // Strip decorators from generated output (optional, default: true)
-        removeDecorators: true,
-    },
-};
-```
-
-The canonical API names `ContractEvent`, `ContractCommand`, `ContractQuery`, and `Contract` are recognized when they are imported from trusted decorator sources. Unbound canonical `Contract*` names are ignored to avoid false positives. `decoratorNames` and `contractMarkerNames` keep their legacy replacement semantics for existing projects that use custom `Public*` marker names.
-
-When `removeDecorators: true` is enabled, generated files are printed through the TypeScript printer after matched contract decorators and related imports are removed. Migration diffs can therefore include formatting churn around affected declarations in addition to the expected decorator removal.
-
-Each context requires `name` and `path`. The `path` is the base directory of the context (relative to the config file). Within that directory:
-- `sourceDir` defaults to `"src"` (resolved relative to `path`)
-- `tsconfigPath` defaults to `"tsconfig.json"` (resolved relative to `path`)
-
-For monorepos with many packages, use glob patterns to auto-discover contexts:
-
-```typescript
-export default {
-    contracts: {
-        contexts: ["packages/*"],  // Matches all directories under packages/
-    },
-};
-```
-
-Each matched directory is treated as a context with sensible defaults:
-- Context name = directory name (e.g., `packages/auth` → `auth`)
-- Source directory = `src/` (default)
-- TypeScript config = `tsconfig.json` (auto-detected if exists)
-
-### Configuration Reference
-
-| Field | Description |
-|-------|-------------|
-| `contexts` | Required context definitions or glob patterns |
-| `outputs` | Optional multi-output plans. Omit for single-output CLI mode with `--output-dir` |
-| `dependencyStrategy` | `safe-symbols` to slice retained dependency files when statically safe (default), or `file` to copy retained dependency files whole |
-| `outputModuleSpecifiers` | Generated relative module specifier style. Defaults to `"js"` for NodeNext/ESM-safe `.js` imports and exports. Use `"extensionless"` only for legacy generated packages |
-| `removeDecorators` | Removes matched contract decorators from generated output by default |
-| `trustedDecoratorSources` | Additional import sources trusted for canonical `Contract*` decorators |
-
-### Multiple Outputs
-
-Use `contracts.outputs[]` when a monorepo needs more than one generated package. Output paths are resolved relative to the config file. When `outputs[]` is configured, run without `--output-dir`/`-o`; the CLI rejects the combination to avoid writing the same run to two different output plans.
-
-**Simple monorepo root config:**
-
-```typescript
-// application.config.ts
-export default {
-    contracts: {
-        contexts: ["packages/*"],
         outputs: [
             {
                 name: "public",
                 path: "packages/contracts/src",
                 select: { visibility: ["public"] },
             },
+            {
+                name: "internal",
+                path: "packages/contracts-internal/src",
+                registry: true,
+                select: { visibility: ["internal"], messageKinds: ["command"] },
+            },
         ],
     },
 };
 ```
 
-**Public/internal split:**
+The loader compiles the file and evaluates it without a module loader. Keep it self-contained: a runtime `import` fails with `require is not defined`. Type-only imports are fine.
+
+### Options
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `contexts` | required | Contexts to scan. See [Contexts](#contexts). |
+| `outputs` | none | Output directories with their own selection. Without it, pass `-o`. See [Multiple outputs](#multiple-outputs). |
+| `responseNamingConventions` | none | `{ messageSuffix, responseSuffix }` pairs for finding response types. |
+| `dependencyStrategy` | `"safe-symbols"` | `"safe-symbols"` copies only the used declarations of dependency files and fails on files it cannot slice safely. `"file"` copies dependency files whole. See [Dependency strategies](#dependency-strategies). |
+| `outputModuleSpecifiers` | `"js"` | `"js"` writes relative imports and exports with `.js` extensions, which `moduleResolution: "NodeNext"` and ESM need. `"extensionless"` writes them without extensions, for older generated packages. |
+| `removeDecorators` | `true` | Removes contract decorators, comment markers and decorator imports from the output. |
+| `pathAliasRewrites` | none | Prefix replacements for imports that stay outside the generated package. See [Path alias rewrites](#path-alias-rewrites). |
+| `trustedDecoratorSources` | none | Extra modules from which `Contract*` decorator imports are trusted, such as your own decorator barrel. |
+| `decoratorNames` | `{ event: "PublicEvent", command: "PublicCommand", query: "PublicQuery" }` | Legacy. Replaces the `Public*` message decorator names that are matched by name alone. |
+| `contractMarkerNames` | `{ contract: "PublicContract" }` | Legacy. Replaces the `PublicContract` name for general contract decorators and comment markers. |
+| `externalDependencies` | none | Accepted for compatibility. The generator does not use it. |
+
+`entryStrategy` was removed in 0.7.0; a config that still sets it fails to load.
+
+### Contexts
+
+Each `contexts` entry is a string, a glob or an object. Paths are relative to the config file.
+
+| Entry | Example | Result |
+|-------|---------|--------|
+| Path | `"packages/orders"` | One context named after the last path segment (`orders`). |
+| Glob | `"packages/*"` | One context per directory under `packages/`, each named after its directory. Only one `*` is allowed. Text after the `*` filters directories: `"packages/*/src"` keeps directories that contain `src`. |
+| Object | `{ name: "orders", path: "packages/orders" }` | One context with explicit settings. |
+
+Object fields:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `name` | required | Context name and output folder name. |
+| `path` | required | Context base directory. |
+| `sourceDir` | `"src"` | Directory to scan, relative to `path`. |
+| `tsconfigPath` | `"tsconfig.json"` | Relative to `path`. Its `paths` aliases resolve imports. A missing file is skipped. |
+| `responseNamingConventions` | none | Used only when the top-level `responseNamingConventions` is not set. |
+
+The scanner reads `.ts` files only and skips `node_modules`, `dist`, `*.d.ts`, `*.test.ts` and `*.spec.ts`. When the generator follows imports, it also leaves out files matching `*.test.ts`, `*.spec.ts`, `*.eh.ts`, `db.ts` and anything under an `infra/` directory, and removes the imports of those files from copied code.
+
+A glob must not match the generated package. If `packages/*` also matches `packages/contracts`, the run treats it as a context and writes an empty `contracts/index.ts` into the output.
+
+### Multiple outputs
+
+`outputs[]` writes several packages in one run, for example a public package for the frontend and an internal package for backend tools. Each entry has:
+
+| Field | Description |
+|-------|-------------|
+| `name` | Required and unique. Shown in logs. |
+| `path` | Required. Output directory, relative to the config file. |
+| `select` | Which contracts this output receives. Without it, the output receives every contract. |
+| `registry` | `true` writes `<path>/index.ts` with a `MessageRegistry` for this output. |
+| `outputModuleSpecifiers` | Overrides `outputModuleSpecifiers` for this output. |
+
+`select` fields:
+
+| Field | Keeps a contract when |
+|-------|-----------------------|
+| `visibility` | its visibility is in the list (`"public"`, `"internal"`). |
+| `kinds` | its kind is in the list. Messages have the kinds `command`, `query` and `event`. |
+| `messageKinds` | it is a message of a listed kind (`command`, `query`, `event`). Setting this drops all general contracts. |
+| `include` | it is in the category: `"all"`, `"messages"` or `"contracts"`. |
+| `tags.include` | it has at least one listed tag. |
+| `tags.exclude` | it has none of the listed tags. |
+
+A contract must pass every field that is set.
+
+When `outputs[]` is set, run without `-o`; the CLI rejects the combination. `--include` and `--messages` still apply to every output on top of its `select`, and `--registry` turns the registry on for every output.
+
+**Boundary check.** When an output sets any `select` field, the generator checks every file before writing it. If a file would carry a marked declaration that the output does not select, the run fails with `BoundaryViolationError`. This happens, for example, when a public message uses a type from a dependency file that also holds an `internal` contract, and that file is copied whole. Fix it by moving shared types behind public markers, adjusting the selection, or splitting the file.
+
+**Single-output mode does not filter by visibility.** Without `outputs[]`, `-o` receives every contract, `internal` ones included. Use `outputs[]` with `select.visibility` before you publish a package that must not contain internal contracts.
+
+### Path alias rewrites
+
+`pathAliasRewrites` maps import prefixes to replacements in every copied file. Use it for imports that stay external to the generated package, such as a shared package that the frontend reaches under another name. Imports that resolve to files inside the context are rewritten to relative paths without it.
 
 ```typescript
 export default {
     contracts: {
-        contexts: [
-            { name: "orders", path: "packages/orders" },
-            { name: "billing", path: "packages/billing" },
-        ],
-        outputs: [
-            {
-                name: "public",
-                path: "packages/contracts/src",
-                select: {
-                    visibility: ["public"],
-                    include: "all",
-                },
-            },
-            {
-                name: "internal-command-bus",
-                path: "packages/internal-contracts/src",
-                registry: true,
-                select: {
-                    visibility: ["internal"],
-                    messageKinds: ["command"],
-                    tags: { include: ["bus"] },
-                },
-            },
-        ],
+        contexts: ["packages/orders"],
+        pathAliasRewrites: {
+            "@acme/shared": "@acme/contracts/shared",
+        },
     },
 };
 ```
 
-`outputs[].select` supports:
+With this config, `import { Money } from "@acme/shared/money"` becomes `import { Money } from "@acme/contracts/shared/money"`. The CLI and the hexai plugin then write a re-export file for each rewritten import, under the output directory at the path after the package name: `shared/money.ts` with `export { Money } from "@acme/shared/money";`. The generated package therefore needs the original package as a dependency. `processContext()` rewrites imports but does not write re-export files.
 
-| Field | Description |
-|-------|-------------|
-| `visibility` | Primary public/internal boundary. Use `["public"]` for frontend packages and `["internal"]` for internal build targets |
-| `kinds` | Match any contract kind, including custom generic `kind` values |
-| `messageKinds` | Match only message kinds: `command`, `query`, or `event` |
-| `include` | Select contract categories: `all`, `messages`, or `contracts` |
-| `tags.include` | Keep contracts that have at least one included tag |
-| `tags.exclude` | Drop contracts that have any excluded tag |
+## Running the generator
 
-`outputs[].registry: true` generates a `MessageRegistry` for that output. General contracts are still exported but never registered.
-
-`outputs[].outputModuleSpecifiers` can override the global `contracts.outputModuleSpecifiers` setting for one output.
-
-If `outputs[]` is omitted, existing single-output mode remains unchanged:
+### Standalone CLI
 
 ```bash
-npx generate-contracts --output-dir packages/contracts/src
+npx generate-contracts -o packages/contracts/src [options]
+npx generate-contracts -c application.config.ts [options]    # when contracts.outputs is set
 ```
-
-CLI filters such as `--include`, `--messages`, and `--registry` still apply to single-output mode. With `outputs[]`, use output-level `select` and `registry`; passing `--registry` enables registry generation for every configured output.
-
-### Response Types
-
-Commands and queries often have associated response types. The generator includes these in the contracts package automatically.
-
-**Automatic detection via naming conventions:**
-
-```typescript
-// When responseNamingConventions includes { messageSuffix: "Command", responseSuffix: "CommandResult" }
-
-@ContractCommand()
-export class CreateOrderCommand extends Message<{ customerId: string }> {}
-
-type CreateOrderCommandResult = {  // Automatically detected by naming pattern
-    orderId: string;
-};
-```
-
-**Explicit response option:**
-
-```typescript
-@ContractCommand({ response: "OrderCreationResult" })
-export class CreateOrder extends Message<{ customerId: string }> {}
-
-type OrderCreationResult = {
-    orderId: string;
-    createdAt: Date;
-};
-```
-
-Response types must be in the same file as the command/query. Both `type` aliases and `interface` declarations are supported. The generator adds `export` automatically if the type isn't already exported.
-
-### Entry vs Dependency Files
-
-The generator handles two types of files differently:
-
-**Entry files** (files with message decorators, `@Contract(...)` class decorators, or leading `@Contract(...)` comment markers) are contract entry points:
-- Matching decorated message classes and marked public contract declarations are extracted with minimal local dependencies
-- Selected entry files preserve retained default imports, namespace imports, named aliases, mixed default + named imports, type-only default imports, and qualified type references such as `Types.User` or `Types.Inner.User`
-- Unused named specifiers in retained mixed imports are removed when the AST shape is safe to rewrite, and already-exported local function dependencies are preserved without adding a duplicate `export`
-- Response types are included based on naming conventions
-
-**Dependency files** (imported by entry files) are copied according to `dependencyStrategy`.
-
-The default `dependencyStrategy: "safe-symbols"` slices retained dependency files to the named top-level declarations actually referenced from selected entry declarations. It recursively follows retained named local imports and preserves local declaration closure, including value declarations referenced by `typeof` type queries.
-
-`safe-symbols` is intentionally conservative. It does not silently fall back to full-file copying. If a dependency module contains constructs whose top-level behavior or emitted shape cannot be proven safe to slice, generation throws `UnsafeDependencySliceError` with the dependency file path and reason. Unsafe cases include side-effect-only imports (`import "./setup"`), dynamic imports, local `import("./x").T` types, export declarations/re-exports, class or member decorators, class static blocks, computed class members, static member initializers, enum initializers, unsafe top-level variable initializers, and other top-level statements with possible side effects. Unsupported retained dependency import shapes such as default or namespace imports also fail fast.
-
-Dependency files outside the current context source root are copied whole in `safe-symbols` mode. This prevents two contexts that share a source file from overwriting the same generated dependency file with incompatible partial slices. Strict output selectors still run boundary checks against copied shared files.
-
-Use `dependencyStrategy: "file"` as an explicit compatibility mode when retained dependency modules rely on local barrels, default/namespace dependency imports, or other constructs that are intentionally rejected by `safe-symbols`. In `file` mode, retained dependency files are copied entirely:
-- Supports barrel files (`export * from './module'`)
-- Resolves NodeNext-style source imports such as `./shared.js` back to TypeScript files such as `shared.ts`, including type-only dependency files
-- Preserves all exports for transitive dependencies
-- Ensures type dependencies remain intact
-
-Entry extraction and `safe-symbols` are AST-based slicers, not full TypeScript TypeChecker semantic slicers. Keep shared DTO/value-object dependencies side-effect-free and barrel-free when you want the default strict dependency slicing path.
-
-### Generated Module Specifiers
-
-Generated relative imports and exports use `.js` by default. This makes the emitted TypeScript source safe for `moduleResolution: "NodeNext"` and ESM package output:
-
-- Context barrels emit exports such as `export * from "./events.js"`.
-- Copied local relative import/export declarations are normalized to `.js` when they target copied local files.
-- Root registry namespace imports and exports use `./context/index.js` instead of directory imports.
-
-Set `outputModuleSpecifiers: "extensionless"` to preserve legacy extensionless generated output.
-
-## Usage
-
-### CLI
-
-Run the generator from your monorepo root:
-
-```bash
-# In single-output mode, --output-dir (-o) specifies where contracts are generated
-npx generate-contracts --output-dir packages/contracts/src
-
-# Specify config file path (default: application.config.ts)
-npx generate-contracts -o packages/contracts/src --config ./app.config.ts
-```
-
-By default, the CLI uses `--include all`, all message types, strict entry symbol extraction, and `--dependency-strategy safe-symbols`. In single-output mode this generates public `@ContractEvent()`, `@ContractCommand()`, and `@ContractQuery()` message contracts plus marked general `@Contract(...)` declarations as a strict public contract surface with fail-fast dependency slicing. Legacy `Public*` markers are still recognized.
-
-Use `--output-module-specifiers js` for the default NodeNext-safe `.js` generated relative imports and exports, or `--output-module-specifiers extensionless` for legacy generated packages that still require extensionless module specifiers.
-
-Use `--dependency-strategy file` when a migration needs full dependency-file behavior for barrel-heavy or otherwise unsafe dependency modules.
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output-dir <path>` | Output directory for single-output mode; required unless `contracts.outputs[]` is configured |
-| `-c, --config <path>` | Config file path (default: `application.config.ts`) |
-| `--include <scope>` | Select generated contract categories: `all`, `messages`, or `contracts` |
-| `--messages <types>` | Recommended message subtype filter. Accepts comma-separated `event`, `command`, and `query` values |
-| `-m, --message-types <types>` | Legacy alias for `--messages`; kept for backwards compatibility |
-| `--dependency-strategy <strategy>` | Dependency strategy: `safe-symbols` slices safe dependency files and fails on unsafe ones (default); `file` copies retained dependency files whole |
-| `--output-module-specifiers <style>` | Generated relative module specifier style: `js` (default) or `extensionless` |
-| `--registry` | Generate the root `MessageRegistry` export |
-| `--generate-message-registry` | Legacy verbose alias for `--registry` |
-| `--dry-run` | Print the planned context extraction and file summary without writing files |
-| `--check` | Verify generated output freshness for CI and exit non-zero when changes are required |
+| `-o, --output-dir <path>` | Output directory, relative to the config file. Required unless `contracts.outputs` is set; rejected when it is. |
+| `-c, --config <path>` | Config file (default: `application.config.ts`). |
+| `--include <mode>` | `all` (default), `messages` (message contracts only) or `contracts` (general contracts only). |
+| `--messages <types>` | Comma-separated message kinds to keep: `event`, `command`, `query`. Does not affect general contracts. |
+| `-m, --message-types <types>` | Alias for `--messages`. |
+| `--dependency-strategy <strategy>` | `safe-symbols` or `file`. Overrides the config. |
+| `--output-module-specifiers <style>` | `js` or `extensionless`. Overrides the config, but not an output's own setting. |
+| `--registry` | Writes `<output>/index.ts` with namespace exports and a `MessageRegistry`. |
+| `--generate-message-registry` | Alias for `--registry`. |
+| `--dry-run` | Generates into a temporary directory, prints counts and the file list, and leaves the output untouched. |
+| `--check` | Generates into a temporary directory and compares it with the output directory. Fails on missing, extra or changed files. |
+| `-h, --help` | Prints help. |
 
-`--include contracts` generates only general contract declarations. `--include messages` generates only decorated messages. `--messages` filters only the message subtypes and does not exclude general contracts when `--include all` is used. Retained local imports in entry files can use default, namespace, aliased named, mixed default + named, and type-only default import forms; qualified namespace references are tracked in selected entry files. The generated `MessageRegistry` registers selected decorated messages only; general contracts are never registered.
+Unrecognized arguments are ignored. On any error the CLI prints `Error: <message>` and exits with code 1.
 
-### hexai CLI Plugin
-
-When loaded through `hexai.config.ts`, the same options are available through the `hexai` plugin command:
-
-```typescript
-// hexai.config.ts
-export default {
-    plugins: [
-        {
-            plugin: "@hexaijs/plugin-contracts-generator",
-            config: {
-                contexts: ["packages/*"],
-                dependencyStrategy: "safe-symbols",
-                contractMarkerNames: { contract: "PublicContract" },
-            },
-        },
-    ],
-};
-```
+Common workflows:
 
 ```bash
-pnpm hexai generate-contracts -o packages/contracts/src --registry
-pnpm hexai generate-contracts -o packages/contracts/src --include messages --messages event,command
-pnpm hexai generate-contracts -o packages/contracts/src --dependency-strategy file
+# Preview, then generate with a registry
+npx generate-contracts -o packages/contracts/src --dry-run
+npx generate-contracts -o packages/contracts/src --registry
+
+# Commands and events only
+npx generate-contracts -o packages/contracts/src --include messages --messages event,command
+
+# General contracts only
+npx generate-contracts -o packages/contracts/src --include contracts
+
+# Fail CI when the committed output is stale
+npx generate-contracts -o packages/contracts/src --registry --check
+
+# Generate every configured output
+npx generate-contracts -c application.config.ts
 ```
 
-For configured outputs, put `outputs[]` in the plugin config and run without `-o`:
+The generator never deletes files. After you remove or rename a contract, clear the output directory before you regenerate; `--check` reports leftover files as extra files. For the same reason, point each output at a directory that holds only generated files.
+
+### Run as a hexai CLI plugin
+
+With [`@hexaijs/cli`](../cli/README.md) installed, register the plugin in `hexai.config.ts`. The plugin `config` is the same object as the `contracts` section of `application.config.ts`.
 
 ```typescript
 // hexai.config.ts
@@ -490,18 +472,13 @@ export default {
         {
             plugin: "@hexaijs/plugin-contracts-generator",
             config: {
-                contexts: ["packages/*"],
+                contexts: ["packages/orders", "packages/inventory"],
                 outputs: [
                     {
                         name: "public",
                         path: "packages/contracts/src",
-                        select: { visibility: ["public"] },
-                    },
-                    {
-                        name: "internal",
-                        path: "packages/contracts-internal/src",
                         registry: true,
-                        select: { visibility: ["internal"] },
+                        select: { visibility: ["public"] },
                     },
                 ],
             },
@@ -512,228 +489,228 @@ export default {
 
 ```bash
 pnpm hexai generate-contracts
+pnpm hexai generate-contracts --check
 ```
 
-Passing `-o`/`--output-dir` together with configured `outputs[]` is rejected.
-
-Common workflows:
-
-```bash
-# Preview the plan, then generate contracts with a MessageRegistry
-npx generate-contracts -o packages/contracts/src --dry-run
-npx generate-contracts -o packages/contracts/src --registry
-
-# Generate messages only
-npx generate-contracts -o packages/contracts/src --include messages --messages event,command
-
-# Generate general contracts only
-npx generate-contracts -o packages/contracts/src --include contracts
-
-# Use full dependency-file copying for a migration
-npx generate-contracts -o packages/contracts/src --dependency-strategy file
-
-# CI freshness check
-npx generate-contracts -o packages/contracts/src --check
-
-# Generate configured outputs without --output-dir
-npx generate-contracts --config application.config.ts
-```
-
-### Import and Source Matching
-
-Decorator syntax is import/source-aware for canonical `Contract*` names. The matcher trusts decorators imported as named value imports from:
-
-- `@hexaijs/contracts`
-- `@hexaijs/contracts/decorators`
-- any configured `contracts.trustedDecoratorSources[]` entry
-
-Named import aliases are supported:
-
-```typescript
-import { ContractCommand as InternalCommand } from "@hexaijs/contracts/decorators";
-
-@InternalCommand({ visibility: "internal", tags: ["bus"] })
-export class RebuildSearchIndexCommand {}
-```
-
-Same-named decorators imported from unrelated packages are ignored. Type-only imports are not treated as decorator bindings. Comment markers need no import because they are matched from declaration-leading comments.
-
-Local barrels are intentionally conservative. If a local package re-exports the contract decorators, add that import source to `contracts.trustedDecoratorSources` or prefer importing directly from `@hexaijs/contracts/decorators`. The generator does not automatically trace arbitrary multi-hop re-export chains.
-
-Namespace decorator imports are not supported:
-
-```typescript
-import * as Contracts from "@hexaijs/contracts/decorators";
-
-@Contracts.ContractCommand() // Not matched as a contract decorator
-export class CreateOrderCommand {}
-```
-
-Namespace imports remain supported for ordinary type dependencies in generated contract files; only namespace decorator calls are unsupported.
-
-### Migration from Public* Markers
-
-`PublicEvent`, `PublicCommand`, `PublicQuery`, and `PublicContract` still work as deprecated aliases. They map to canonical `Contract*` metadata with `visibility: "public"`. The runtime decorators do not emit deprecation warnings.
-
-Recommended migration:
-
-1. Replace imports from `PublicEvent`, `PublicCommand`, and `PublicQuery` with `ContractEvent`, `ContractCommand`, and `ContractQuery`.
-2. Replace `@PublicContract()` class decorators with `@Contract({ kind: "contract" })` or a more specific custom kind such as `read-model`, `value-object`, `dto`, or `snapshot`.
-3. Replace `// @PublicContract()` comment markers with `// @Contract({ kind: "contract" })` or a specific `kind`.
-4. Add `visibility: "internal"` only to contracts that should be excluded from public outputs.
-5. Add `outputs[]` with `select.visibility` before publishing internal contracts from the same source tree.
-6. Keep the default strict entry and dependency slicing path for public/internal split generation.
+The command takes the same options as the standalone CLI, except `-c`, because the config comes from `hexai.config.ts`. Without `outputs`, pass `-o` as usual. Relative paths, in the plugin config and in `-o`, resolve against the current working directory, not the config file.
 
 ### Programmatic API
 
-For custom build scripts:
+`processContext()` runs the pipeline for one context. It neither writes a root `index.ts` nor re-export files; the CLI adds those.
 
 ```typescript
-import { processContext, ConsoleLogger } from "@hexaijs/plugin-contracts-generator";
+import { ConsoleLogger, processContext } from "@hexaijs/plugin-contracts-generator";
 
 const result = await processContext({
-    contextName: "order",
-    path: "packages/order",
-    sourceDir: "src",
+    contextName: "orders",
+    path: "packages/orders",
     outputDir: "packages/contracts/src",
-    pathAliasRewrites: new Map([["@myorg/", "@/"]]),
-    contractMarkerNames: { contract: "PublicContract" },
+    removeDecorators: true,
     messageTypes: ["event", "command"],
-    includePublicContracts: true,
-    dependencyStrategy: "safe-symbols",
-    outputModuleSpecifiers: "js",
     responseNamingConventions: [
-        { messageSuffix: "Command", responseSuffix: "CommandResult" },
+        { messageSuffix: "Query", responseSuffix: "QueryResult" },
     ],
     logger: new ConsoleLogger({ level: "info" }),
 });
 
 console.log(
-    `Extracted ${result.events.length} events, ` +
-        `${result.commands.length} commands, ` +
-        `${result.publicContracts.length} public contracts`
+    `${result.events.length} events, ${result.commands.length} commands, ` +
+        `${result.publicContracts.length} general contracts, ${result.copiedFiles.length} files`
 );
 ```
 
-For fine-grained control, use the `ContractsPipeline` class which provides step-by-step execution: `scan()`, `parse()`, `resolve()`, `copy()`, and `exportBarrel()`.
+| Option | Default | Description |
+|--------|---------|-------------|
+| `contextName` | required | Context name and output folder name. |
+| `path` | required | Context base directory, relative to the current working directory. |
+| `outputDir` | required | Output directory; files go to `<outputDir>/<contextName>/`. |
+| `sourceDir` | `"src"` | Relative to `path`. |
+| `tsconfigPath` | `"tsconfig.json"` | Relative to `path`. |
+| `removeDecorators` | `false` | Unlike the CLI, decorators stay unless you set this to `true`. |
+| `messageTypes` | all | Message kinds to keep. |
+| `includePublicContracts` | `true` | Whether to keep general contracts. |
+| `dependencyStrategy` | `"safe-symbols"` | See [Dependency strategies](#dependency-strategies). |
+| `outputModuleSpecifiers` | `"js"` | Relative specifier style. |
+| `pathAliasRewrites` | none | A `Map<string, string>` of prefix replacements. |
+| `responseNamingConventions`, `decoratorNames`, `contractMarkerNames`, `trustedDecoratorSources` | none | As in the config file. |
+| `fileSystem` | `nodeFileSystem` | `FileSystem` implementation, for tests. |
+| `logger` | `noopLogger` | `Logger` implementation. |
 
-### Output Structure
+For finer control, `ContractsPipeline.create(...)` exposes `execute()` and the individual steps `scan()`, `parse()`, `resolve()`, `copy()` and `exportBarrel()`. `RegistryGenerator` builds the root `index.ts` text from per-context results. The [architecture guide](./docs/ARCHITECTURE.md) describes each module.
 
-The generated contracts package follows this structure:
+## Generated output
 
+### Layout
+
+```text
+<output>/
+├── index.ts                  # only with --registry or registry: true
+├── orders/
+│   ├── index.ts              # export * from './<file>.js' for every copied file
+│   ├── domain/money.ts       # copied files keep their path relative to sourceDir
+│   └── messages/place-order.ts
+└── inventory/
+    └── ...
 ```
-contracts/
-├── src/
-│   ├── {context}/
-│   │   ├── events.ts
-│   │   ├── commands.ts
-│   │   ├── queries.ts
-│   │   ├── types.ts       # Dependent types + Response types
-│   │   └── index.ts       # Barrel exports
-│   └── index.ts           # Namespace exports + MessageRegistry for messages
-├── package.json
-└── tsconfig.json
-```
 
-The root `index.ts` uses namespace exports to prevent name collisions:
+- Each copied file holds the selected declarations, the local declarations they use, and the imports those need. Classes stay classes, with their methods.
+- Every declaration taken from an entry file is exported in the output, including local helpers that were not exported in the source.
+- Every context gets `<context>/index.ts`, even when it has no contracts (then the file is empty).
+- Most files pass through the TypeScript printer, so blank lines and line breaks can differ from the source. Expect formatting changes in diffs when you adopt the generator or change `removeDecorators`.
+- The generator writes only `.ts` files. It does not write `package.json` or `tsconfig.json`.
+
+### Root index and `MessageRegistry`
+
+With the registry on, `<output>/index.ts` exports every context that has messages as a namespace and registers each selected message class:
 
 ```typescript
-// contracts/src/order/index.ts
-export * from "./events.js";
-export * from "./commands.js";
-export * from "./types.js";
-
-// contracts/src/index.ts
 import { MessageRegistry } from "@hexaijs/plugin-contracts-generator/runtime";
-import * as order from "./order/index.js";
-import * as inventory from "./inventory/index.js";
+import * as orders from "./orders/index.js";
 
-export * as order from "./order/index.js";
-export * as inventory from "./inventory/index.js";
+export * as orders from "./orders/index.js";
 
 export const messageRegistry = new MessageRegistry()
-    .register(order.OrderPlaced)
-    .register(inventory.StockUpdated);
+    .register(orders.PlaceOrderCommand);
 ```
 
-Only decorated events, commands, and queries are registered. General contracts marked with `@Contract(...)` comments are exported through the generated package but are not registered.
+- Namespaces keep same-named classes from different contexts apart. Kebab-case context names become camelCase (`video-lesson` becomes `videoLesson`).
+- Contexts with only general contracts are not exported from the root index. Import them from `<context>/index.ts`, or write your own root index.
+- General contracts are never registered.
 
-Use namespace exports in your frontend:
+`MessageRegistry` (from `@hexaijs/plugin-contracts-generator/runtime`) maps a message type to its class:
 
-```typescript
-import { order, messageRegistry } from "@myorg/contracts";
+| Method | Description |
+|--------|-------------|
+| `register(messageClass)` | Registers a class under `getType()` and `getSchemaVersion()`; for a hexai `Message` these come from the static `type` (or the class name) and `schemaVersion`. Throws when the pair is already registered. Returns the registry. |
+| `dehydrate<T>(headers, body)` | Finds the class for `headers.type` and `headers.schemaVersion` and calls its static `from(body, headers)`. Throws when the type is not registered. |
+| `has(type, version?)` | Whether a type is registered. |
+| `size()` | Number of registered classes. |
 
-// Access types via namespace
-const event = new order.OrderPlaced({ orderId: "123", customerId: "456" });
+### What the generated package needs
 
-// Deserialize messages from the backend
-const message = messageRegistry.dehydrate(header, body);
-```
+The generated package is an ordinary TypeScript package that you own. Give it:
 
-## Error Handling
+- a `package.json` whose dependencies cover what the copied files import, typically `@hexaijs/core` (for `DomainEvent`) and `@hexaijs/contracts` (for `Command` and `Query`);
+- `@hexaijs/plugin-contracts-generator` as a dependency when the registry is on, because the root index imports `@hexaijs/plugin-contracts-generator/runtime`;
+- the original packages behind any `pathAliasRewrites` re-exports;
+- a `tsconfig.json` that accepts `.js` relative specifiers (for example `"moduleResolution": "NodeNext"`), unless you generate with `extensionless`;
+- `experimentalDecorators` if you keep decorators (`removeDecorators: false`).
 
-The generator provides specific error types for different failure modes:
+## Dependency strategies
+
+When an entry file imports a local file, the generator must decide how much of that file to copy.
+
+**`safe-symbols` (default)** copies only the top-level declarations that the selected contracts use, following named imports from file to file. It includes value declarations referenced through `typeof`. It refuses to slice a file whose top level might do something when loaded, and fails with `UnsafeDependencySliceError` (file path and reason) instead of copying the file whole. It rejects:
+
+- side-effect imports (`import "./setup"`) and dynamic imports;
+- `import("./x").T` type references to local files;
+- `export ... from` re-exports, `export { ... }` lists and `export default` or `export =` assignments;
+- class or member decorators, static blocks, computed member names, static member initializers (such as `static readonly type = "..."`) and `extends` clauses other than a plain class name;
+- enum members with initializers;
+- top-level variables initialized with calls, `new`, tagged templates, `await`, assignments and similar expressions, and any other top-level statement;
+- duplicate top-level names, and default or namespace imports that a used declaration needs.
+
+Dependency files outside the context's source directory are always copied whole, so two contexts that share a file never overwrite each other's slices. Boundary checks still apply to them.
+
+**`file`** copies every used dependency file whole and follows its imports, including barrels (`export * from "./module"`). Use it when your dependency files rely on shapes that `safe-symbols` rejects.
+
+Both strategies resolve relative imports written for NodeNext (`./shared.js`) back to the TypeScript source (`shared.ts`). Neither runs the TypeScript type checker; they work on the syntax tree. Keep shared types side-effect free and out of barrels to stay on the default path.
+
+## Errors
+
+Every error class of the generator extends `MessageParserError`, so one `instanceof` check catches them all.
 
 ```typescript
 import {
-    processContext,
-    MessageParserError,
-    FileReadError,
+    BoundaryViolationError,
     ConfigLoadError,
+    FileReadError,
+    MessageParserError,
+    processContext,
+    UnsafeDependencySliceError,
 } from "@hexaijs/plugin-contracts-generator";
 
 try {
-    await processContext(options);
+    await processContext({
+        contextName: "orders",
+        path: "packages/orders",
+        outputDir: "packages/contracts/src",
+    });
 } catch (error) {
-    if (error instanceof FileReadError) {
-        console.error(`Failed to read: ${error.path}`, error.cause);
+    if (error instanceof UnsafeDependencySliceError) {
+        console.error(`Cannot slice ${error.filePath}: ${error.reason}`);
+    } else if (error instanceof BoundaryViolationError) {
+        console.error(error.message);
+    } else if (error instanceof FileReadError) {
+        console.error(`Cannot read ${error.path}`, error.cause);
     } else if (error instanceof ConfigLoadError) {
-        console.error(`Config error: ${error.message}`);
+        console.error(`Invalid config: ${error.message}`);
     } else if (error instanceof MessageParserError) {
-        console.error(`Parser error: ${error.message}`);
+        console.error(`Generator error: ${error.message}`);
     }
 }
 ```
 
-**Error hierarchy:**
+| Error | Thrown when |
+|-------|-------------|
+| `MessageParserError` | Base class of all errors below. |
+| `ConfigurationError` | An option is invalid, for example a removed `entryStrategy` or an unknown `dependencyStrategy` passed to the API. |
+| `ConfigLoadError` (extends `ConfigurationError`) | The config file or plugin config is missing a required field or holds an invalid value. |
+| `BoundaryViolationError` | An output with a `select` would copy a marked declaration it does not select. |
+| `UnsafeDependencySliceError` | `safe-symbols` cannot slice a dependency file. Has `filePath` and `reason`. |
+| `FileReadError`, `FileWriteError` (extend `FileSystemError`) | A source file cannot be read or an output file cannot be written. Have `path` and `cause`. |
+| `FileNotFoundError`, `ParseError`, `JsonParseError`, `ResolutionError`, `ModuleResolutionError` | Exported for callers, but the current pipeline does not throw them. |
 
-- `MessageParserError` (base)
-  - `BoundaryViolationError`
-  - `UnsafeDependencySliceError`
-  - `ConfigurationError` → `ConfigLoadError`
-  - `FileSystemError` → `FileNotFoundError`, `FileReadError`, `FileWriteError`
-  - `ParseError` → `JsonParseError`
-  - `ResolutionError` → `ModuleResolutionError`
+Some failures are a plain `Error`: invalid CLI arguments (for example an unknown `--include` value), a failed `--check`, an unparsable `tsconfig.json`, and a `processContext()` call without `contextName` or `path`.
 
-## API Highlights
+## API reference
+
+Exports of `@hexaijs/plugin-contracts-generator`:
 
 | Export | Description |
 |--------|-------------|
-| `processContext(options)` | Main API for extracting and copying contracts |
-| `ContractsPipeline` | Fine-grained control over extraction process |
-| `ContractEvent` | Decorator to mark event messages for extraction and registry generation |
-| `ContractCommand` | Decorator to mark command messages for extraction and registry generation |
-| `ContractQuery` | Decorator to mark query messages for extraction and registry generation |
-| `Contract` | Generic decorator for message and non-message contract roles through `kind` |
-| `PublicEvent`, `PublicCommand`, `PublicQuery`, `PublicContract` | Deprecated compatibility aliases for the canonical `Contract*` API; no runtime warnings |
-| `ContractDeclaration` | Canonical domain model for selected message and general contract declarations |
-| `PublicContract` type | Compatibility domain model for marked `class`, `interface`, `type`, and `enum` declarations |
-| `ContractOutputConfig` | `outputs[]` configuration shape for output-level path, selector, registry, and module specifier settings |
-| `ContractMarkerNames` | Configuration shape for customizing legacy public contract comment marker names |
-| `DependencyStrategy` | `safe-symbols` for default fail-fast dependency symbol slicing, or `file` for full dependency-file copying |
-| `OutputModuleSpecifiers` | `"js"` for default NodeNext-safe `.js` generated specifiers, or `"extensionless"` for legacy generated specifiers |
-| `MessageRegistry` | Runtime registry for decorated message deserialization |
-| `ConsoleLogger` | Configurable logger for build output |
-| Error types | `ConfigLoadError`, `FileReadError`, `MessageParserError`, etc. |
+| `processContext(options)` | Runs the pipeline for one context. Returns `ProcessContextResult` (`events`, `commands`, `queries`, `publicContracts`, `copiedFiles`). |
+| `ContractsPipeline` | The pipeline with step-by-step methods. |
+| `Scanner`, `Parser`, `FileGraphResolver`, `FileCopier` | The pipeline stages. |
+| `ConfigLoader`, `resolveContextEntries`, `ContextConfig` | Config loading and context resolution. |
+| `RegistryGenerator`, `ReexportGenerator` | Root index and re-export file generation. |
+| `cliPlugin` | The plugin definition loaded by `@hexaijs/cli`. |
+| `ConsoleLogger`, `noopLogger`, `nodeFileSystem` | Default logger and file system implementations. |
+| `ContractEvent`, `ContractCommand`, `ContractQuery`, `Contract` and their option types | Re-exported from `@hexaijs/contracts/decorators`. Import them from there in your source; see [Where decorators may come from](#where-decorators-may-come-from). |
+| `PublicEvent`, `PublicCommand`, `PublicQuery`, `PublicContract` | Deprecated aliases, re-exported from `@hexaijs/contracts/decorators`. |
+| Error classes | See [Errors](#errors). |
+| Domain types and type guards | `ContractDeclaration`, `DomainEvent`, `Command`, `Query`, `PublicContract` (type), `TypeRef`, `isDomainEvent()` and others. See the [domain model guide](./docs/DOMAIN-MODEL.md). |
+| Config types | `ContractOutputConfig`, `ContractOutputSelect`, `DependencyStrategy`, `OutputModuleSpecifiers`, `DecoratorNames`, `ContractMarkerNames`, `TrustedDecoratorSources`, `ContractsConfig`. |
 
-## Known Limitations
+Exports of `@hexaijs/plugin-contracts-generator/runtime`: `MessageRegistry` and the types `MessageClass` and `MessageHeaders`.
 
-- `dependencyStrategy: "safe-symbols"` is intentionally strict and supports only statically safe dependency modules. Files with side-effect imports, re-exports, dynamic imports, decorators, static blocks, unsafe top-level initializers, or unsupported retained import shapes fail with `UnsafeDependencySliceError`.
-- Generation failures are not fully atomic yet and may leave partial selected output after `BoundaryViolationError`.
-- Decorator namespace imports such as `Contracts.ContractCommand` are not matched.
-- Automatic multi-hop tracing through arbitrary local re-export chains is intentionally not automatic. Use direct named imports from trusted contract packages or a trusted integration configuration.
+## Migrating from `Public*` markers
 
-## See Also
+`PublicEvent`, `PublicCommand`, `PublicQuery` and `PublicContract` are deprecated aliases since `@hexaijs/contracts` 0.3.0. They still work, print no warnings and produce the same metadata as `ContractEvent`, `ContractCommand`, `ContractQuery` and `Contract`, including the `"public"` default visibility. Unlike the current names, they are matched by name alone, whatever they are imported from, and `decoratorNames` and `contractMarkerNames` can rename them.
 
-- [@hexaijs/core](../core/README.md) - DomainEvent and Message base classes used by contracts
-- [@hexaijs/plugin-application-builder](../plugin-application-builder/README.md) - Companion plugin for handler registration
+1. Replace `PublicEvent`, `PublicCommand` and `PublicQuery` with `ContractEvent`, `ContractCommand` and `ContractQuery`, imported from `@hexaijs/contracts/decorators`.
+2. Replace `@PublicContract()` on classes with `@Contract()` or a specific kind, such as `@Contract({ kind: "read-model" })`.
+3. Replace `// @PublicContract()` comment markers with `// @Contract()` or a specific kind.
+4. Add `visibility: "internal"` to contracts that must stay out of public packages.
+5. Add `outputs[]` with `select.visibility` before you generate internal contracts from the same source tree.
+
+Other breaking changes:
+
+- 0.7.0 removed `entryStrategy` (config, CLI flag and API option). Entry files always use symbol extraction. The default `dependencyStrategy` became `"safe-symbols"`; set `"file"` to keep the old whole-file copying.
+- 0.5.1 made `.js` relative specifiers the default. Set `outputModuleSpecifiers: "extensionless"` to keep extensionless output.
+
+## Known limitations
+
+- `safe-symbols` accepts only statically safe dependency files; see [Dependency strategies](#dependency-strategies).
+- Generation is not atomic. A failure such as `BoundaryViolationError` can leave a partly written output.
+- Namespace decorator imports such as `@Contracts.ContractCommand()` are not recognized.
+- Re-export chains are not followed when matching decorators; add local barrels to `trustedDecoratorSources`.
+- Marker options must be literals.
+
+## See also
+
+- [`@hexaijs/contracts`](../contracts/README.md): the marker decorators and the `Command` and `Query` base classes.
+- [`@hexaijs/core`](../core/README.md): `DomainEvent` and `Message`.
+- [`@hexaijs/cli`](../cli/README.md): the `hexai` command that runs this plugin.
+- [`@hexaijs/plugin-application-builder`](../plugin-application-builder/README.md): the companion plugin that generates `ApplicationBuilder` code from decorated handlers.
+- [Architecture guide](./docs/ARCHITECTURE.md) and [domain model guide](./docs/DOMAIN-MODEL.md): for contributors.

@@ -1,58 +1,77 @@
 # @hexaijs/sqlite
 
-> SQLite transaction management for testing and lightweight use cases
+> SQLite unit of work and test helpers for hexai
 
-## Overview
+`@hexaijs/sqlite` implements the `UnitOfWork` contract of
+[`@hexaijs/core`](../core/README.md) on SQLite with
+[`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3). A unit of work
+runs your database writes in one transaction per scope and commits or rolls
+back when the scope ends. The package also ships test helpers: an in-memory
+connection factory and a generic repository for test fixtures. Use it for fast,
+isolated integration tests, or for small applications that need only one
+database connection.
 
-`@hexaijs/sqlite` provides an SQLite implementation of the `UnitOfWork` interface from `@hexaijs/core`. It enables transaction management against SQLite databases, making it particularly useful for fast, isolated integration tests.
+`SqliteUnitOfWork` is deliberately simpler than `PostgresUnitOfWork` from
+[`@hexaijs/postgres`](../postgres/README.md): it uses no `AsyncLocalStorage`
+and has no propagation modes. See
+[Differences from @hexaijs/postgres](#differences-from-hexaijspostgres).
 
-The package centers around `SqliteUnitOfWork`, which wraps operations in SQLite transactions. Unlike `PostgresUnitOfWork`, it uses a simpler architecture without `AsyncLocalStorage` or propagation modes—a deliberate trade-off that favors simplicity for scenarios where a single database connection is sufficient.
-
-The test utilities export makes it easy to spin up in-memory databases and use generic repositories for test fixtures. In-memory SQLite databases are ephemeral: they're created instantly, run entirely in RAM, and disappear when the connection closes. This makes them ideal for integration tests that need database behavior without the overhead of a real PostgreSQL server.
-
-## When to Use SQLite vs PostgreSQL
+## When to use SQLite vs PostgreSQL
 
 | Scenario | Recommendation |
 |----------|----------------|
-| Unit/integration tests | **SQLite** - Fast, no external dependencies |
-| Production database | **PostgreSQL** - Full ACID, scalability, advanced features |
-| CI/CD pipelines | **SQLite** - No database setup required |
-| Local development | Either - SQLite for speed, PostgreSQL for parity with production |
+| Unit and integration tests | **SQLite**: fast, no database server needed |
+| Production database | **PostgreSQL**: concurrent writers, plus the event store and projections of `@hexaijs/postgres` |
+| CI pipelines | **SQLite**: no database setup required |
+| Local development | Either: SQLite for speed, PostgreSQL for parity with production |
 
 ## Installation
 
 ```bash
-npm install @hexaijs/sqlite
+npm install @hexaijs/sqlite @hexaijs/core better-sqlite3
 ```
 
-**Peer dependencies:**
+| Peer dependency | Used for |
+|-----------------|----------|
+| `@hexaijs/core` | Core contracts such as `UnitOfWork`, `Repository` and `TransactionHooks` |
+| `better-sqlite3` | The SQLite driver |
 
-```bash
-npm install @hexaijs/core better-sqlite3
-```
+The supported version ranges are the `peerDependencies` in this package's
+`package.json`.
 
-## Core Concepts
-
-### SqliteUnitOfWork
-
-The `SqliteUnitOfWork` implements `UnitOfWork<Database>` from `@hexaijs/core`. It manages transaction lifecycle for a given SQLite database connection.
+## Quick start
 
 ```typescript
 import Database from "better-sqlite3";
 import { SqliteUnitOfWork } from "@hexaijs/sqlite";
 
-// Create an in-memory database
 const db = new Database(":memory:");
+db.exec("CREATE TABLE orders (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
 
-// Create unit of work
 const unitOfWork = new SqliteUnitOfWork(db);
+
+// Commits when the callback resolves, rolls back when it rejects.
+await unitOfWork.scope(async () => {
+    unitOfWork
+        .getClient()
+        .prepare("INSERT INTO orders (id, status) VALUES (?, ?)")
+        .run("order-1", "pending");
+});
 ```
 
-Unlike PostgreSQL's unit of work which accepts a client factory, `SqliteUnitOfWork` takes a pre-connected `Database` instance. This simpler model works well for SQLite's single-writer architecture.
+## Concepts
 
-### Transaction Execution
+### Unit of work, scope and transaction
 
-Use `scope()` to define a transaction boundary:
+`SqliteUnitOfWork` implements `UnitOfWork<Database>` from `@hexaijs/core`. It
+takes a connected `better-sqlite3` `Database` and manages transactions on it.
+Unlike the Postgres unit of work, which takes a client factory, it works on that
+one connection, which suits SQLite's single-writer model.
+
+A scope is one call of `unitOfWork.scope(fn)`. The outermost scope sends
+`BEGIN TRANSACTION` when it opens, then `COMMIT` when `fn` resolves or
+`ROLLBACK` when it rejects. Inside the scope, `getClient()` returns the
+`Database`:
 
 ```typescript
 const result = await unitOfWork.scope(async () => {
@@ -61,20 +80,11 @@ const result = await unitOfWork.scope(async () => {
     db.prepare("INSERT INTO order_items (order_id, product_id) VALUES (?, ?)").run(orderId, productId);
     return { orderId };
 });
-// Transaction commits if successful
+// The transaction committed, and result is { orderId }
 ```
 
-`wrap()` is also available but deprecated. In SQLite, `scope()` delegates to `wrap()` internally — both behave identically.
-
-```typescript
-/** @deprecated Use scope() instead. */
-const result = await unitOfWork.wrap(async (db) => {
-    db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run(orderId, "pending");
-    return { orderId };
-});
-```
-
-If an error is thrown, the transaction rolls back:
+If the callback throws, the transaction rolls back and the scope rejects with
+that error:
 
 ```typescript
 try {
@@ -84,63 +94,32 @@ try {
         throw new Error("Something went wrong");
     });
 } catch (error) {
-    // Transaction rolled back - no order was inserted
+    // The transaction rolled back: no order was inserted
 }
 ```
 
-### Accessing the Client
+Your code decides where scopes begin and end; hexai's application layer does
+not open one around a command for you. Open the scope where the command's work
+runs, usually inside the command handler, as
+[Wiring the Unit of Work and Event Publishing](../application/README.md#wiring-the-unit-of-work-and-event-publishing)
+shows. If you open it outside the handler instead, around
+`application.executeCommand()` or in a command interceptor, that call resolves
+to an `ErrorResult` instead of rejecting when the handler fails. Turn the error
+result into a rejection inside the scope, or the transaction commits the failed
+command's writes; `SqliteUnitOfWork` has no `preventCommit()`.
 
-Within a transaction, access the database through `getClient()`:
+The transaction belongs to the `Database` object, not to the async call chain.
+Every `SqliteUnitOfWork` created for the same `Database`, and every scope
+running on it at the same time, share one transaction, so a failure in one of
+them rolls back the work of all. Run scopes on one `Database` one after
+another.
 
-```typescript
-// Inside a command handler
-const db = ctx.getUnitOfWork().getClient();
-db.prepare("UPDATE orders SET status = ? WHERE id = ?").run("confirmed", orderId);
-```
+`scope()` takes no options. Called through the core `UnitOfWork` type, it
+accepts options such as `propagation` but ignores them.
 
-Note: `getClient()` throws an error if called outside of a `scope()` or `wrap()` call.
+### Nested scopes
 
-### Transaction Lifecycle Hooks
-
-Register callbacks that execute at specific points in the transaction lifecycle:
-
-```typescript
-await unitOfWork.scope(async () => {
-    unitOfWork.beforeCommit(() => {
-        // Validate before committing
-    });
-
-    unitOfWork.beforeCommit(() => {
-        // Flush buffered work after validation and before COMMIT
-    }, { phase: "drain" });
-
-    unitOfWork.afterCommit(() => {
-        // Notify after successful commit
-    });
-
-    unitOfWork.afterRollback(() => {
-        // Clean up on failure
-    });
-
-    const db = unitOfWork.getClient();
-    db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run(orderId, "pending");
-});
-```
-
-Hooks follow the same semantics as `@hexaijs/postgres`:
-
-| Hook | When | On failure |
-|------|------|------------|
-| `beforeCommit` | Before COMMIT | Transaction rolls back instead |
-| `beforeCommit(..., { phase: "drain" })` | After main `beforeCommit` hooks and before COMMIT | Transaction rolls back instead |
-| `afterCommit` | After COMMIT | Best-effort (errors → `AggregateError`) |
-| `afterRollback` | After ROLLBACK | Best-effort (errors → `AggregateError`) |
-
-Hooks are scope-local and can only be registered inside an active `scope()`.
-
-### Nested Transactions
-
-Nested `scope()` calls participate in the same transaction:
+A `scope()` inside another scope joins the same transaction:
 
 ```typescript
 await unitOfWork.scope(async () => {
@@ -156,7 +135,8 @@ await unitOfWork.scope(async () => {
 // Single COMMIT at the end
 ```
 
-If any nested call throws, the entire transaction rolls back:
+If any nested scope throws, the entire transaction rolls back, even when an
+outer scope catches the error:
 
 ```typescript
 try {
@@ -175,13 +155,97 @@ try {
 }
 ```
 
-## Usage
+When the outer scope catches the nested error and returns normally, the
+transaction still rolls back, and the outer scope resolves with its callback's
+result. Check your own results in that case; nothing signals the rollback.
 
-### Test Setup
+### Transaction lifecycle hooks
 
-Use the test utilities for fast, isolated integration tests:
+Register callbacks that run at fixed points of the transaction:
 
 ```typescript
+await unitOfWork.scope(async () => {
+    unitOfWork.beforeCommit(() => {
+        // Validate before committing
+    });
+
+    unitOfWork.beforeCommit(() => {
+        // Flush buffered work after validation and before COMMIT
+    }, { phase: "drain" });
+
+    unitOfWork.afterCommit(() => {
+        // Notify after a successful commit
+    });
+
+    unitOfWork.afterRollback(() => {
+        // Clean up on failure
+    });
+
+    const db = unitOfWork.getClient();
+    db.prepare("INSERT INTO orders (id, status) VALUES (?, ?)").run(orderId, "pending");
+});
+```
+
+Hooks run through `TransactionHooks` from `@hexaijs/core`, as in
+`@hexaijs/postgres`, so their order and failure handling match:
+
+| Hook | When | On failure |
+|------|------|------------|
+| `beforeCommit` | Before `COMMIT` | The transaction rolls back and the scope rejects with the hook's error |
+| `beforeCommit(..., { phase: "drain" })` | After the main `beforeCommit` hooks, before `COMMIT` | Same as `beforeCommit` |
+| `afterCommit` | After `COMMIT` | Best-effort: all hooks run, then the scope rejects with an `AggregateError` |
+| `afterRollback` | After `ROLLBACK` | Best-effort: all hooks run, then the scope rejects with an `AggregateError` whose `cause` is the error that caused the rollback |
+
+Hooks are scope-local: register them inside an active `scope()`; they are
+cleared when the transaction ends. Registering one outside a scope throws. A
+main `beforeCommit` hook may register a drain hook.
+
+Hooks run after the scope's callback has ended, so `getClient()` throws inside
+them. In `beforeCommit` hooks the transaction is still open: query through the
+`Database` you passed to the constructor. A `scope()` opened from a
+`beforeCommit` hook rejects (see the table below).
+
+### Differences from @hexaijs/postgres
+
+| Behavior | `@hexaijs/sqlite` | `@hexaijs/postgres` |
+|----------|-------------------|---------------------|
+| Transaction start | `BEGIN` when the outermost scope opens | `BEGIN` at the first query |
+| A joining scope fails and the outer scope catches the error | Rolls back; the outer scope resolves with its result | Rolls back; the outer scope rejects with `TransactionAbortedError` unless `preventCommit()` was called |
+| Database access inside hooks | `getClient()` throws; use the `Database` directly | `db` works in every hook |
+| `scope()` opened from a `beforeCommit` hook | Rejects with SQLite's "cannot start a transaction within a transaction", because the transaction is still open; if the hook lets that error out, the transaction rolls back like any `beforeCommit` failure | Joins the transaction |
+| Scopes running at the same time | Share one transaction per `Database` | A scope joins only the transaction of the scope it runs inside, tracked with `AsyncLocalStorage` |
+| Propagation, isolation levels, `onEveryCommit()`, `CommitControl`, `TransactionResources` | Not available | Available |
+
+## Usage
+
+### Accessing the database in your code
+
+Code that runs inside a scope, such as a repository called from a command
+handler, gets the `Database` through `getClient()`:
+
+```typescript
+import { SqliteUnitOfWork } from "@hexaijs/sqlite";
+
+class OrderRepository {
+    constructor(private readonly unitOfWork: SqliteUnitOfWork) {}
+
+    async updateStatus(id: string, status: string): Promise<void> {
+        this.unitOfWork
+            .getClient()
+            .prepare("UPDATE orders SET status = ? WHERE id = ?")
+            .run(status, id);
+    }
+}
+```
+
+`getClient()` throws `No transaction is active` when no scope is running.
+
+### Test setup
+
+Use the test helpers for fast, isolated integration tests:
+
+```typescript
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Database } from "better-sqlite3";
 import { SqliteUnitOfWork } from "@hexaijs/sqlite";
 import { getSqliteConnection } from "@hexaijs/sqlite/test";
@@ -191,10 +255,10 @@ describe("OrderRepository", () => {
     let unitOfWork: SqliteUnitOfWork;
 
     beforeEach(() => {
-        // Create fresh in-memory database
+        // Create a fresh in-memory database
         db = getSqliteConnection();
 
-        // Create schema
+        // Create the schema
         db.exec(`
             CREATE TABLE orders (
                 id TEXT PRIMARY KEY,
@@ -221,15 +285,22 @@ describe("OrderRepository", () => {
 });
 ```
 
+`getSqliteConnection()` returns a new in-memory database. In-memory SQLite
+databases live in RAM and disappear when the connection closes, so each test
+starts from an empty database.
+
 ### SqliteRepositoryForTest
 
-The `SqliteRepositoryForTest` provides a generic repository implementation for test fixtures. It implements the `Repository<E>` interface from `@hexaijs/core`.
+`SqliteRepositoryForTest` is a generic repository for test fixtures. It
+implements the `Repository<E>` interface from `@hexaijs/core` and stores each
+entity as JSON in a table named after its `namespace`.
 
 ```typescript
 import { SqliteRepositoryForTest, getSqliteConnection } from "@hexaijs/sqlite/test";
-import { Identifiable, IdOf } from "@hexaijs/core";
+import { Id, Identifiable } from "@hexaijs/core";
 
-// Define your entity
+class OrderId extends Id<string> {}
+
 class Order implements Identifiable<OrderId> {
     constructor(
         private id: OrderId,
@@ -245,13 +316,12 @@ class Order implements Identifiable<OrderId> {
     }
 }
 
-// Define memento for serialization
+// The serialized form of an order
 interface OrderMemento {
     id: string;
     status: string;
 }
 
-// Create repository
 const db = getSqliteConnection();
 const orderRepository = new SqliteRepositoryForTest<Order, OrderMemento>(db, {
     namespace: "orders",
@@ -259,18 +329,20 @@ const orderRepository = new SqliteRepositoryForTest<Order, OrderMemento>(db, {
     dehydrate: (e) => ({ id: e.getId().getValue(), status: e.getStatus() }),
 });
 
-// Use repository
 await orderRepository.add(new Order(new OrderId("order-1"), "pending"));
 const order = await orderRepository.get(new OrderId("order-1"));
 await orderRepository.update(order);
 const count = await orderRepository.count();
 ```
 
-The repository automatically creates its table on first use. Each repository uses a separate table identified by its namespace.
+The repository creates its table on first use. `get()` and `update()` throw
+`ObjectNotFoundError` for an unknown id, and `add()` throws
+`DuplicateObjectError` for an id that already exists.
 
-### File-Based Database
+### File-based database
 
-For scenarios requiring persistence across test runs or debugging:
+To keep data across test runs, or to inspect it while debugging, pass a file
+name:
 
 ```typescript
 import { getSqliteConnection } from "@hexaijs/sqlite/test";
@@ -279,21 +351,26 @@ import { getSqliteConnection } from "@hexaijs/sqlite/test";
 const db = getSqliteConnection("./test-database.sqlite");
 ```
 
-## API Highlights
+### Deprecated: wrap()
+
+`wrap(fn)` is deprecated since 0.3.0; use `scope()`. It behaves the same as
+`scope()` (in fact `scope()` calls it) and also passes the `Database` to `fn`.
+
+## API reference
 
 | Export | Description |
 |--------|-------------|
-| `SqliteUnitOfWork` | Transaction management implementing `UnitOfWork<Database>` |
+| `SqliteUnitOfWork` | Transaction management implementing `UnitOfWork<Database>`, with lifecycle hooks |
 
 **From `@hexaijs/sqlite/test`:**
 
 | Export | Description |
 |--------|-------------|
-| `getSqliteConnection` | Creates SQLite connection (in-memory by default) |
+| `getSqliteConnection` | Creates a SQLite connection (in-memory by default) |
 | `SqliteRepositoryForTest` | Generic repository for test fixtures |
 
 ## See Also
 
 - [@hexaijs/core](../core/README.md) - Core interfaces (`UnitOfWork`, `Repository`)
-- [@hexaijs/postgres](../postgres/README.md) - PostgreSQL implementation for production
-- [@hexaijs/application](../application/README.md) - Application context that provides `getUnitOfWork()`
+- [@hexaijs/postgres](../postgres/README.md) - PostgreSQL unit of work, event store and projections for production
+- [@hexaijs/application](../application/README.md) - Applications, handlers and the application context through which your handlers reach a unit of work

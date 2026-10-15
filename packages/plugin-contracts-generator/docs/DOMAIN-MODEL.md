@@ -1,633 +1,529 @@
 # Domain Model
 
-Defines the core domain model for the Contracts Generator.
+This guide describes the data the contracts generator builds while it reads source code. It is for contributors. To use the generator, read the [README](../README.md); for the modules that build and consume this data, read the [architecture guide](./ARCHITECTURE.md).
 
-## Core Concepts
+All types live in `src/domain/types.ts`. The package root exports most of them. `ContractMarkerMetadata`, `ContractMarkerSyntax`, `ContractDeclarationBase`, the `Contract*Declaration` variants, `GeneralContractDeclaration`, `SourceLocation` and `ResponseNamingConvention` stay internal. The kind and visibility types (`ContractKind`, `ContractVisibility` and others) are exported from the root too, but as re-exports of the identical types in `@hexaijs/contracts/decorators`.
 
-### 1. ContractDeclaration (Canonical Contract Target)
+## Contents
 
-`ContractDeclaration` is the canonical model for everything the generator can select and emit. It records the contract role (`kind`), public/internal boundary (`visibility`), auxiliary labels (`tags`), and marker metadata for both message and general contracts.
+1. [Overview](#1-overview)
+2. [Contract markers](#2-contract-markers)
+3. [Contract declarations](#3-contract-declarations)
+4. [Messages](#4-messages)
+5. [General contracts](#5-general-contracts)
+6. [Type model](#6-type-model)
+7. [Configuration values](#7-configuration-values)
+8. [Results](#8-results)
+9. [Exported types the pipeline does not produce](#9-exported-types-the-pipeline-does-not-produce)
+10. [Worked example](#10-worked-example)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   ContractDeclaration                       │
-├─────────────────────────────────────────────────────────────┤
-│ - name: string                                              │
-│ - contractType: 'message' | 'contract'                      │
-│ - kind: ContractKind                                        │
-│ - visibility: 'public' | 'internal'                         │
-│ - tags: string[]                                            │
-│ - marker: ContractMarkerMetadata                            │
-│ - sourceFile: SourceFile                                    │
-│ - exported: boolean                                         │
-└─────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-┌─────────────────────────────┐  ┌─────────────────────────────┐
-│ ContractMessageDeclaration  │  │ GeneralContractDeclaration  │
-├─────────────────────────────┤  ├─────────────────────────────┤
-│ kind: 'event' | 'command'   │  │ kind: 'contract' | custom   │
-│     | 'query'               │  │ declarationKind: class      │
-│ message payload/response    │  │     | interface | type      │
-│ metadata                    │  │     | enum                  │
-└─────────────────────────────┘  └─────────────────────────────┘
+## 1. Overview
+
+`Parser.parse()` turns one entry file into a `ParseResult`:
+
+```text
+entry file ──Parser──> ParseResult
+                       ├── events, commands, queries   message views (DomainEvent, Command, Query)
+                       ├── publicContracts             general contract view (PublicContract)
+                       ├── contractDeclarations        canonical view (ContractDeclaration)
+                       └── typeDefinitions             every type alias and interface in the file
 ```
 
-`visibility` is the primary boundary for output selection. `tags` are auxiliary filters only. `kind` is the generic role/discriminator; the built-in message kinds are `event`, `command`, and `query`, while custom kinds such as `read-model`, `value-object`, `dto`, or `snapshot` are modeled as general contracts.
+The model is metadata. The pipeline uses it to select contracts, find response types, decide which declarations need an added `export`, build the registry and report counts. The copied code itself comes from the source text: `FileCopier` re-reads each file's syntax tree and emits the selected declarations (see [File copier](./ARCHITECTURE.md#9-file-copier)).
 
-`DomainEvent`, `Command`, `Query`, `Message`, and `PublicContract` remain compatibility views for existing APIs and tests.
+`ContractsPipeline` consumes the message views, `publicContracts` and `typeDefinitions`. It does not read `contractDeclarations` yet.
 
-### 2. Message (Message Contract Target)
+## 2. Contract markers
 
-Message is a data structure used for inter-system communication. Messages are marked by class decorators (`@ContractEvent()`, `@ContractCommand()`, `@ContractQuery()`), generic `@Contract({ kind: "event" | "command" | "query" })`, or deprecated `Public*` aliases. They are extracted as classes and registered in `MessageRegistry` when they are selected and registry generation is enabled.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      MessageBase                            │
-├─────────────────────────────────────────────────────────────┤
-│ - name: string              // Class name                   │
-│ - sourceFile: SourceFile    // Original file info           │
-│ - fields: Field[]           // Class fields                 │
-│ - baseClass?: string        // Inherited class name         │
-│ - sourceText: string        // Original source text         │
-│ - imports: ClassImport[]    // Imports used by the class    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   DomainEvent   │  │     Command     │  │      Query      │
-├─────────────────┤  ├─────────────────┤  ├─────────────────┤
-│ messageType:    │  │ messageType:    │  │ messageType:    │
-│   'event'       │  │   'command'     │  │   'query'       │
-│ version?: number│  │ resultType?:    │  │ resultType?:    │
-│ context?: string│  │   TypeRef       │  │   TypeRef       │
-│ payloadType?:   │  │ context?: string│  │ context?: string│
-│   TypeRef       │  │ payloadType?:   │  │ payloadType?:   │
-│                 │  │   TypeRef       │  │   TypeRef       │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-
-// Type guards
-isDomainEvent(msg: Message): msg is DomainEvent  // messageType === 'event'
-isCommand(msg: Message): msg is Command          // messageType === 'command'
-isQuery(msg: Message): msg is Query              // messageType === 'query'
-```
-
-### 3. PublicContract (General Contract Target Compatibility View)
-
-PublicContract is the compatibility view for a general TypeScript declaration explicitly exposed to the generated contracts package. Classes can use the no-op `@Contract({ kind: "contract" })` decorator or deprecated `@PublicContract()` alias. Interfaces, type aliases, and enums must use a leading TypeScript comment marker because TypeScript decorators cannot be applied to those declarations.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    PublicContract                           │
-├─────────────────────────────────────────────────────────────┤
-│ - name: string              // Declaration name             │
-│ - contractType: 'contract'  // Discriminator                │
-│ - declarationKind:          // class/interface/type/enum    │
-│     'class' | 'interface' | 'type' | 'enum'                 │
-│ - sourceFile: SourceFile    // Original file info           │
-│ - exported: boolean         // Export flag                  │
-│ - kind?: ContractKind       // Compatibility metadata       │
-│ - visibility?:              // 'public' | 'internal'        │
-│ - tags?: string[]           // Auxiliary labels             │
-│ - marker?:                  // Matched decorator/comment    │
-└─────────────────────────────────────────────────────────────┘
-```
-
-Supported markers:
+A marker is the decorator or comment that marks a contract (see [Marking contracts](../README.md#marking-contracts)). `ContractDecoratorMatcher` turns every recognized marker into `ContractMarkerMetadata`:
 
 ```typescript
-@Contract({ kind: "snapshot" })
-export class OrderSnapshotContract {
-  constructor(public readonly orderId: string) {}
+type MessageContractKind = 'command' | 'query' | 'event';
+type BuiltInContractKind = MessageContractKind | 'contract';
+type ContractKind = BuiltInContractKind | (string & {});
+type ContractVisibility = 'public' | 'internal';
+type ContractMarkerSyntax = 'decorator' | 'comment';
+
+interface ContractMarkerMetadata {
+  readonly syntax: ContractMarkerSyntax;
+  readonly name: string;
+  readonly canonicalName: string;
+  readonly kind?: ContractKind;
+  readonly visibility: ContractVisibility;
+  readonly tags: readonly string[];
+  readonly legacy: boolean;
+  readonly options?: Readonly<Record<string, unknown>>;
+  readonly importedName?: string;
+  readonly localName?: string;
+  readonly moduleSpecifier?: string;
 }
-
-// @Contract({ kind: "snapshot", visibility: "public", tags: ["frontend"] })
-interface OrderSnapshot {
-  orderId: string;
-}
-
-/* @Contract({ kind: "value-object" }) */
-enum OrderChannel {
-  Online = "online",
-  Store = "store",
-}
-
-/** @Contract({ kind: "read-model", visibility: "internal", tags: ["admin"] }) */
-type OrderStatus = "draft" | "placed";
 ```
 
-`PublicContract` is separate from the `Message` union. It has no `messageType`, payload, response type, or registry behavior. Marked contracts are included in generated contracts output, but they are never registered in `MessageRegistry`; `MessageRegistry` registers selected messages only. If a marked declaration is not exported in source, the copier adds `export` in generated output.
+| Field | Value |
+|-------|-------|
+| `syntax` | `'decorator'` or `'comment'`. |
+| `name` | The name as written in the source: the local alias for an aliased import, the marker name for a comment. |
+| `canonicalName` | `Contract`, `ContractCommand`, `ContractQuery` or `ContractEvent`. Legacy names map to these. |
+| `kind` | For `Contract`, the `kind` option (default `'contract'`). For the message decorators, their fixed kind. |
+| `visibility` | `'internal'` only when the `visibility` option is the literal `"internal"`; `'public'` otherwise. |
+| `tags` | The string entries of the `tags` option. |
+| `legacy` | `true` for `Public*` names and names configured through `decoratorNames` or `contractMarkerNames`. |
+| `options` | The literal options: strings, numbers, booleans and arrays of them. Other expressions become `undefined`. |
+| `importedName`, `localName`, `moduleSpecifier` | The import binding of a decorator. Absent for comment markers and for legacy decorators without an import. |
 
-Legacy `@PublicContract()` still works and maps to the canonical `Contract` marker with public visibility.
+## 3. Contract declarations
 
-### 4. Field
+`ContractDeclaration` is the canonical model for everything the generator can select. It is a union of three message declarations and one general declaration:
 
+```text
+                      ContractDeclarationBase
+                 name, contractType, kind, visibility,
+                 tags, marker, sourceFile, exported
+                                │
+           ┌────────────────────┴────────────────────┐
+           ▼                                         ▼
+ContractMessageDeclaration                GeneralContractDeclaration
+  contractType: 'message'                   contractType: 'contract'
+  kind: 'event' | 'command' | 'query'       kind: any non-message kind
+  plus the message fields (section 4)       declarationKind: 'class' | 'interface'
+                                                           | 'type' | 'enum'
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         Field                               │
-├─────────────────────────────────────────────────────────────┤
-│ - name: string              // Field name                   │
-│ - type: TypeRef             // Type reference               │
-│ - optional: boolean         // Optional flag                │
-│ - readonly: boolean         // Readonly flag                │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 5. TypeRef (Type Reference)
-
-TypeRef is the core of the type system. All types are represented in a unified way.
-
-```
-                         TypeRef
-                            │
-    ┌───────────┬───────────┼───────────┬───────────┐
-    │           │           │           │           │
-    ▼           ▼           ▼           ▼           ▼
-Primitive   Array       Object      Union      Reference
-    │           │           │           │           │
-string      T[]         {a:T}      A | B      UserType
-number      Array<T>
-boolean
-null
-undefined
-void
-any
-unknown
-never
-bigint
-symbol
-                    │           │
-                    ▼           ▼
-              Intersection   Literal    Tuple    Function
-                    │           │          │          │
-                  A & B     'foo'|42   [A,B,C]  (a:T)=>R
-```
-
-#### 5.1 PrimitiveType
 
 ```typescript
-interface PrimitiveType {
-  kind: 'primitive';
-  name: 'string' | 'number' | 'boolean' | 'null' | 'undefined'
-      | 'void' | 'any' | 'unknown' | 'never' | 'bigint' | 'symbol';
+interface ContractDeclarationBase {
+  readonly name: string;
+  readonly contractType: 'message' | 'contract';
+  readonly kind: ContractKind;
+  readonly visibility: ContractVisibility;
+  readonly tags: readonly string[];
+  readonly marker: ContractMarkerMetadata;
+  readonly sourceFile: SourceFile;
+  readonly exported: boolean;
+}
+
+type ContractMessageDeclaration =
+  | ContractEventDeclaration      // DomainEvent fields, kind: 'event'
+  | ContractCommandDeclaration    // Command fields, kind: 'command'
+  | ContractQueryDeclaration;     // Query fields, kind: 'query'
+
+interface GeneralContractDeclaration extends ContractDeclarationBase {
+  readonly contractType: 'contract';
+  readonly declarationKind: PublicContractDeclarationKind;
+}
+
+type ContractDeclaration = ContractMessageDeclaration | GeneralContractDeclaration;
+```
+
+`visibility` is the boundary between outputs; `tags` are auxiliary filters only. Message declarations in `ParseResult.contractDeclarations` do not set `exported`, although the type declares it.
+
+## 4. Messages
+
+A message is a command, query or event class marked with a decorator. The message views predate `ContractDeclaration` and are what the pipeline, `processContext()` and `RegistryGenerator` use.
+
+```typescript
+interface MessageBase {
+  readonly name: string;
+  readonly sourceFile: SourceFile;
+  readonly fields: readonly Field[];
+  readonly baseClass?: string;
+  readonly sourceText: string;
+  readonly imports: readonly ClassImport[];
+  readonly kind?: MessageContractKind;
+  readonly visibility?: ContractVisibility;
+  readonly tags?: readonly string[];
+  readonly marker?: ContractMarkerMetadata;
+}
+
+interface DomainEvent extends MessageBase {
+  readonly messageType: 'event';
+  readonly version?: number;
+  readonly context?: string;
+  readonly payloadType?: TypeRef;
+}
+
+interface Command extends MessageBase {
+  readonly messageType: 'command';
+  readonly resultType?: TypeRef;
+  readonly context?: string;
+  readonly payloadType?: TypeRef;
+}
+
+interface Query extends MessageBase {
+  readonly messageType: 'query';
+  readonly resultType?: TypeRef;
+  readonly context?: string;
+  readonly payloadType?: TypeRef;
+}
+
+type Message = DomainEvent | Command | Query;
+type MessageType = Message['messageType'];
+
+interface SourceFile {
+  readonly absolutePath: string;
+  readonly relativePath: string;   // relative to the context's sourceDir
+  readonly packageName?: string;   // never set by the pipeline
+}
+
+interface ClassImport {
+  readonly names: readonly string[];
+  readonly source: string;
+  readonly isTypeOnly: boolean;
+  readonly isExternal: boolean;    // true when source does not start with "."
 }
 ```
 
-#### 5.2 ArrayType
+How `Parser` fills each field:
+
+| Field | Source |
+|-------|--------|
+| `name` | The class name. |
+| `fields`, `payloadType` | The first type argument of the first `extends` type that has type arguments. A type literal gives `fields`. An intersection gives `payloadType` and the fields of its object members. A named type gives `payloadType` and no `fields`. |
+| `baseClass` | The identifier after `extends`. |
+| `sourceText` | The class text, including leading comments and decorators. |
+| `imports` | Every import in the file that binds a default or named import. Namespace imports are not listed. |
+| `kind`, `visibility`, `tags`, `marker` | The matched marker. The parse result objects also carry `contractType: 'message'`. |
+| `version` | The `version` option of an event marker. |
+| `context` | The `context` option. Neither `version` nor `context` affects generated files. |
+| `resultType` | A reference to the `response` option's type name, or, when that is absent, to the first same-file type alias or interface that matches a `ResponseNamingConvention`. |
+
+Type guards: `isDomainEvent()`, `isCommand()` and `isQuery()` narrow a `Message` by `messageType`.
+
+A class with a comment marker of a message kind is not a message, and is not a general contract either; the parser ignores it.
+
+## 5. General contracts
+
+A general contract is any marked declaration that is not a message: read models, DTOs, value objects. `PublicContract` is its view in `ParseResult.publicContracts` and in pipeline results:
 
 ```typescript
-interface ArrayType {
-  kind: 'array';
-  elementType: TypeRef;
+type PublicContractDeclarationKind = 'class' | 'interface' | 'type' | 'enum';
+
+interface PublicContract {
+  readonly name: string;
+  readonly contractType: 'contract';
+  readonly declarationKind: PublicContractDeclarationKind;
+  readonly sourceFile: SourceFile;
+  readonly exported: boolean;
+  readonly kind?: ContractKind;
+  readonly visibility?: ContractVisibility;
+  readonly tags?: readonly string[];
+  readonly marker?: ContractMarkerMetadata;
 }
 ```
 
-#### 5.3 ObjectType
+- A class qualifies through a `Contract` decorator with a non-message kind, or through a comment marker.
+- An interface, type alias or enum qualifies only through a comment marker.
+- `exported` records whether the source declaration has `export`. The pipeline collects unexported ones, and `FileCopier` adds `export` in the output.
+- The parser always sets `kind`, `visibility`, `tags` and `marker`; they are optional in the type for compatibility.
+- General contracts never reach `RegistryGenerator`.
+
+## 6. Type model
+
+`TypeRef` describes a type found in a payload, a field or a type alias. `kind` discriminates the variants:
+
+| `kind` | Shape | `parseTypeNode()` produces it for |
+|--------|-------|-----------------------------------|
+| `'primitive'` | `{ name: 'string' \| 'number' \| 'boolean' \| 'null' \| 'undefined' \| 'void' \| 'any' \| 'unknown' \| 'never' \| 'bigint' \| 'symbol' }` | `string`, `number` and `boolean` only. A property without a type annotation gets `any`. |
+| `'array'` | `{ elementType: TypeRef }` | `T[]` |
+| `'object'` | `{ fields: readonly Field[] }` | type literals such as `{ a: T }` |
+| `'union'` | `{ types: readonly TypeRef[] }` | `A \| B` |
+| `'intersection'` | `{ types: readonly TypeRef[] }` | `A & B` |
+| `'reference'` | `{ name: string; typeArguments?: readonly TypeRef[] }` | type references such as `UserId` or `Array<T>` (name `Array`), and every other type node as a fallback, with the source text as `name` (`"placed"`, `unknown`, `[A, B]`) |
+| `'literal'` | `{ value: string \| number \| boolean }` | nothing yet |
+| `'tuple'` | `{ elements: readonly TypeRef[] }` | nothing yet |
+| `'function'` | `{ parameters: readonly FunctionParameter[]; returnType: TypeRef }` | nothing yet |
 
 ```typescript
-interface ObjectType {
-  kind: 'object';
-  fields: readonly Field[];
-}
-```
-
-#### 5.4 UnionType
-
-```typescript
-interface UnionType {
-  kind: 'union';
-  types: readonly TypeRef[];
-}
-```
-
-#### 5.5 IntersectionType
-
-```typescript
-interface IntersectionType {
-  kind: 'intersection';
-  types: readonly TypeRef[];
-}
-```
-
-#### 5.6 ReferenceType
-
-```typescript
-interface ReferenceType {
-  kind: 'reference';
-  name: string;                     // Type name
-  typeArguments?: readonly TypeRef[]; // Generic arguments
-}
-```
-
-#### 5.7 LiteralType
-
-```typescript
-interface LiteralType {
-  kind: 'literal';
-  value: string | number | boolean;
-}
-```
-
-#### 5.8 TupleType
-
-```typescript
-interface TupleType {
-  kind: 'tuple';
-  elements: readonly TypeRef[];
-}
-```
-
-#### 5.9 FunctionType
-
-```typescript
-interface FunctionType {
-  kind: 'function';
-  parameters: readonly FunctionParameter[];
-  returnType: TypeRef;
+interface Field {
+  readonly name: string;
+  readonly type: TypeRef;
+  readonly optional: boolean;
+  readonly readonly: boolean;
 }
 
 interface FunctionParameter {
-  name: string;
-  type: TypeRef;
-  optional: boolean;
+  readonly name: string;
+  readonly type: TypeRef;
+  readonly optional: boolean;
+}
+
+type TypeDefinitionKind = 'interface' | 'type' | 'enum' | 'class';
+
+interface TypeDefinition {
+  readonly name: string;
+  readonly kind: TypeDefinitionKind;
+  readonly sourceFile: SourceFile;
+  readonly body: TypeRef;
+  readonly typeParameters?: readonly string[];
+  readonly exported: boolean;
 }
 ```
 
-### 6. TypeDefinition
+Type guards: `isPrimitiveType()`, `isArrayType()`, `isObjectType()`, `isUnionType()`, `isIntersectionType()`, `isReferenceType()`, `isLiteralType()`, `isTupleType()` and `isFunctionType()`.
 
-Represents the complete structure of an externally defined type.
+The parser records a `TypeDefinition` for every type alias (`kind: 'type'`) and interface (`kind: 'interface'`) in an entry file. It produces no `'enum'` or `'class'` definitions. The pipeline uses these definitions to match response types by name and to find response types that are not exported.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    TypeDefinition                           │
-├─────────────────────────────────────────────────────────────┤
-│ - name: string              // Type name                    │
-│ - kind: 'interface' | 'type' | 'enum' | 'class'            │
-│ - sourceFile: SourceFile    // Original file                │
-│ - body: TypeRef             // Type body                    │
-│ - typeParameters?: string[] // Generic parameters           │
-│ - exported: boolean         // Export flag                  │
-└─────────────────────────────────────────────────────────────┘
-```
+## 7. Configuration values
 
-### 6.1 EnumDefinition
+These types carry configuration into the pipeline. The [README configuration section](../README.md#configuration) describes what each option does.
 
 ```typescript
-interface EnumMember {
-  name: string;
-  value?: string | number;
+interface DecoratorNames {       // legacy message decorator names
+  event?: string;                // default "PublicEvent"
+  command?: string;              // default "PublicCommand"
+  query?: string;                // default "PublicQuery"
 }
 
-interface EnumDefinition extends Omit<TypeDefinition, 'kind' | 'body'> {
-  kind: 'enum';
-  members: readonly EnumMember[];
-}
-```
-
-### 6.2 ClassDefinition
-
-Information about classes referenced by messages or public contracts. Unlike types, source text is preserved as-is.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ClassDefinition                          │
-├─────────────────────────────────────────────────────────────┤
-│ - name: string              // Class name                   │
-│ - kind: 'class'             // Always 'class'               │
-│ - sourceFile: SourceFile    // Original file                │
-│ - sourceText: string        // Original source text (full)  │
-│ - imports: ClassImport[]    // Imports referenced by class  │
-│ - dependencies: string[]    // Referenced type/class names  │
-│ - baseClass?: string        // Base class name              │
-│ - exported: boolean         // Export flag                  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 6.3 ClassImport
-
-Import information used by a class.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      ClassImport                            │
-├─────────────────────────────────────────────────────────────┤
-│ - names: string[]           // Imported names               │
-│ - source: string            // Import path                  │
-│ - isTypeOnly: boolean       // `import type` flag           │
-│ - isExternal: boolean       // External package flag        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Class vs Type Differences:**
-- Type: Analyze AST, convert to `TypeRef`, then generate code
-- Class: Copy source text as-is (methods, decorators, JSDoc preserved)
-
-**Import Generation Rules:**
-
-| Target | isTypeOnly | Reason |
-|--------|------------|--------|
-| Type (`type`, `interface`) | `true` allowed | Only type needed |
-| Class | `false` required | Class is a value, needed at runtime |
-| External package | Preserve original | Respect external package import style |
-
-**Note:** Importing a Class with `import type` will break `instanceof` at runtime
-
-Entry import filtering operates on the original entry-file AST rather than this simplified `ClassImport` shape alone. That keeps practical TypeScript import forms intact when selected declarations need them:
-
-- default imports
-- namespace imports
-- named aliases
-- mixed default + named imports, with unused named specifiers removed when safe
-- type-only default imports
-- qualified type references such as `Types.User` and `Types.Inner.User`
-
-With the default `dependencyStrategy: "safe-symbols"`, retained named local imports are handed to the dependency symbol slicer, which emits only required top-level declarations when the dependency file is statically safe. With `dependencyStrategy: "file"`, the strategy models dependency traversal at file granularity after an import is retained. Referenced local dependency files are copied whole; they are not represented as symbol-sliced `TypeDefinition` subsets.
-
-### 7. SourceFile
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      SourceFile                             │
-├─────────────────────────────────────────────────────────────┤
-│ - absolutePath: string      // Absolute path                │
-│ - relativePath: string      // Relative path (from rootDir) │
-│ - packageName?: string      // Package name (if any)        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 8. Dependency
-
-Information about external types/values referenced by a message or public contract declaration.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Dependency                             │
-├─────────────────────────────────────────────────────────────┤
-│ - name: string              // Import name                  │
-│ - source: ImportSource      // Import source                │
-│ - kind: DependencyKind      // Dependency kind              │
-│ - definition?: TypeDefinition // Resolved definition        │
-└─────────────────────────────────────────────────────────────┘
-
-ImportSource =
-  | { type: 'local'; path: string }      // Local file
-  | { type: 'external'; package: string } // External package
-
-DependencyKind = 'type' | 'value' | 'class'
-```
-
-### 9. DecoratorNames
-
-Customizes legacy decorator names used to identify public messages. These names apply only to legacy message class decorators and do not configure general contract comments. Canonical `ContractEvent`, `ContractCommand`, `ContractQuery`, and `Contract` are always recognized.
-
-```typescript
-interface DecoratorNames {
-  event?: string;   // Default: "PublicEvent"
-  command?: string; // Default: "PublicCommand"
-  query?: string;   // Default: "PublicQuery"
+interface ContractMarkerNames {  // legacy general contract marker name
+  contract?: string;             // default "PublicContract"
 }
 
-const DEFAULT_DECORATOR_NAMES: Required<DecoratorNames> = {
-  event: "PublicEvent",
-  command: "PublicCommand",
-  query: "PublicQuery",
-};
-```
+type TrustedDecoratorSources = readonly string[];
+type DependencyStrategy = 'file' | 'safe-symbols';
+type OutputModuleSpecifiers = 'js' | 'extensionless';
 
-### 10. ContractMarkerNames
-
-Customizes legacy comment marker names used to identify general public contracts. The same name is also used for legacy `@PublicContract()` class decorator detection. Canonical `@Contract(...)` markers are always recognized.
-
-```typescript
-interface ContractMarkerNames {
-  contract?: string; // Default: "PublicContract"
-}
-
-const DEFAULT_CONTRACT_MARKER_NAMES: Required<ContractMarkerNames> = {
-  contract: "PublicContract",
-};
-```
-
-The marker is searched as a class decorator and in leading line, block, or JSDoc comments before `class`, `interface`, `type`, and `enum` declarations. Interface, type alias, and enum declarations are comment marker only.
-
-### 11. DependencyStrategy
-
-Controls how local dependency files retained by strict entry extraction become generated output.
-
-```typescript
-type DependencyStrategy = "file" | "safe-symbols";
-```
-
-- `safe-symbols` is the default. It slices retained dependency files to named top-level declarations and their local declaration closure when the dependency module is statically safe.
-- `file` is an explicit compatibility mode. It copies retained dependency files whole, preserving existing barrel-file and transitive graph behavior.
-- Dependency files outside the current context source root are copied whole in `safe-symbols` mode to avoid cross-context shared-file slice overwrites.
-- `safe-symbols` does not silently fall back to `file`. Unsafe dependency modules throw `UnsafeDependencySliceError` with the file path and reason.
-
-The slicer accepts named local imports, named aliases, type-only named imports, local top-level declaration closure, transitive named local imports, and value declarations referenced by `typeof` type queries.
-
-Rejected unsafe shapes include side-effect-only imports, default or namespace imports that must be retained, dynamic imports, local import types such as `import("./types").T`, export declarations/re-exports, decorated classes or class members, class static blocks, computed class members, static member initializers, enum initializers, unsafe top-level variable initializers, arbitrary top-level statements, duplicate top-level declaration names, and missing required symbols.
-
-### 12. ResponseNamingConvention
-
-Defines naming patterns for matching response types to messages.
-
-```typescript
 interface ResponseNamingConvention {
-  messageSuffix: string;   // e.g., "Request"
-  responseSuffix: string;  // e.g., "Response"
+  readonly messageSuffix: string;   // "Query" ...
+  readonly responseSuffix: string;  // ... "QueryResult": GetOrderQuery -> GetOrderQueryResult
 }
 
-// Example: CreateUserRequest -> CreateUserResponse
-```
+type ContractOutputInclude = 'all' | 'messages' | 'contracts';
 
-### 14. ExtractionResult
+interface ContractOutputTagSelect {
+  readonly include?: readonly string[];
+  readonly exclude?: readonly string[];
+}
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   ExtractionResult                          │
-├─────────────────────────────────────────────────────────────┤
-│ - events: DomainEvent[]                                     │
-│ - commands: Command[]                                       │
-│ - queries: Query[]                                          │
-│ - publicContracts: PublicContract[]                         │
-│ - types: TypeDefinition[]   // Extracted dependent types    │
-│ - dependencies: Dependency[] // Dependency info             │
-│ - errors: ExtractionError[]                                 │
-│ - warnings: ExtractionWarning[]                             │
-└─────────────────────────────────────────────────────────────┘
-```
+interface ContractOutputSelect {
+  readonly visibility?: readonly ContractVisibility[];
+  readonly kinds?: readonly ContractKind[];
+  readonly messageKinds?: readonly MessageContractKind[];
+  readonly include?: ContractOutputInclude;
+  readonly tags?: ContractOutputTagSelect;
+}
 
-### 15. ProcessContextResult
-
-Actual result type returned by `processContext()`.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  ProcessContextResult                       │
-├─────────────────────────────────────────────────────────────┤
-│ - events: DomainEvent[]      // Extracted events            │
-│ - commands: Command[]        // Extracted commands          │
-│ - queries: Query[]           // Extracted queries           │
-│ - publicContracts: PublicContract[] // General contracts    │
-│ - copiedFiles: string[]      // Copied file paths           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Type Resolution Flow
-
-```
-1. Discover TypeRef in Message field
-   e.g., userId: UserId
-
-2. If ReferenceType, attempt to resolve
-   - Find definition in same file
-   - Track import to find definition
-   - Mark as external if external package
-
-3. Obtain TypeDefinition
-   - interface UserId = string & Brand<'UserId'>
-
-4. Recursively resolve TypeRefs in body
-   - Brand<'UserId'> is external package
-
-5. Cache results (prevent circular references)
-```
-
-## Filtering Rules
-
-Items excluded during extraction:
-
-### Backend-only Dependencies
-- `node:*` (Node.js built-in modules)
-- `pg`, `sqlite3` (databases)
-- `typeorm`, `prisma` (ORMs)
-- `express`, `fastify` (web frameworks)
-
-### Non-extractable Patterns
-- Interfaces in `implements` clause (not needed at runtime)
-- Private fields (`#field`, `private field`)
-- Methods (only data extracted)
-
-## Example
-
-### Input (Backend)
-
-```typescript
-// packages/lecture/src/events/lecture-created.ts
-import { Message } from '@hexaijs/core';
-import { ContractEvent } from '@hexaijs/contracts/decorators';
-import { UserId } from '../domain/user-id';
-
-@ContractEvent()
-export class LectureCreated extends Message {
-  constructor(
-    public readonly lectureId: string,
-    public readonly title: string,
-    public readonly createdBy: UserId,
-  ) {
-    super();
-  }
+interface ContractOutputConfig {
+  readonly name: string;
+  readonly path: string;
+  readonly select?: ContractOutputSelect;
+  readonly registry?: boolean;
+  readonly outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 ```
 
-```typescript
-// packages/lecture/src/domain/user-id.ts
-export type UserId = string & Brand<'UserId'>;
-```
+`mergeDecoratorNames()` and `mergeContractMarkerNames()` fill the legacy defaults (`DEFAULT_DECORATOR_NAMES`, `DEFAULT_CONTRACT_MARKER_NAMES`). Configured names replace the defaults; they do not add to them.
+
+`isContractSelected()` in `src/contract-selector.ts` applies a `ContractOutputSelect` to one contract. It treats a missing `kind` as the message type or `'contract'`, a missing `visibility` as `'public'` and missing `tags` as empty, and requires every set field to match. `hasStrictOutputSelection()` is `true` when any field is set; only then does `FileCopier` run the boundary check.
+
+## 8. Results
 
 ```typescript
-// packages/lecture/src/contracts/lecture-summary.ts
-// @Contract({ kind: "read-model", visibility: "public" })
-interface LectureSummary {
-  lectureId: string;
-  title: string;
+interface ParseResult {                       // Parser.parse(), one file
+  readonly events: readonly DomainEvent[];
+  readonly commands: readonly Command[];
+  readonly queries: readonly Query[];
+  readonly publicContracts: readonly PublicContract[];
+  readonly contractDeclarations: readonly ContractDeclaration[];
+  readonly typeDefinitions: readonly TypeDefinition[];
+}
+
+interface ParsedMessages {                    // ContractsPipeline.parse(), all entry files
+  readonly events: readonly DomainEvent[];
+  readonly commands: readonly Command[];
+  readonly queries: readonly Query[];
+  readonly publicContracts: readonly PublicContract[];
+  readonly typeDefinitions: readonly TypeDefinition[];
+}
+
+interface PipelineResult {                    // ContractsPipeline.execute(), selected contracts
+  readonly events: readonly DomainEvent[];
+  readonly commands: readonly Command[];
+  readonly queries: readonly Query[];
+  readonly publicContracts: readonly PublicContract[];
+  readonly copiedFiles: string[];             // written files, joined onto the given outputDir
+}
+
+interface ProcessContextResult {              // processContext(), same content as PipelineResult
+  events: readonly DomainEvent[];
+  commands: readonly Command[];
+  queries: readonly Query[];
+  publicContracts: readonly PublicContract[];
+  copiedFiles: string[];
 }
 ```
 
-### Domain Model (Internal)
+`PipelineResult` lists the contracts after output selection. `copiedFiles` lists every written file except the context `index.ts`.
+
+## 9. Exported types the pipeline does not produce
+
+The package root still exports these types for compatibility. No pipeline stage creates them; do not build new features on them without first giving them a producer.
+
+| Type | Describes |
+|------|-----------|
+| `ClassDefinition` | A class with its source text, imports, referenced names and base class. Only test helpers build it. |
+| `EnumDefinition`, `EnumMember` | An enum and its members. |
+| `Dependency`, `DependencyKind`, `ImportSource` | A resolved import of a contract. `FileGraphResolver` models imports as `ImportInfo` instead. |
+| `ExtractionResult`, `ExtractionError`, `ExtractionWarning` | An earlier result shape with errors and warnings. Errors are now thrown (see [Errors](../README.md#errors)). |
+| `Config` | An earlier configuration shape. Configuration now arrives as `ContractsConfig` and `ProcessContextOptions`. |
+
+## 10. Worked example
+
+Input, in a context named `orders` whose source directory is `packages/orders/src`:
 
 ```typescript
-const lectureCreatedEvent: DomainEvent = {
-  name: 'LectureCreated',
-  messageType: 'event',
-  kind: 'event',
-  visibility: 'public',
+// messages/place-order.ts
+import { Command } from "@hexaijs/contracts";
+import { ContractCommand } from "@hexaijs/contracts/decorators";
+
+import type { Money } from "../domain/money.js";
+
+@ContractCommand({ response: "PlaceOrderResult" })
+export class PlaceOrderCommand extends Command<
+    { customerId: string; total: Money },
+    PlaceOrderResult
+> {
+    static readonly type = "orders.place-order";
+}
+
+type PlaceOrderResult = {
+    orderId: string;
+};
+
+export class PlaceOrderHandler {}
+```
+
+```typescript
+// domain/money.ts
+export type Currency = "KRW" | "USD";
+
+export interface Money {
+    amount: number;
+    currency: Currency;
+}
+
+export function formatMoney(money: Money): string {
+    return `${money.amount} ${money.currency}`;
+}
+```
+
+`Parser.parse()` on `messages/place-order.ts` returns one command (`sourceText` omitted):
+
+```typescript
+{
+  name: "PlaceOrderCommand",
+  messageType: "command",
+  contractType: "message",
+  kind: "command",
+  visibility: "public",
   tags: [],
   sourceFile: {
-    absolutePath: '/project/packages/lecture/src/events/lecture-created.ts',
-    relativePath: 'packages/lecture/src/events/lecture-created.ts',
-    packageName: 'lecture',
+    absolutePath: "/repo/packages/orders/src/messages/place-order.ts",
+    relativePath: "messages/place-order.ts",
   },
+  baseClass: "Command",
   fields: [
-    { name: 'lectureId', type: { kind: 'primitive', name: 'string' }, readonly: true, optional: false },
-    { name: 'title', type: { kind: 'primitive', name: 'string' }, readonly: true, optional: false },
-    { name: 'createdBy', type: { kind: 'reference', name: 'UserId' }, readonly: true, optional: false },
+    { name: "customerId", type: { kind: "primitive", name: "string" }, optional: false, readonly: false },
+    { name: "total", type: { kind: "reference", name: "Money" }, optional: false, readonly: false },
   ],
-  version: undefined,
-  context: 'lecture', // inferred from package
-};
+  resultType: { kind: "reference", name: "PlaceOrderResult" },
+  imports: [
+    { names: ["Command"], source: "@hexaijs/contracts", isTypeOnly: false, isExternal: true },
+    { names: ["ContractCommand"], source: "@hexaijs/contracts/decorators", isTypeOnly: false, isExternal: true },
+    { names: ["Money"], source: "../domain/money.js", isTypeOnly: true, isExternal: false },
+  ],
+  marker: {
+    syntax: "decorator",
+    name: "ContractCommand",
+    canonicalName: "ContractCommand",
+    kind: "command",
+    visibility: "public",
+    tags: [],
+    legacy: false,
+    options: { response: "PlaceOrderResult" },
+    importedName: "ContractCommand",
+    localName: "ContractCommand",
+    moduleSpecifier: "@hexaijs/contracts/decorators",
+  },
+}
+```
 
-const userIdType: TypeDefinition = {
-  name: 'UserId',
-  kind: 'type',
-  sourceFile: { ... },
+and one type definition:
+
+```typescript
+{
+  name: "PlaceOrderResult",
+  kind: "type",
+  sourceFile: { absolutePath: "/repo/packages/orders/src/messages/place-order.ts", relativePath: "messages/place-order.ts" },
   body: {
-    kind: 'intersection',
-    types: [
-      { kind: 'primitive', name: 'string' },
-      { kind: 'reference', name: 'Brand', typeArguments: [{ kind: 'literal', value: 'UserId' }] },
-    ],
+    kind: "object",
+    fields: [{ name: "orderId", type: { kind: "primitive", name: "string" }, optional: false, readonly: false }],
   },
   exported: false,
-};
+}
+```
 
-const lectureSummaryContract: PublicContract = {
-  name: 'LectureSummary',
-  contractType: 'contract',
-  kind: 'read-model',
-  visibility: 'public',
-  tags: [],
-  declarationKind: 'interface',
+From this model the pipeline knows that `PlaceOrderResult` is the response type and is not exported. `FileCopier` then prints the selected declarations, slices `money.ts` down to the declarations `Money` needs, and writes (with `removeDecorators: true`):
+
+```typescript
+// <output>/orders/messages/place-order.ts
+import { Command } from "@hexaijs/contracts";
+import type { Money } from "../domain/money.js";
+export type PlaceOrderResult = {
+    orderId: string;
+};
+export class PlaceOrderCommand extends Command<{
+    customerId: string;
+    total: Money;
+}, PlaceOrderResult> {
+    static readonly type = "orders.place-order";
+}
+```
+
+```typescript
+// <output>/orders/domain/money.ts
+export type Currency = "KRW" | "USD";
+export interface Money {
+    amount: number;
+    currency: Currency;
+}
+```
+
+A general contract looks like this. For
+
+```typescript
+// read-models/order-summary.ts
+// @Contract({ kind: "read-model", tags: ["frontend"] })
+interface OrderSummary {
+    orderId: string;
+    itemCount: number;
+}
+```
+
+the parser returns this `PublicContract` (and a `TypeDefinition` for the interface):
+
+```typescript
+{
+  name: "OrderSummary",
+  contractType: "contract",
+  declarationKind: "interface",
+  kind: "read-model",
+  visibility: "public",
+  tags: ["frontend"],
+  exported: false,
   sourceFile: {
-    absolutePath: '/project/packages/lecture/src/contracts/lecture-summary.ts',
-    relativePath: 'packages/lecture/src/contracts/lecture-summary.ts',
-    packageName: 'lecture',
+    absolutePath: "/repo/packages/orders/src/read-models/order-summary.ts",
+    relativePath: "read-models/order-summary.ts",
   },
-  exported: true,
-};
-```
-
-### Output (contracts)
-
-```typescript
-// contracts/src/events/lecture-created.ts
-import { Message } from '@hexaijs/core';
-import type { UserId } from '../types/user-id';
-
-export class LectureCreated extends Message {
-  constructor(
-    public readonly lectureId: string,
-    public readonly title: string,
-    public readonly createdBy: UserId,
-  ) {
-    super();
-  }
+  marker: {
+    syntax: "comment",
+    name: "Contract",
+    canonicalName: "Contract",
+    kind: "read-model",
+    visibility: "public",
+    tags: ["frontend"],
+    legacy: false,
+    options: { kind: "read-model", tags: ["frontend"] },
+  },
 }
 ```
 
-```typescript
-// contracts/src/types/user-id.ts
-import type { Brand } from '@hexaijs/core';
-
-export type UserId = string & Brand<'UserId'>;
-```
-
-```typescript
-// contracts/src/contracts/lecture-summary.ts
-export interface LectureSummary {
-  lectureId: string;
-  title: string;
-}
-```
+The output is `export interface OrderSummary { ... }`, without the marker comment.

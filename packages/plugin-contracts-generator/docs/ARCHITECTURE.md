@@ -1,772 +1,125 @@
 # Architecture
 
-This document defines the module structure and interfaces for the Contracts Generator.
+This guide explains how the contracts generator is built: its modules, the order in which they run, and the rules each one enforces. It is for contributors. To use the generator, read the [README](../README.md); for the data the modules pass around, read the [domain model guide](./DOMAIN-MODEL.md).
 
-> **Related Documentation**
-> - [DOMAIN-MODEL.md](./DOMAIN-MODEL.md): Core domain model definitions
+## Contents
 
-## Directory Structure
+1. [Source layout](#1-source-layout)
+2. [Pipeline overview](#2-pipeline-overview)
+3. [Entry points](#3-entry-points)
+4. [Configuration](#4-configuration)
+5. [Scanner](#5-scanner)
+6. [Parser and marker matching](#6-parser-and-marker-matching)
+7. [Selection](#7-selection)
+8. [File graph resolver](#8-file-graph-resolver)
+9. [File copier](#9-file-copier)
+10. [Dependency symbol slicer](#10-dependency-symbol-slicer)
+11. [Module specifiers](#11-module-specifiers)
+12. [Registry generation and runtime](#12-registry-generation-and-runtime)
+13. [Re-export generation](#13-re-export-generation)
+14. [Infrastructure](#14-infrastructure)
+15. [Module dependencies](#15-module-dependencies)
+16. [Tests](#16-tests)
 
-```
+## 1. Source layout
+
+```text
 src/
-├── index.ts              # Main entry point (processContext, exports)
-├── cli.ts                # Command-line interface
-├── hexai-plugin.ts       # hexai CLI plugin integration
-├── errors.ts             # Domain error classes (hierarchical error types)
-├── domain/               # Core type definitions
-│   ├── types.ts
-│   └── index.ts
-├── file-system.ts        # FileSystem abstraction interface
-├── logger.ts             # Logger interface and ConsoleLogger
-├── pipeline.ts           # ContractsPipeline orchestrator
-├── scanner.ts            # Find public contract entry files
-├── parser.ts             # Extract messages and public contract metadata from AST
-├── contract-decorator-matcher.ts # Source-aware Contract/Public marker matching
-├── contract-selector.ts  # Output-level visibility/kind/tag selection
-├── ast-utils.ts          # Low-level AST manipulation
-├── import-analyzer.ts    # Import statement analysis
-├── class-analyzer.ts     # Class declaration analysis
-├── file-graph-resolver.ts # Build import dependency graph
-├── file-copier.ts        # Copy files with import rewriting
-├── dependency-symbol-slicer.ts # Fail-fast dependency symbol slicing
-├── config-loader.ts      # Load application.config.ts
-├── context-config.ts     # Context configuration with tsconfig path alias resolution
-├── registry-generator.ts # Generate MessageRegistry registration code
-├── reexport-generator.ts # Generate re-export files for path alias rewrites
-├── test-utils.ts         # Test utilities
-│
-└── runtime/              # Runtime utilities (used by contracts package)
-    ├── index.ts
-    └── message-registry.ts  # Message class registry for deserialization
+├── index.ts                      # package entry: processContext() and re-exports
+├── cli.ts                        # generate-contracts binary: run(), runWithConfig()
+├── hexai-plugin.ts               # cliPlugin for @hexaijs/cli
+├── config-loader.ts              # application.config.ts loading and validation
+├── context-config.ts             # ContextConfig: source directory and tsconfig path aliases
+├── pipeline.ts                   # ContractsPipeline: one context, one output
+├── scanner.ts                    # finds entry files
+├── parser.ts                     # builds the domain model from one entry file
+├── contract-decorator-matcher.ts # decides which decorators and comments are markers
+├── contract-selector.ts          # applies outputs[].select to one contract
+├── file-graph-resolver.ts        # import graph from the entry files
+├── file-copier.ts                # entry extraction, transformations, writing files
+├── dependency-symbol-slicer.ts   # safe-symbols slicing of dependency files
+├── module-specifier.ts           # ".js" or extensionless relative specifiers
+├── registry-generator.ts         # root index.ts with MessageRegistry
+├── reexport-generator.ts         # re-export files for pathAliasRewrites
+├── ast-utils.ts                  # TypeNode to TypeRef, payload fields
+├── import-analyzer.ts            # import bindings and ClassImport lists
+├── class-analyzer.ts             # class source text, base class, export modifier
+├── errors.ts                     # error hierarchy
+├── file-system.ts                # FileSystem interface and nodeFileSystem
+├── logger.ts                     # Logger, ConsoleLogger, noopLogger
+├── test-utils.ts                 # in-memory file system and model builders for tests
+├── domain/
+│   ├── index.ts
+│   └── types.ts                  # the domain model
+└── runtime/
+    ├── index.ts                  # the @hexaijs/plugin-contracts-generator/runtime entry
+    └── message-registry.ts
 ```
 
-## Module Overview
+Unit tests sit next to their modules as `*.test.ts`. See [Tests](#16-tests) for the rest.
 
-### Pipeline Boundaries
+`package.json` exposes two entry points, `.` (`dist/index.js`) and `./runtime` (`dist/runtime/index.js`), and the `generate-contracts` binary (`dist/cli.js`). A module's exports are public only when `index.ts` or `runtime/index.ts` re-exports them.
 
-The generator keeps discovery, semantic selection, strategy choice, and emission separate:
+## 2. Pipeline overview
 
-1. **Scan** (`Scanner`): find candidate entry files by text markers. `messageTypes` narrows message decorator patterns; `includePublicContracts` controls general contract marker discovery.
-2. **Parse** (`Parser`): validate AST shapes and extract message metadata, response type definitions, and general contract metadata through `ContractDecoratorMatcher`.
-3. **Selection** (`ContractsPipeline`, `contract-selector.ts`): choose selected messages and selected general contracts by `visibility`, `kind`, `messageKinds`, `include`, and `tags`.
-4. **Entry extraction** (`FileCopier`): always performs strict extraction of selected entry declarations, import-shape-aware filtering, and minimal local dependency expansion.
-5. **DependencyStrategy** (`FileCopier`, `DependencySymbolSlicer`): `safe-symbols` is the default and slices statically safe dependency files to retained named declarations. `file` is an explicit compatibility mode that copies retained dependency files whole.
-6. **Emit** (`FileCopier`, barrel export, optional `RegistryGenerator`): write extracted files, remove markers when configured, add missing `export` modifiers for selected response/public contract declarations, generate context barrels, and optionally generate a registry for selected messages only.
+The CLI and the hexai plugin drive one `ContractsPipeline` per context and output, then write the files that span contexts. `processContext()` drives a single pipeline.
 
-### 1. Contract Markers
+```text
+run(args)                       runWithConfig(options, pluginConfig)       processContext(options)
+  │ ConfigLoader.load()           │ toContractsConfig()                      │ ContextConfig.create()
+  └──────────────┬────────────────┘                                          │
+                 ▼                                                           │
+        runGeneration()                                                      │
+          resolveGenerationScope()   --include, --messages                   │
+          createOutputPlans()        -o, or one plan per outputs[] entry     │
+          temporary plans            for --dry-run and --check               │
+          for each output plan:                                              │
+            for each context:                                                │
+              ContractsPipeline.create(...).execute(...)  ◄──────────────────┘
+            RegistryGenerator   ->  <output>/index.ts          (registry on)
+            ReexportGenerator   ->  re-export files            (pathAliasRewrites set)
+          --dry-run: log files    --check: compare temporary and real outputs
+```
 
-Contract decorators live in the `@hexaijs/contracts` package (`@hexaijs/contracts/decorators`). They are pure no-op class decorators used as markers for static analysis. No `reflect-metadata` dependency.
+`ContractsPipeline.execute()` runs these steps for one context and writes to `<outputDir>/<contextName>/`:
+
+| Step | Method | Output |
+|------|--------|--------|
+| Scan | `scan(sourceDir)` via `Scanner` | Paths of candidate entry files. |
+| Parse | `parse(files, sourceDir)` via `Parser` | `ParsedMessages`: messages, general contracts, type definitions. |
+| Select | `selectMessages()` via `isContractSelected()` | The contracts the output selects. A no-op without `select`. |
+| Collect entry points | `collectEntryPoints()` | Files that still hold a selected contract. |
+| Resolve | `resolve(entryPoints, sourceDir)` via `FileGraphResolver` | `FileGraph` of entry files and their local imports. |
+| Plan exports | `collectResponseTypesToInclude()`, `collectResponseTypesToExport()`, `collectPublicContractsToExport()` | Same-file response types to keep; response types and general contracts that need `export`. |
+| Copy | `copy(...)` via `FileCopier.copyFiles()` | Written files (`copiedFiles`). |
+| Barrel | `exportBarrel(copiedFiles, contextOutputDir)` | `<context>/index.ts`. |
+
+The pipeline logs the start and end of each context at `info` level and every step at `debug` level.
 
 ```typescript
-// @hexaijs/contracts/decorators
-@ContractEvent(options?: ContractEventOptions)     // { version?, context?, visibility?, tags? }
-@ContractCommand(options?: ContractCommandOptions) // { context?, response?, visibility?, tags? }
-@ContractQuery(options?: ContractQueryOptions)     // { context?, response?, visibility?, tags? }
-@Contract(options?: ContractOptions)               // { kind?, context?, response?, version?, visibility?, tags? }
-```
-
-`kind` is the contract role/discriminator. Built-in message kinds are `event`, `command`, and `query`. A generic `@Contract({ kind: "command" })` is treated as a message command. Custom kinds such as `read-model`, `value-object`, `dto`, or `snapshot` are general contracts.
-
-`visibility` is the public/internal boundary used by output selection. It defaults to `"public"`. `tags` are auxiliary labels for secondary filters and must not be treated as the public/internal boundary.
-
-Legacy decorators are deprecated aliases and still work without runtime warnings:
-
-```typescript
-@PublicEvent()
-@PublicCommand()
-@PublicQuery()
-@PublicContract()
-```
-
-General contracts use `@Contract({ kind: "contract" })` or a custom `kind`. Classes support the no-op runtime decorator form:
-
-```typescript
-@Contract({ kind: "snapshot" })
-export class PublicOrderSnapshot {
-  constructor(public readonly orderId: string) {}
-}
-```
-
-Interfaces, type aliases, and enums cannot use TypeScript decorators, so they use leading TypeScript comment markers:
-
-```typescript
-// @Contract({ kind: "snapshot", visibility: "public", tags: ["frontend"] })
-interface PublicOrderSnapshot {
-  orderId: string;
-}
-
-/* @Contract({ kind: "value-object" }) */
-enum PublicOrderChannel {
-  Online = "online",
-  Store = "store",
-}
-
-/** @Contract({ kind: "read-model", visibility: "internal", tags: ["admin"] }) */
-type PublicOrderStatus = "draft" | "placed";
-```
-
-The comment marker applies to the following declaration only when it appears in the declaration's leading comments. Line comments, block comments, and JSDoc comments are supported for `class`, `interface`, `type`, and `enum`.
-
-The Scanner finds files containing contract decorator patterns or contract comment marker text via text search. The Parser then validates the AST shape and extracts message metadata or general contract metadata.
-
-#### 1.1 Import and Source Matching
-
-`ContractDecoratorMatcher` is the authoritative marker interpreter for parser and copier behavior.
-
-Supported decorator forms:
-
-- Direct named imports from `@hexaijs/contracts` and `@hexaijs/contracts/decorators`
-- Direct named imports from configured `trustedDecoratorSources`
-- Named import aliases, for example `import { ContractCommand as InternalCommand } from "@hexaijs/contracts/decorators"`
-- Generic `Contract` aliases with `kind`
-- Legacy `Public*` names
-- Comment markers without any import
-
-Unbound canonical `Contract*` decorator names are ignored unless they are explicitly configured as legacy/custom `decoratorNames` or `contractMarkerNames`. Same-named decorators from untrusted packages are ignored. Type-only imports are ignored. Namespace decorator imports, such as `Contracts.ContractCommand`, are not supported in this release.
-
-Local re-export chains are intentionally not traced automatically. A local barrel can be used only when the integration adds that source to `trustedDecoratorSources`; otherwise import decorators directly from the canonical packages. Comment markers remain import-free and are the safest option for interface/type/enum declarations.
-
----
-
-### 2. Scanner (`src/scanner.ts`)
-
-Finds files containing contract entry markers in the source directory. Entry markers include message decorators (`@ContractEvent`, `@ContractCommand`, `@ContractQuery`), generic `@Contract({ kind })`, legacy `Public*` decorators, and comment-based general contract markers.
-
-```typescript
-interface ScannerOptions {
-  exclude?: string[];  // Exclude glob patterns
-  decoratorNames?: DecoratorNames
-  contractMarkerNames?: ContractMarkerNames
-  messageTypes?: MessageType[]
-  includePublicContracts?: boolean
-}
-
-class Scanner {
-  constructor(options?: ScannerOptions)
-  async scan(sourceDir: string): Promise<string[]>
-}
-```
-
-**Default Exclusion Patterns**:
-- `**/node_modules/**`
-- `**/dist/**`
-- `**/*.d.ts`
-- `**/*.test.ts`
-- `**/*.spec.ts`
-
-**Algorithm**:
-1. Traverse all TypeScript files using `**/*.ts` glob
-2. Search file contents for canonical and configured message decorator text (`@ContractEvent(`, `@ContractCommand(`, `@ContractQuery(`, legacy configured names)
-3. Search file contents for generic contract marker text (`@Contract`) and configured legacy public contract marker text (`@PublicContract` by default) when public contracts are included
-4. Return matching file paths
-
-**Characteristics**: Optimizes performance with fast text matching before AST parsing. Text matching is intentionally broad; the Parser is responsible for enforcing source-aware decorator matching and declaration-leading comment markers. When `messageTypes` is provided, general contract marker scanning is disabled by default unless `includePublicContracts` is set.
-
----
-
-### 3. Parser (`src/parser.ts`)
-
-Analyzes TypeScript AST to extract message class information and general contract metadata.
-
-```typescript
-interface ParseResult {
-  readonly events: readonly DomainEvent[]
-  readonly commands: readonly Command[]
-  readonly queries: readonly Query[]
-  readonly publicContracts: readonly PublicContract[]
-  readonly typeDefinitions: readonly TypeDefinition[]
-}
-
-class Parser {
-  parse(sourceCode: string, sourceFileInfo: SourceFile): ParseResult
-}
-```
-
-**Extraction Process**:
-1. Generate TypeScript AST
-2. Traverse `ClassDeclaration`, `InterfaceDeclaration`, `TypeAliasDeclaration`, and `EnumDeclaration` nodes
-3. For classes, check message decorators (`@ContractEvent`, `@ContractCommand`, `@ContractQuery`), generic `@Contract({ kind })`, and legacy `Public*` markers through `ContractDecoratorMatcher`
-4. For classes, check generic/general `@Contract` decorators and configured leading comment markers
-5. For interfaces, type aliases, and enums, check the configured leading comment marker only; no import is required
-6. Extract message payload type (`extends Message<PayloadType>`)
-7. Collect class imports and dependencies
-8. Extract base class name
-9. Record general contract metadata separately from the `Message` union
-
-**Extracted Data**:
-- `name`: Class name
-- `fields`: Payload field list
-- `payloadType`: Original type reference
-- `sourceText`: Complete class source code
-- `imports`: All import statements in the file
-- `baseClass`: Inherited class name
-
-**General Contract Data**:
-- `name`: Declaration name
-- `contractType`: Always `"contract"`
-- `declarationKind`: `"class"`, `"interface"`, `"type"`, or `"enum"`
-- `sourceFile`: Original source file
-- `exported`: Whether the source declaration was exported. Unexported public contracts are exported in generated output.
-
-Public contracts are included in generated contracts output, but they are not message contracts and are not registered in `MessageRegistry`; only selected decorated messages are registered.
-
----
-
-### 4. TypeScript Utilities (Separated Modules)
-
-TypeScript Compiler API functionality is separated by concern.
-
-#### 4.1 AST Utils (`src/ast-utils.ts`)
-
-Low-level AST manipulation functions:
-
-```typescript
-// Type Parsing
-parseTypeNode(typeNode: ts.TypeNode): TypeRef
-
-// Field Extraction
-extractFieldsFromMembers(members: ts.NodeArray<ts.TypeElement>): Field[]
-
-// Helper
-isPrimitiveTypeName(name: string): boolean
-```
-
-#### 4.2 Import Analyzer (`src/import-analyzer.ts`)
-
-Import analysis functions:
-
-```typescript
-isExternalModule(moduleSpecifier: string): boolean
-extractAllImports(sourceFile: ts.SourceFile): ClassImport[]
-extractClassImports(sourceFile: ts.SourceFile, neededRefs: Set<string>): ClassImport[]
-extractImportedNames(importClause: ts.ImportClause): string[]
-```
-
-#### 4.3 Class Analyzer (`src/class-analyzer.ts`)
-
-Class analysis functions:
-
-```typescript
-hasDecorator(node: ts.ClassDeclaration, decoratorName: string): boolean
-hasLeadingCommentMarker(node: ts.Node, sourceCode: string, markerName: string): boolean
-hasExportModifier(node: ts.Node): boolean
-extractClassSourceText(node: ts.ClassDeclaration, sourceCode: string): string
-getBaseClassName(node: ts.ClassDeclaration): string | undefined
-collectClassReferences(node: ts.ClassDeclaration): Set<string>
-```
-
----
-
-### 5. File Graph Resolver (`src/file-graph-resolver.ts`)
-
-Builds an import dependency graph from entry point files.
-
-```typescript
-interface FileGraphResolverOptions {
-  tsconfigPath?: string              // Path to tsconfig.json
-  pathAliasConfig?: PathAliasConfig  // Pre-loaded path alias config
-  excludeDependencies?: string[]     // Glob patterns for dependencies to exclude
-}
-
-interface ImportInfo {
-  moduleSpecifier: string     // Import path (e.g., './foo', '@alias/bar')
-  resolvedPath: string | null // Resolved absolute path
-  isExternal: boolean         // External package flag
-  importedNames: string[]     // Imported identifiers
-}
-
-interface FileNode {
-  absolutePath: string
-  relativePath: string
-  imports: ImportInfo[]
-  isEntryPoint: boolean
-}
-
-interface FileGraph {
-  nodes: Map<string, FileNode>
-  entryPoints: Set<string>
-  excludedPaths: Set<string>  // Excluded file paths (used for import removal)
-}
-
-class FileGraphResolver {
-  constructor(options?: FileGraphResolverOptions)
-  buildGraph(entryPoints: string[], sourceRoot: string): FileGraph
-}
-```
-
-**Path Resolution Support**:
-- Relative paths: `./foo`, `../bar`
-- Path aliases: `@core/*` → `src/core/*` (based on tsconfig.json)
-- External packages: `lodash`, `@hexaijs/core`
-
-**Dependency Exclusion**:
-- Specify files to exclude during dependency traversal via `excludeDependencies` glob patterns
-- Excluded file paths are collected in `FileGraph.excludedPaths`
-- Default exclusion patterns: `**/*.test.ts`, `**/*.spec.ts`, `**/*.eh.ts`, `**/db.ts`, `**/infra/**`
-
-**Algorithm**: BFS traversal for dependency graph exploration
-
----
-
-### 6. File Copier (`src/file-copier.ts`)
-
-Handles Entry files and Dependency files differently.
-
-```typescript
-interface CopyOptions {
-  sourceRoot: string
-  outputDir: string
-  fileGraph: FileGraph
-  pathAliasRewrites?: Map<string, string>  // e.g., Map([['@libera/', '@/']])
-  removeDecorators?: boolean               // Remove message decorators from generated output
-  messageTypes?: MessageType[]             // Message types to extract ('event' | 'command' | 'query')
-  dependencyStrategy?: DependencyStrategy  // 'safe-symbols' default, or 'file' compatibility mode
-  decoratorNames?: DecoratorNames          // Decorator names for each messageType
-  contractMarkerNames?: ContractMarkerNames // Comment marker names for general contracts
-  includePublicContracts?: boolean          // Include marked general contracts
-  select?: ContractOutputSelect             // Output-level visibility/kind/tag/category filter
-  responseTypesToInclude?: Map<string, string[]> // Response type declarations to include in symbols output
-  responseTypesToExport?: Map<string, string[]>  // Unexported response types to export
-  publicContractsToExport?: Map<string, string[]> // Unexported public contracts to export
-}
-
-interface CopyResult {
-  copiedFiles: string[]
-  rewrittenImports: Map<string, string[]>
-}
-
-class FileCopier {
-  async copyFiles(options: CopyOptions): Promise<CopyResult>
-  generateBarrelExport(copiedFiles: string[]): string
-}
-```
-
-**Entry vs Dependency File Processing**:
-
-| File Type | Processing Method | Reason |
-|-----------|-------------------|--------|
-| **Entry files** | Symbol extraction + import filtering | Strictly include selected message types and marked general contract declarations |
-| **Dependency files with `safe-symbols` strategy** | Fail-fast symbol slicing | Default behavior; narrow dependency files to retained named top-level declarations when the module is statically safe |
-| **Dependency files outside the context source root** | Full module copy | Avoid cross-context shared-file slice overwrites while preserving boundary checks |
-| **Dependency files with `file` strategy** | Full module copy | Compatibility mode for barrel-heavy or otherwise unsafe dependency modules |
-
-**Entry File Symbol Extraction (`extractSymbolsFromEntry()`)**:
-1. Extract message classes matching `messageTypes`
-2. Extract general contract classes marked by decorator or comment
-3. Extract general contract interfaces, type aliases, and enums marked by comment only
-4. Track local type dependencies used by extracted declarations
-5. Include same-file command/query response types discovered by explicit decorator options or naming conventions
-6. Expand used identifiers from selected declarations through local declaration dependencies in the same entry file
-7. Filter and keep only used imports
-
-**Import Rewriting**:
-1. Internal path alias → relative path conversion (e.g., `@core/types` → `./types`)
-2. External path alias → specified prefix conversion (e.g., `@libera/common` → `@/common`)
-
-**Symbols import-shape support**:
-- Retains default imports used by selected entry declarations.
-- Retains namespace imports used through qualified references, including nested references such as `Types.Inner.User`.
-- Retains named import aliases such as `import { User as DomainUser } from "./user"`.
-- Retains mixed default + named imports and removes unused named specifiers when the import can be safely rewritten.
-- Retains type-only default imports.
-- Preserves already-exported local function dependencies without adding a duplicate `export`.
-
-This is direct AST expansion for selected entry files. It is not TypeChecker-based semantic slicing. Local dependency files are controlled separately by `DependencyStrategy`. Keep shared DTO/value-object dependencies boundary-clean and separate from internal implementation modules.
-
-**Dependency Symbol Slicing (`DependencySymbolSlicer`)**:
-
-`dependencyStrategy: "safe-symbols"` is the default. It takes the retained local imports from extracted entry files, follows named imports recursively through dependency files, and emits only the required top-level declarations plus their local declaration closure.
-
-Supported retained dependency shapes:
-- Named imports and aliases, for example `import { UserId as DomainUserId } from "./types"`.
-- Type-only named imports.
-- Local declarations referenced by emitted declarations, including value declarations referenced through `typeof TOKEN`.
-- Transitive named local imports from one safe dependency file to another.
-
-Unsafe dependency modules do not fall back to full-file copying. They throw `UnsafeDependencySliceError` with the dependency file path and reason. Rejected shapes include:
-
-- Side-effect-only imports such as `import "./setup"`.
-- Default or namespace imports that must be retained from a dependency file.
-- Dynamic imports and local `import("./module").Type` type references.
-- Export declarations and export assignments, including re-exports.
-- Class decorators, class member decorators, constructor parameter decorators, static blocks, static member initializers, computed class members, and unsafe `extends` expressions.
-- Enum member initializers.
-- Top-level statements and variable initializers containing calls, `new`, tagged templates, `await`, `yield`, `delete`, assignments, or increment/decrement operators.
-- Duplicate top-level declaration names or missing required symbols.
-
-Use `dependencyStrategy: "file"` when a migration needs full-file dependency copying for local barrels, default/namespace dependency imports, or other modules intentionally rejected by `safe-symbols`.
-
-**Additional Features**:
-- **Excluded file import removal**: Automatically removes import/export statements referencing files in `FileGraph.excludedPaths`
-- **Decorator removal**: Removes matched contract decorators (`@ContractCommand`, `@ContractEvent`, `@ContractQuery`, `@Contract`, and legacy configured names) and related imports when `removeDecorators: true`
-- **Trusted decorator barrel pruning**: Skips trusted decorator-only local barrels from generated output when `removeDecorators: true`
-- **Boundary guard**: Throws `BoundaryViolationError` for strict output selectors before copying marked declarations outside the selected surface
-- **Unsafe dependency slice guard**: Throws `UnsafeDependencySliceError` for `safe-symbols` dependency files whose top-level behavior is not safe to slice
-- **Public contract output**: Includes marked `class`, `interface`, `type`, and `enum` declarations in generated contracts output without adding them to `MessageRegistry`
-- **Missing export repair**: Adds `export` to selected response types and selected public contracts when the source declaration is not exported
-- **Transitive dependency tracking**: Includes dependencies of dependencies through safe symbol recursion or file-mode FileGraph expansion, not just direct imports from entry files
-
----
-
-### 7. Context Config (`src/context-config.ts`)
-
-Encapsulates context configuration with path resolution capabilities. Created via factory method to ensure proper initialization.
-
-```typescript
-interface InputContextConfig {
-  readonly name: string             // Context name (e.g., 'lecture')
-  readonly path: string             // Base path to context (e.g., 'packages/lecture')
-  readonly sourceDir?: string       // Source subdirectory (default: 'src')
-  readonly tsconfigPath?: string    // TypeScript config (default: 'tsconfig.json', auto-detected)
-}
-
-class ContextConfig {
-  readonly name: string
-  readonly sourceDir: string        // Absolute path
-
-  static async create(input: InputContextConfig, configDir: string): Promise<ContextConfig>
-  async resolvePath(moduleSpecifier: string): Promise<{ resolvedPath: string | null; isExternal: boolean }>
-}
-```
-
-**Features**:
-- Factory method with async initialization (`create()`)
-- Path alias resolution via tsconfig.json (recursive `extends` support)
-- Module specifier resolution (relative, alias, external)
-- Convention over Configuration defaults (`src/`, `tsconfig.json`)
-
----
-
-### 8. Config Loader (`src/config-loader.ts`)
-
-Loads contracts configuration from `application.config.ts`.
-
-```typescript
-// Input interface for user configuration
-interface InputContextConfig {
-  readonly name: string             // Context name (e.g., 'lecture')
-  readonly path: string             // Base path to context (e.g., 'packages/lecture')
-  readonly sourceDir?: string       // Source subdirectory (default: 'src')
-  readonly tsconfigPath?: string    // TypeScript config (default: 'tsconfig.json', auto-detected)
-}
-
-// Class with path resolution capabilities (created via factory method)
-class ContextConfig {
-  readonly name: string
-  readonly sourceDir: string        // Absolute path
-
-  static async create(input: InputContextConfig, configDir: string): Promise<ContextConfig>
-  async resolvePath(moduleSpecifier: string): Promise<{ resolvedPath: string | null; isExternal: boolean }>
-}
-
-interface ContractsConfig {
-  readonly contexts: readonly ContextConfig[]
-  readonly outputs?: readonly ContractOutputConfig[]
-  readonly pathAliasRewrites?: Readonly<Record<string, string>>
-  readonly externalDependencies?: Readonly<Record<string, string>>
-  readonly decoratorNames: Required<DecoratorNames>
-  readonly contractMarkerNames: Required<ContractMarkerNames>
-  readonly trustedDecoratorSources?: readonly string[]
-  readonly dependencyStrategy: DependencyStrategy
-  readonly outputModuleSpecifiers: OutputModuleSpecifiers
-  readonly responseNamingConventions?: readonly ResponseNamingConvention[]
-  readonly removeDecorators?: boolean
-}
-
-interface ContractOutputConfig {
-  readonly name: string
-  readonly path: string
-  readonly select?: ContractOutputSelect
-  readonly registry?: boolean
-}
-
-interface ContractOutputSelect {
-  readonly visibility?: readonly ('public' | 'internal')[]
-  readonly kinds?: readonly string[]
-  readonly messageKinds?: readonly ('command' | 'query' | 'event')[]
-  readonly include?: 'all' | 'messages' | 'contracts'
-  readonly tags?: {
-    readonly include?: readonly string[]
-    readonly exclude?: readonly string[]
-  }
-}
-
-class ConfigLoader {
-  async load(configPath: string): Promise<ContractsConfig>
-}
-
-class ConfigLoadError extends Error {
-  constructor(message: string)
-}
-```
-
-**Context Resolution** (Convention over Configuration):
-- String path: `'packages/lecture'` → name = 'lecture', sourceDir = 'src', tsconfig auto-detected
-- Glob pattern: `'packages/*'` → Each directory resolved with same defaults
-- Object: `{ name, path, sourceDir?, tsconfigPath? }` → Explicit configuration with optional overrides
-
-**Output Resolution**:
-- If `contracts.outputs` is absent, CLI single-output mode requires `--output-dir`.
-- If `contracts.outputs` is present, each output path is resolved relative to the config file.
-- `--output-dir` is rejected when `contracts.outputs` is configured.
-- The hexai plugin marks `-o, --output-dir` optional because it is required only for legacy single-output config without `outputs[]`; omit it when `outputs[]` is configured.
-- `outputs[].registry: true` generates a registry for that output; `--registry` enables registry generation for every configured output.
-- `select.visibility` is the primary boundary for public/internal output separation. `select.tags` is auxiliary filtering only.
-
----
-
-### 9. CLI (`src/cli.ts`)
-
-Command-line interface and full pipeline orchestration.
-
-```bash
-Usage: generate-contracts [options]
-
-Options:
-  -o, --output-dir <path>               Output directory for generated contracts; required unless contracts.outputs is configured
-  -c, --config <path>                   Path to config file (default: application.config.ts)
-  --include <all|messages|contracts>    Contract categories to generate (default: all)
-  --messages <event,command,query>      Message subtype filter (default: event,command,query)
-  -m, --message-types <types>           Legacy alias for --messages
-  --dependency-strategy <file|safe-symbols>
-                                        Dependency strategy (default: safe-symbols)
-  --output-module-specifiers <js|extensionless>
-                                        Generated relative module specifier style
-  --registry                            Generate MessageRegistry export
-  --generate-message-registry           Legacy verbose alias for --registry
-  --dry-run                             Print plan/summary without writing files
-  --check                               Verify generated output freshness for CI
-  -h, --help                            Show this help message
-```
-
-The default scope is `--include all` with strict entry symbol extraction and `--dependency-strategy safe-symbols`, which emits selected decorated public messages and marked general contract declarations as a strict public contract surface while slicing retained dependency files when statically safe. `--include messages` selects only decorated message contracts. `--include contracts` selects only general contract declarations. The `--messages` filter applies only to message subtypes and does not filter general contracts. Use `--dependency-strategy file` when a migration requires full dependency-file copying. Unsafe dependency modules in the default mode throw `UnsafeDependencySliceError` instead of falling back to whole-file copying. Registry generation includes selected decorated messages only.
-
-**Programmatic API**:
-```typescript
-async function run(args: string[]): Promise<void>
-```
-
-**Processing Flow**:
-1. Load config
-2. Resolve CLI generation scope from `--include` and `--messages`
-3. Normalize either a single `--output-dir` plan or configured `contracts.outputs[]` plans
-4. Run `ContractsPipeline` for each context and output plan, using a temporary output directory when `--check` or `--dry-run` is active
-5. Output results (events, commands, queries, public contracts, files count) or dry-run/check summary
-
----
-
-### 10. hexai Plugin (`src/hexai-plugin.ts`)
-
-CLI plugin definition for integration with the hexai CLI tool.
-
-```typescript
-export const cliPlugin: HexaiCliPlugin<ContractsPluginConfig> = {
-  name: "generate-contracts",
-  description: "Extract public messages and contracts from bounded contexts",
-  options: [
-    { flags: "-o, --output-dir <path>", description: "Output directory", required: false },
-    { flags: "--include <scope>", description: "Generate all, messages, or contracts" },
-    { flags: "--messages <types>", description: "Filter message subtypes" },
-    { flags: "-m, --message-types <types>", description: "Legacy alias for --messages" },
-    { flags: "--dependency-strategy <strategy>", description: "Dependency strategy: file or safe-symbols" },
-    { flags: "--output-module-specifiers <style>", description: "Generated relative module specifier style" },
-    { flags: "--registry", description: "Generate message registry" },
-    { flags: "--generate-message-registry", description: "Legacy verbose alias for --registry" },
-    { flags: "--dry-run", description: "Print plan without writing files" },
-    { flags: "--check", description: "Verify generated output freshness" },
-  ],
-  run: async (args, config) => { ... }
-}
-```
-
-**Usage**:
-```bash
-pnpm hexai generate-contracts -o packages/contracts/src
-pnpm hexai generate-contracts -o packages/contracts/src --dry-run
-pnpm hexai generate-contracts -o packages/contracts/src --registry
-pnpm hexai generate-contracts -o packages/contracts/src --include messages --messages event,command
-pnpm hexai generate-contracts -o packages/contracts/src --include contracts
-pnpm hexai generate-contracts -o packages/contracts/src --dependency-strategy file
-pnpm hexai generate-contracts -o packages/contracts/src --check
-```
-
----
-
-### 11. Main Entry Point (`src/index.ts`)
-
-Provides the programmatic API.
-
-```typescript
-interface ProcessContextOptions {
-  contextName: string
-  path: string
-  sourceDir?: string
-  outputDir: string
-  pathAliasRewrites?: Map<string, string>
-  tsconfigPath?: string
-  decoratorNames?: DecoratorNames
-  contractMarkerNames?: ContractMarkerNames
-  trustedDecoratorSources?: readonly string[]
-  fileSystem?: FileSystem           // File system abstraction (default: nodeFileSystem)
-  logger?: Logger                   // Logger instance (default: noopLogger)
-  messageTypes?: MessageType[]      // Message types to extract ('event' | 'command' | 'query')
-  includePublicContracts?: boolean  // Include marked general contracts
-  dependencyStrategy?: DependencyStrategy // 'safe-symbols' default, or 'file' compatibility mode
-  outputModuleSpecifiers?: OutputModuleSpecifiers // 'js' default, or 'extensionless'
-  removeDecorators?: boolean        // Remove message decorators from output
-  responseNamingConventions?: readonly ResponseNamingConvention[]  // Patterns for matching response types
-}
-
-interface ProcessContextResult {
-  events: DomainEvent[]
-  commands: Command[]
-  queries: Query[]
-  publicContracts: PublicContract[]
-  copiedFiles: string[]
-}
-
-async function processContext(options: ProcessContextOptions): Promise<ProcessContextResult>
-```
-
-**Internal Implementation**: Creates and executes `ContractsPipeline`
-
----
-
-### 12. FileSystem Abstraction (`src/file-system.ts`)
-
-Abstracts file system access for testability and flexibility.
-
-```typescript
-interface FileStats {
-  isDirectory(): boolean
-  isFile(): boolean
-}
-
-interface FileSystem {
-  readFile(path: string): Promise<string>
-  readdir(path: string): Promise<string[]>
-  writeFile(path: string, content: string): Promise<void>
-  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>
-  exists(path: string): Promise<boolean>
-  stat(path: string): Promise<FileStats>
-}
-
-class NodeFileSystem implements FileSystem { ... }
-
-// Singleton instance
-const nodeFileSystem: FileSystem
-```
-
-**Purpose**:
-- Enable unit testing without actual file system via mocks
-- Unified async I/O
-- Future support for other environments (memory, remote, etc.)
-
----
-
-### 13. Logger Infrastructure (`src/logger.ts`)
-
-Provides a configurable logging interface.
-
-```typescript
-type LogLevel = "debug" | "info" | "warn" | "error"
-
-interface Logger {
-  debug(message: string): void
-  info(message: string): void
-  warn(message: string): void
-  error(message: string): void
-}
-
-interface ConsoleLoggerOptions {
-  level?: LogLevel  // Default: "info"
-}
-
-class ConsoleLogger implements Logger {
-  constructor(options?: ConsoleLoggerOptions)
-}
-
-// No-op singleton (for testing/library usage)
-const noopLogger: Logger
-```
-
-**Logging Points**:
-| Stage | Level | Content |
-|-------|-------|---------|
-| execute | info | Context processing start/complete |
-| scan | debug | Scan start, discovered file count |
-| parse | debug | Parse start, extracted events, commands, queries, and public contracts count |
-| resolve | debug | Dependency resolution start, graph node count |
-| select/copy | debug | Output selection, copy start, copied file count |
-
----
-
-### 14. ContractsPipeline Orchestrator (`src/pipeline.ts`)
-
-Orchestrator class encapsulating the entire extraction pipeline.
-
-```typescript
-interface PipelineDependencies {
-  readonly scanner: Scanner
-  readonly parser: Parser
-  readonly fileGraphResolver: FileGraphResolver
-  readonly fileCopier: FileCopier
-  readonly fileSystem: FileSystem
-  readonly logger: Logger
-}
-
-interface PipelineOptions {
-  readonly contextName: string
-  readonly sourceDir: string
-  readonly outputDir: string
-  readonly pathAliasRewrites?: Map<string, string>
-  readonly select?: ContractOutputSelect
-  readonly removeDecorators?: boolean
-}
-
-interface PipelineResult {
-  readonly events: DomainEvent[]
-  readonly commands: Command[]
-  readonly queries: Query[]
-  readonly publicContracts: PublicContract[]
-  readonly copiedFiles: string[]
-}
-
-interface ParsedMessages {
-  readonly events: DomainEvent[]
-  readonly commands: Command[]
-  readonly queries: Query[]
-  readonly publicContracts: PublicContract[]
-  readonly typeDefinitions: TypeDefinition[]
-}
-
 class ContractsPipeline {
-  // Factory method (auto-configure dependencies)
   static create(options: {
-    contextConfig: ContextConfig
-    decoratorNames?: DecoratorNames
-    contractMarkerNames?: ContractMarkerNames
-    trustedDecoratorSources?: readonly string[]
-    messageTypes?: MessageType[]
-    includePublicContracts?: boolean
-    dependencyStrategy?: DependencyStrategy
-    outputModuleSpecifiers?: OutputModuleSpecifiers
-    responseNamingConventions?: readonly ResponseNamingConvention[]
-    fileSystem?: FileSystem
-    logger?: Logger
-  }): ContractsPipeline
+    contextConfig: ContextConfig;
+    responseNamingConventions?: readonly ResponseNamingConvention[];
+    fileSystem?: FileSystem;                 // default nodeFileSystem
+    logger?: Logger;                         // default noopLogger
+    excludeDependencies?: string[];          // default: see section 8
+    decoratorNames?: DecoratorNames;
+    contractMarkerNames?: ContractMarkerNames;
+    trustedDecoratorSources?: TrustedDecoratorSources;
+    messageTypes?: MessageType[];            // default: all
+    includePublicContracts?: boolean;        // default true
+    dependencyStrategy?: DependencyStrategy; // default "safe-symbols"
+    outputModuleSpecifiers?: OutputModuleSpecifiers; // default "js"
+  }): ContractsPipeline;
 
-  // Test factory (direct dependency injection)
-  static fromDependencies(deps: PipelineDependencies): ContractsPipeline
+  static fromDependencies(deps: PipelineDependencies): ContractsPipeline;
 
-  // Execute full pipeline
-  async execute(options: PipelineOptions): Promise<PipelineResult>
-
-  // Step-by-step methods (for testing)
-  async scan(sourceDir: string): Promise<string[]>
-  async parse(files: string[], sourceRoot: string): Promise<ParsedMessages>
-  async resolve(entryPoints: string[], sourceRoot: string): Promise<FileGraph>
-  async copy(
+  execute(options: PipelineOptions): Promise<PipelineResult>;
+  scan(sourceDir: string): Promise<string[]>;
+  parse(files: string[], sourceRoot: string): Promise<ParsedMessages>;
+  resolve(entryPoints: string[], sourceRoot: string): Promise<FileGraph>;
+  copy(
     fileGraph: FileGraph,
     sourceRoot: string,
     outputDir: string,
@@ -779,512 +132,741 @@ class ContractsPipeline {
     dependencyStrategy?: DependencyStrategy,
     select?: ContractOutputSelect,
     outputModuleSpecifiers?: OutputModuleSpecifiers
-  ): Promise<string[]>
-  async exportBarrel(copiedFiles: string[], outputDir: string): Promise<void>
+  ): Promise<string[]>;
+  exportBarrel(
+    copiedFiles: string[],
+    outputDir: string,
+    outputModuleSpecifiers?: OutputModuleSpecifiers
+  ): Promise<void>;
+}
+
+interface PipelineDependencies {
+  readonly scanner: Scanner;
+  readonly parser: Parser;
+  readonly fileGraphResolver: FileGraphResolver;
+  readonly fileCopier: FileCopier;
+  readonly fileSystem: FileSystem;
+  readonly logger: Logger;
+}
+
+interface PipelineOptions {
+  readonly contextName: string;
+  readonly sourceDir: string;
+  readonly outputDir: string;
+  readonly pathAliasRewrites?: Map<string, string>;
+  readonly select?: ContractOutputSelect;
+  readonly removeDecorators?: boolean;
+  readonly outputModuleSpecifiers?: OutputModuleSpecifiers;
 }
 ```
 
-**Benefits**:
-- Testability through dependency injection
-- Independent testing of each pipeline stage
-- Clear separation of orchestration logic
+`create()` rejects an `entryStrategy` option with `ConfigurationError` and validates `dependencyStrategy`. `fromDependencies()` injects the stages directly for tests; the instance then uses the defaults for every other setting. `ParsedMessages` and `PipelineResult` are described in [Results](./DOMAIN-MODEL.md#8-results).
 
----
+## 3. Entry points
 
-### 15. Errors (`src/errors.ts`)
+### Standalone CLI (`src/cli.ts`)
 
-Provides a domain-specific error hierarchy.
+`dist/cli.js` calls `main()` only when it is the process entry. `main()` runs `run(process.argv.slice(2))`, prints `Error: <message>` for any thrown error and exits with code 1.
 
-```
-MessageParserError (base)
-├── BoundaryViolationError
-├── UnsafeDependencySliceError
-├── ConfigurationError
-│   └── ConfigLoadError
-├── FileSystemError
-│   ├── FileNotFoundError
-│   ├── FileReadError
-│   └── FileWriteError
-├── ParseError
-│   └── JsonParseError
-└── ResolutionError
-    └── ModuleResolutionError
-```
-
-**Error Handling Example**:
 ```typescript
-import { MessageParserError, FileReadError } from '@hexaijs/plugin-contracts-generator';
+function run(args: string[]): Promise<void>;
+function runWithConfig(
+  options: RunWithConfigOptions,
+  pluginConfig: ContractsPluginConfig
+): Promise<void>;
 
-try {
-  await processContext(options);
-} catch (error) {
-  if (error instanceof FileReadError) {
-    console.error(`Failed to read file: ${error.path}`);
-    console.error(`Cause: ${error.cause}`);
-  } else if (error instanceof MessageParserError) {
-    console.error(`Parser error: ${error.message}`);
-  }
+type IncludeMode = "all" | "messages" | "contracts";
+
+interface RunWithConfigOptions {
+  outputDir?: string;
+  include?: IncludeMode;
+  messageTypes?: MessageType[];
+  dependencyStrategy?: DependencyStrategy;
+  outputModuleSpecifiers?: OutputModuleSpecifiers;
+  generateMessageRegistry?: boolean;
+  dryRun?: boolean;
+  check?: boolean;
 }
 ```
 
----
+`ContractsPluginConfig` has the same fields as the `contracts` section of `application.config.ts`. These exports are internal: the package exports map does not expose `cli.js`.
 
-### 16. MessageRegistry (`src/runtime/message-registry.ts`)
+- **Argument parsing.** `parseArgs()` accepts `--flag value` and `--flag=value` and ignores unknown arguments. It throws a plain `Error` for a missing value, an invalid `--include` or `--messages` value, or the removed `--entry-strategy`. Invalid `--dependency-strategy` and `--output-module-specifiers` values go through the config validators and throw `ConfigLoadError`. The [README](../README.md#standalone-cli) lists the flags.
+- **Scope.** `resolveGenerationScope()` maps the flags to pipeline options:
 
-Runtime registry for registering and deserializing (dehydrating) message classes.
+  | `--include` | `messageTypes` | `includePublicContracts` |
+  |-------------|----------------|--------------------------|
+  | `all` (default) | the `--messages` value, or all | `true` |
+  | `messages` | the `--messages` value, or all | `false` |
+  | `contracts` | `[]` | `true` |
+
+- **Output plans.** `createOutputPlans()` returns one plan per `contracts.outputs[]` entry, or a single plan named `default` from `-o`. It throws when both or neither are given. Plan paths resolve against `config.configDir`. A plan's registry is on when `--registry` is set or the output sets `registry: true`.
+- **Precedence.** Module specifiers: output plan, then the CLI flag, then the config. Dependency strategy: the CLI flag, then the config.
+- **`--dry-run` and `--check`.** `createTemporaryOutputPlans()` points every plan at `<tmp>/<plan name>`. After generation, `--dry-run` logs each context's files, and `--check` compares each temporary directory with the real one file by file (`assertOutputMatchesGenerated()`). It lists up to 20 missing, extra and changed files per category and throws a plain `Error`. The temporary directory is removed in a `finally` block.
+- **Cross-context files.** After all contexts of a plan, `generateRegistry()` runs when the registry is on, and `generateReexports()` runs when `pathAliasRewrites` is set.
+
+### hexai plugin (`src/hexai-plugin.ts`)
+
+`cliPlugin` is a `HexaiCliPlugin<ContractsPluginConfig>` named `generate-contracts`. Its options mirror the standalone flags except `-c`. `run(args, config)` converts Commander's camelCase arguments into `RunWithConfigOptions` and calls `runWithConfig()`.
+
+`toContractsConfig()` turns the plugin config into a `ContractsConfig`. It uses `process.cwd()` as `configDir`, applies the same validators as the config loader, defaults `removeDecorators` to `true`, and rejects `entryStrategy` with a plain `Error`.
+
+### Programmatic API (`src/index.ts`)
+
+`processContext(options)` rejects `entryStrategy` with `ConfigurationError`, creates a `ContextConfig` relative to `process.cwd()`, and runs one pipeline. It does not generate a registry or re-export files. Unlike the CLI, it leaves `removeDecorators` unset, so decorators stay in the output by default. The [README](../README.md#programmatic-api) lists the options.
+
+`index.ts` re-exports `cliPlugin` from `hexai-plugin.ts`, which imports `cli.ts`, which imports `ContractsPipeline` and `ConsoleLogger` from `index.ts`. The cycle works because no module calls into the others at load time; keep it that way.
+
+## 4. Configuration
+
+### Config loader (`src/config-loader.ts`)
+
+```typescript
+interface ContractsConfig {
+  readonly configDir: string;
+  readonly contexts: readonly ContextConfig[];
+  readonly outputs?: readonly ContractOutputConfig[];
+  readonly pathAliasRewrites?: Readonly<Record<string, string>>;
+  readonly externalDependencies?: Readonly<Record<string, string>>;
+  readonly decoratorNames: Required<DecoratorNames>;
+  readonly contractMarkerNames: Required<ContractMarkerNames>;
+  readonly trustedDecoratorSources?: TrustedDecoratorSources;
+  readonly dependencyStrategy: DependencyStrategy;
+  readonly outputModuleSpecifiers: OutputModuleSpecifiers;
+  readonly responseNamingConventions?: readonly ResponseNamingConvention[];
+  readonly removeDecorators?: boolean;
+}
+
+class ConfigLoader {
+  constructor(options?: { fileSystem?: FileSystem });
+  load(configPath: string): Promise<ContractsConfig>;
+}
+
+function resolveContextEntries(
+  entries: readonly (string | InputContextConfig)[],
+  configDir: string,
+  fs?: FileSystem
+): Promise<ContextConfig[]>;
+```
+
+`load()` reads the file, transpiles it with `ts.transpileModule()` to CommonJS, and evaluates the result with `new Function("exports", code)`. No `require` exists in that scope, so a config with runtime imports fails. The default export (or the `exports` object) must contain a `contracts` section. `extractContractsConfig()` then:
+
+1. requires `contracts` and an array `contracts.contexts`, and rejects `entryStrategy`;
+2. resolves contexts with `resolveContextEntries()` and requires at least one;
+3. merges `decoratorNames` and `contractMarkerNames` with the legacy defaults;
+4. validates `outputs` (`validateContractOutputs()`), `trustedDecoratorSources`, `dependencyStrategy` and `outputModuleSpecifiers`, filling the defaults `"safe-symbols"` and `"js"`;
+5. defaults `removeDecorators` to `true`.
+
+All validation failures throw `ConfigLoadError`. The `validate*()` functions are exported for `cli.ts` and `hexai-plugin.ts`; the package root exports only `ConfigLoader`, `resolveContextEntries` and `ContractsConfig`. `externalDependencies` is stored and never read.
+
+`resolveContextEntries()` handles three entry shapes:
+
+- **Plain string**: one context named after the last path segment.
+- **String with `*`**: exactly one `*` is allowed. The prefix names a directory to list; each subdirectory becomes a context named after itself. A non-empty suffix keeps only subdirectories that contain that path. A missing prefix directory yields no contexts.
+- **Object**: requires `name` and `path` (else `ConfigLoadError`), then calls `ContextConfig.create()`.
+
+### Context config (`src/context-config.ts`)
+
+```typescript
+interface InputContextConfig {
+  readonly name: string;
+  readonly path: string;
+  readonly sourceDir?: string;          // default "src", relative to path
+  readonly tsconfigPath?: string;       // default "tsconfig.json", relative to path
+  readonly responseNamingConventions?: readonly ResponseNamingConvention[];
+}
+
+class ContextConfig {
+  readonly name: string;
+  readonly sourceDir: string;           // absolute
+  readonly responseNamingConventions?: readonly ResponseNamingConvention[];
+
+  static create(input: InputContextConfig, configDir: string, fs?: FileSystem): Promise<ContextConfig>;
+  static createSync(
+    name: string,
+    sourceDir: string,
+    fs?: FileSystem,
+    responseNamingConventions?: readonly ResponseNamingConvention[]
+  ): ContextConfig;                     // no tsconfig; used by tests
+
+  resolvePath(moduleSpecifier: string): Promise<{ resolvedPath: string | null; isExternal: boolean }>;
+}
+```
+
+`create()` throws a plain `Error` when `name` or `path` is missing. It loads the tsconfig only when the file exists, through `ts.parseConfigFileTextToJson()` and `ts.parseJsonConfigFileContent()`, so `extends` chains are honored. It keeps only `compilerOptions.paths`, resolved against `baseUrl` (or the tsconfig directory).
+
+`resolvePath()` handles non-relative specifiers. The first `paths` pattern that matches wins (no longest-prefix ordering). Each target is tried with `.ts`, `.tsx`, `.d.ts` and `/index.ts`; a hit inside `sourceDir` is local. Anything else is external.
+
+The pipeline prefers the top-level `responseNamingConventions` and falls back to the context's own list.
+
+## 5. Scanner
+
+`src/scanner.ts` finds candidate entry files cheaply; the parser makes the final decision.
+
+```typescript
+interface ScannerOptions {
+  exclude?: string[];                   // default below
+  fileSystem?: FileSystem;
+  decoratorNames?: DecoratorNames;
+  contractMarkerNames?: ContractMarkerNames;
+  messageTypes?: MessageType[];         // default: all
+  includePublicContracts?: boolean;     // default: messageTypes === undefined
+  trustedDecoratorSources?: TrustedDecoratorSources;
+}
+
+class Scanner {
+  constructor(options?: ScannerOptions);
+  scan(sourceDir: string): Promise<string[]>;
+}
+```
+
+`scan()` globs `<sourceDir>/**/*.ts`, excluding `**/node_modules/**`, `**/dist/**`, `**/*.d.ts`, `**/*.test.ts` and `**/*.spec.ts`. A file is a candidate when either check passes:
+
+1. **Text patterns.** A line starts with `@<name>`, where `<name>` is the legacy decorator name of a selected message type. With general contracts included, two more patterns count: a line that starts with `@<contract marker name>`, and a comment line (`//`, `/*`, `/**` or `*`) that holds `@<contract marker name>(` or `@Contract(`.
+2. **Matcher.** The file contains `@` and the text of a trusted decorator source. The scanner then parses it and asks `ContractDecoratorMatcher` for a class decorator of a selected message kind, a non-message class decorator, or a non-message comment marker on a class, interface, type alias or enum.
+
+Canonical `Contract*` decorators are found only by the second check, so a file must name a trusted source in its text.
+
+## 6. Parser and marker matching
+
+### Parser (`src/parser.ts`)
+
+```typescript
+interface ParserOptions {
+  decoratorNames?: DecoratorNames;
+  contractMarkerNames?: ContractMarkerNames;
+  responseNamingConventions?: readonly ResponseNamingConvention[];
+  messageTypes?: readonly MessageType[];
+  includePublicContracts?: boolean;     // default: messageTypes === undefined
+  trustedDecoratorSources?: TrustedDecoratorSources;
+}
+
+class Parser {
+  constructor(options?: ParserOptions);
+  parse(sourceCode: string, sourceFileInfo: SourceFile): ParseResult;
+}
+```
+
+`parse()` walks every node of the file:
+
+- **Classes.** Each decorator that the matcher resolves to a message kind in `messageTypes` produces a message (`buildMessage()`). With general contracts included, a non-message decorator, or else a non-message leading comment marker, produces a general contract.
+- **Type aliases and interfaces.** Each produces a `TypeDefinition`. With general contracts included, a non-message leading comment marker also produces a general contract.
+- **Enums.** With general contracts included, a non-message leading comment marker produces a general contract.
+
+After the walk, `applyNamingConventionMatching()` sets `resultType` on commands and queries without a `response` option. The [domain model guide](./DOMAIN-MODEL.md#4-messages) lists how each message field is filled.
+
+The parser trusts only `@hexaijs/contracts`, `@hexaijs/contracts/decorators` and the configured sources. `FileCopier` additionally trusts `@hexaijs/plugin-contracts-generator`, so a canonical decorator imported from the generator package is not counted as a contract but is still extracted when its file is an entry file for another reason. Keep the two lists in sync when you change either.
+
+### Marker matching (`src/contract-decorator-matcher.ts`)
+
+`ContractDecoratorMatcher` is the single interpreter of markers for the scanner, parser and copier.
+
+```typescript
+interface ContractDecoratorMatcherOptions {
+  readonly trustedDecoratorSources?: readonly string[];
+  readonly decoratorNames?: DecoratorNames;
+  readonly contractMarkerName?: string;
+  readonly allowUnboundDecorators?: boolean;   // default false
+}
+
+class ContractDecoratorMatcher {
+  constructor(options?: ContractDecoratorMatcherOptions);
+  buildImportBindingIndex(sourceFile: ts.SourceFile): ReadonlyMap<string, ImportBinding>;
+  matchDecorator(
+    decorator: ts.Decorator,
+    bindingsOrSourceFile: ReadonlyMap<string, ImportBinding> | ts.SourceFile
+  ): ContractDecoratorMatch | undefined;
+  matchLeadingCommentMarker(node: ts.Node, sourceFile: ts.SourceFile): ContractCommentMarkerMatch | undefined;
+  matchCommentText(text: string, range?: ts.CommentRange): ContractCommentMarkerMatch | undefined;
+}
+```
+
+The matcher holds one definition per recognized name:
+
+| Name | Canonical name | Kind | Legacy |
+|------|----------------|------|--------|
+| `Contract` | `Contract` | from the `kind` option, default `contract` | no |
+| `ContractCommand`, `ContractQuery`, `ContractEvent` | itself | `command`, `query`, `event` | no |
+| `decoratorNames.command`, `.query`, `.event` (default `PublicCommand`, `PublicQuery`, `PublicEvent`) | `ContractCommand`, `ContractQuery`, `ContractEvent` | `command`, `query`, `event` | yes |
+| `contractMarkerName` (default `PublicContract`) | `Contract` | from the `kind` option, default `contract` | yes |
+
+`matchDecorator()` accepts `@Name` and `@Name(...)` where `Name` is an identifier; property accesses such as `@Contracts.ContractCommand()` never match. It resolves the definition through the import binding of the local name:
+
+- **No binding**: matches legacy names, canonical names that are also configured as custom names, and, with `allowUnboundDecorators`, every defined name.
+- **Named, value import from a trusted source**: matches the definition of the imported name, so aliases work.
+- **Any other binding** (untrusted source, type-only, default or namespace import): matches only when the local name is a legacy name.
+
+`matchLeadingCommentMarker()` reads the leading comments of a node. `matchCommentText()` strips comment syntax from each line and accepts a line that is exactly `@Name(...)` for any defined name, canonical names included.
+
+Marker options are parsed from the first argument (decorators) or the parenthesized text (comments) when it is an object literal. Only property assignments with identifier or string names count, and only string, number, boolean and array literal values; anything else becomes `undefined`. `visibility` is `internal` only for the literal `"internal"`.
+
+## 7. Selection
+
+`src/contract-selector.ts` implements output selection:
+
+```typescript
+interface SelectableContract {
+  readonly name: string;
+  readonly contractType?: "message" | "contract";
+  readonly kind?: ContractKind;
+  readonly messageType?: MessageContractKind;
+  readonly visibility?: ContractVisibility;
+  readonly tags?: readonly string[];
+}
+
+function isContractSelected(contract: SelectableContract, select: ContractOutputSelect | undefined): boolean;
+function hasStrictOutputSelection(select: ContractOutputSelect | undefined): boolean;
+```
+
+`isContractSelected()` returns `true` without a `select`, and otherwise requires every set field to match (the [README](../README.md#multiple-outputs) describes each field). Three places call it with the same `select`:
+
+1. `ContractsPipeline.selectMessages()` filters the parsed views, which decides entry points, export repair, registry content and result counts.
+2. `FileCopier.findTargetDeclarations()` filters the declarations it extracts from each entry file.
+3. `FileCopier.assertSelectedBoundary()` checks every file about to be written, but only when `hasStrictOutputSelection()` is `true` (any `select` field is set). Any marked declaration in the file that the selection rejects raises `BoundaryViolationError`, which names each offending declaration with its kind and visibility.
+
+## 8. File graph resolver
+
+`src/file-graph-resolver.ts` builds the import graph that the copier walks.
+
+```typescript
+interface FileGraphResolverOptions {
+  contextConfig: ContextConfig;
+  fileSystem?: FileSystem;
+  excludeDependencies?: string[];       // default [] here; the pipeline passes its own list
+}
+
+interface ImportInfo {
+  moduleSpecifier: string;
+  resolvedPath: string | null;
+  isExternal: boolean;
+  importedNames: string[];
+}
+
+interface FileNode {
+  absolutePath: string;
+  relativePath: string;                 // relative to the context source directory
+  imports: ImportInfo[];
+  isEntryPoint: boolean;
+}
+
+interface FileGraph {
+  nodes: Map<string, FileNode>;
+  entryPoints: Set<string>;
+  excludedPaths: Set<string>;
+}
+
+class FileGraphResolver {
+  static create(options: FileGraphResolverOptions): FileGraphResolver;
+  buildGraph(entryPoints: string[], sourceRoot: string): Promise<FileGraph>;
+}
+```
+
+`buildGraph()` walks breadth-first from the entry files. For each file it reads every top-level `import` and every `export ... from`:
+
+- **Relative specifiers** resolve to `<path>.ts`, `<path>.tsx` or `<path>/index.ts`. A specifier ending in `.js`, `.mjs` or `.cjs` resolves to the `.ts` or `.tsx` file with the same base name, without the index fallback. An unresolved relative specifier gets `resolvedPath: null` and is not followed.
+- **Other specifiers** go through `ContextConfig.resolvePath()` (see [Context config](#context-config-srccontext-configts)). Local hits are followed; the rest are external.
+- **Excluded files** match an `excludeDependencies` pattern (minimatch with `matchBase`, against the absolute path). They land in `excludedPaths` and are not followed. The pipeline passes `**/*.test.ts`, `**/*.spec.ts`, `**/*.eh.ts`, `**/db.ts` and `**/infra/**`.
+
+The graph holds every reachable local file, used or not. The copier decides what to write. A file outside the source directory gets a `relativePath` that starts with `../`.
+
+## 9. File copier
+
+`src/file-copier.ts` turns the graph into output files.
+
+```typescript
+interface CopyOptions {
+  sourceRoot: string;
+  outputDir: string;
+  fileGraph: FileGraph;
+  pathAliasRewrites?: Map<string, string>;
+  removeDecorators?: boolean;
+  responseTypesToExport?: Map<string, string[]>;   // file -> unexported response types
+  responseTypesToInclude?: Map<string, string[]>;  // file -> response types to keep
+  publicContractsToExport?: Map<string, string[]>; // file -> unexported general contracts
+  messageTypes?: readonly MessageType[];
+  decoratorNames?: DecoratorNames;
+  contractMarkerNames?: ContractMarkerNames;
+  trustedDecoratorSources?: TrustedDecoratorSources;
+  includePublicContracts?: boolean;
+  dependencyStrategy?: DependencyStrategy;         // default "safe-symbols"
+  select?: ContractOutputSelect;
+  outputModuleSpecifiers?: OutputModuleSpecifiers; // default "js"
+}
+
+interface CopyResult {
+  copiedFiles: string[];
+  rewrittenImports: Map<string, string[]>;         // output file -> applied rewrites
+}
+
+class FileCopier {
+  constructor(options?: { fileSystem?: FileSystem });
+  copyFiles(options: CopyOptions): Promise<CopyResult>;
+  generateBarrelExport(
+    copiedFiles: string[],
+    outputDir: string,
+    options?: { outputModuleSpecifiers?: OutputModuleSpecifiers }
+  ): string;
+}
+```
+
+`copyFiles()` runs in three phases.
+
+### Phase 1: entry extraction
+
+For every entry node, `preprocessEntryFiles()`:
+
+1. skips the file when `findTargetDeclarations()` finds no selected target in it;
+2. extracts the targets with `extractSymbolsFromEntry()` (below);
+3. strips markers from a copy of the result when `removeDecorators` is set, so decorator imports do not count as dependencies;
+4. with `safe-symbols`, rejects the entry if it still holds a local `import("./x")` type;
+5. records the remaining imports that resolve to local, non-entry files as retained imports.
+
+`extractSymbolsFromEntry()` works on the entry file's syntax tree:
+
+1. **Targets.** Message classes whose decorator kind is in `messageTypes`, general contract classes (decorator or comment marker) and marked interfaces, type aliases and enums, each filtered by `select`.
+2. **Related names.** Same-file response types from `responseTypesToInclude`, plus fixed names for each target message class `X`: `XResponse` and `XPayload`; when `X` is `<Base>Request`, also `<Base>Response` and `<Base>Payload`; when `X` is `<Base>Query`, also `<Base>QueryResult` and `<Base>Payload`. A related name counts only if the file declares it.
+3. **Local closure.** Identifiers used by the targets and related names pull in top-level interfaces, type aliases, variables, classes, functions and enums of the same file, recursively.
+4. **Imports.** Only imports that bind a used identifier stay. Default, namespace, aliased, mixed default-and-named and type-only default imports are preserved; unused named specifiers are dropped from mixed imports when the rewrite is safe. Qualified references such as `Types.Inner.User` keep their namespace import.
+5. **Emitting.** The output lists the kept imports, then the local declarations, then the targets. Imports and general contract classes go through the TypeScript printer; other declarations are copied as source text. Every emitted declaration without `export` gets one (`appendNodeWithExport()`, `ensureClassExport()`), so private helpers of an entry file become exports of the generated file.
+
+This is syntax-tree expansion, not type-checker analysis.
+
+### Phase 2: dependency planning
+
+- **`safe-symbols`.** Retained imports that point outside the source directory (a `relativePath` starting with `../`) become whole-file dependencies. The rest go to `DependencySymbolSlicer` (section 10), which returns sliced contents and any further whole-file dependencies it met. Whole-file dependencies are expanded transitively through the graph.
+- **`file`.** The retained import targets are expanded transitively through the graph, and every file in the set is copied whole.
+
+### Phase 3: writing
+
+For each node of the graph, `resolveNodeContent()` picks the extracted entry content, the whole file, the sliced content or nothing. Then:
+
+1. With `removeDecorators`, a non-entry file that only re-exports decorators from trusted sources is skipped (`isTrustedDecoratorOnlyHelperFile()`).
+2. `assertSelectedBoundary()` runs the boundary check (section 7).
+3. `applyTransformations()` rewrites the content in this order:
+   1. remove imports and exports of excluded files;
+   2. with `removeDecorators`, remove marker comments, contract decorators and decorator-only imports (`removeContractDecorators()`); the removal matcher also recognizes the default `PublicContract` name when a custom marker name is configured;
+   3. add `export` to the response types in `responseTypesToExport`;
+   4. add `export` to the general contracts in `publicContractsToExport`;
+   5. rewrite tsconfig path aliases that resolve inside the graph to relative specifiers;
+   6. with `js` specifiers, normalize relative specifiers that point at copied files to `.js`;
+   7. apply `pathAliasRewrites` as plain-text prefix replacements over the whole file.
+4. `writeOutputFile()` writes to `<outputDir>/<relativePath>`, creating directories as needed. Read and write failures become `FileReadError` and `FileWriteError`.
+
+`generateBarrelExport()` returns one `export * from '<specifier>'` line per copied file, sorted, without a trailing newline. The pipeline writes it as `<context>/index.ts`, even when it is empty.
+
+## 10. Dependency symbol slicer
+
+`src/dependency-symbol-slicer.ts` implements `safe-symbols` for dependency files.
+
+```typescript
+interface RetainedImportedSymbol {
+  readonly importedName: string;
+  readonly localName: string;
+  readonly importKind: "named" | "default" | "namespace";
+  readonly isTypeOnly: boolean;
+}
+
+interface RetainedLocalImport {
+  readonly sourcePath: string;
+  readonly moduleSpecifier: string;
+  readonly resolvedPath: string;
+  readonly importedSymbols: readonly RetainedImportedSymbol[];
+}
+
+interface DependencySliceRequest {
+  readonly fileGraph: FileGraph;
+  readonly retainedLocalImports: readonly RetainedLocalImport[];
+  readonly wholeFileDependencyPaths?: ReadonlySet<string>;
+}
+
+interface DependencySliceResult {
+  readonly contents: ReadonlyMap<string, string>;
+  readonly wholeFileRetainedImports: readonly RetainedLocalImport[];
+}
+
+class DependencySymbolSlicer {
+  constructor(options: { readonly fileSystem: FileSystem });
+  slice(request: DependencySliceRequest): Promise<DependencySliceResult>;
+}
+```
+
+The slicer keeps a queue of files and, per file, the set of symbols required from it:
+
+1. A retained import into a whole-file path is recorded and not sliced. Any other retained import must be all named imports, or the slicer throws; each imported name becomes a required symbol of the target file.
+2. For each queued file, it rejects the file if `findUnsafeReason()` finds an unsafe construct, indexes the top-level declarations (rejecting duplicates), and walks from the required symbols through the identifiers they reference, including values referenced by `typeof`.
+3. It keeps the import specifiers the kept declarations use. Named imports of local files enqueue new required symbols there; default and namespace imports that are still needed throw.
+4. It prints the kept imports and statements with the TypeScript printer.
+5. A file is sliced again when its required set grows; an unchanged set is skipped.
+
+Every rejection throws `UnsafeDependencySliceError(filePath, reason)`. The reasons:
+
+| Reason | Cause |
+|--------|-------|
+| `local import type: <specifier>` | `import("./x").T` referring to a local file (also checked in entry files). |
+| `dynamic import` | `import()` anywhere in the file. |
+| `side-effect import` | `import "./setup"`. |
+| `export declaration` | `export { ... }`, `export * from`, `export default` or `export =`. |
+| `class decorator`, `class member decorator` | Decorators on a class, a member or a constructor parameter. |
+| `class heritage/extends` | An `extends` clause that is not a plain identifier or contains an unsafe expression. |
+| `class static block`, `class computed member name`, `class static member initializer` | The named class construct. |
+| `enum initializer` | Any enum member with an initializer. |
+| `unsafe top-level variable initializer` | An initializer containing a call, `new`, tagged template, `await`, `yield`, `delete`, assignment, or `++`/`--`. |
+| `top-level statement` | Any other top-level statement, such as an expression statement. |
+| `duplicate top-level declaration: <name>` | Two top-level declarations with the same name. |
+| `missing required symbol: <name>` | A required symbol is not declared at the top level. |
+| `unsupported import shape: default import`, `... namespace import` | A needed default or namespace import. |
+
+## 11. Module specifiers
+
+`src/module-specifier.ts` formats the relative specifiers the generator writes. `DEFAULT_OUTPUT_MODULE_SPECIFIERS` is `"js"`.
+
+| Function | Result |
+|----------|--------|
+| `formatRelativeTypeScriptFileSpecifier(relativePath, style)` | Drops `.ts`/`.tsx`, ensures a `./` or `../` prefix, appends `.js` in `js` style. |
+| `formatRelativePathFromFile(fromFile, toFile, style)` | The specifier from one output file to another. |
+| `formatRelativeIndexSpecifier(relativeDir, style)` | `./dir/index.js` in `js` style, `./dir` in `extensionless` style. |
+| `formatRelativeModuleSpecifier(specifier, style)` | Appends `.js` in `js` style unless it is already there. |
+
+## 12. Registry generation and runtime
+
+### Registry generator (`src/registry-generator.ts`)
+
+```typescript
+interface RegistryGeneratorOptions {
+  readonly messageRegistryImport: string;   // default "@hexaijs/plugin-contracts-generator/runtime"
+  readonly useNamespace?: boolean;          // default false
+  readonly outputModuleSpecifiers?: OutputModuleSpecifiers; // default "js"
+}
+
+interface ContextMessages {
+  readonly contextName: string;
+  readonly events: readonly DomainEvent[];
+  readonly commands: readonly Command[];
+  readonly queries?: readonly Query[];
+  readonly importPath?: string;             // default "./<contextName>/index.js"
+}
+
+class RegistryGenerator {
+  constructor(options?: Partial<RegistryGeneratorOptions>);
+  generate(contexts: readonly ContextMessages[]): string;
+}
+```
+
+`generate()` sorts contexts by name and, within each context, events, commands and queries by name, and registers them in that order. Without any message it returns an empty registry. Contexts without messages get no import.
+
+The CLI uses namespace mode (`useNamespace: true`) and computes each `importPath` relative to the output directory:
+
+```typescript
+import { MessageRegistry } from "@hexaijs/plugin-contracts-generator/runtime";
+import * as orders from "./orders/index.js";
+import * as videoLesson from "./video-lesson/index.js";
+
+export * as orders from "./orders/index.js";
+export * as videoLesson from "./video-lesson/index.js";
+
+export const messageRegistry = new MessageRegistry()
+    .register(orders.OrderPlaced)
+    .register(orders.PlaceOrderCommand)
+    .register(videoLesson.VideoLessonStarted);
+```
+
+Namespace names are context names converted from kebab-case to camelCase. Namespaces keep same-named classes from different contexts apart. Direct mode (the class default) imports message names directly and fails to compile when two contexts share a class name:
+
+```typescript
+import { MessageRegistry } from "@hexaijs/plugin-contracts-generator/runtime";
+import { OrderPlaced, PlaceOrderCommand } from "./orders/index.js";
+
+export const messageRegistry = new MessageRegistry()
+    .register(OrderPlaced)
+    .register(PlaceOrderCommand);
+```
+
+### Runtime (`src/runtime/message-registry.ts`)
+
+The runtime entry imports nothing from the rest of the package, so generated code can load it without loading the TypeScript compiler.
 
 ```typescript
 type Version = string | number | undefined;
 
 interface MessageHeaders {
-  id: string
-  type: string
-  schemaVersion?: Version
-  createdAt: Date
-  [key: string]: unknown
+  id: string;
+  type: string;
+  schemaVersion?: Version;
+  createdAt: Date;
+  [key: string]: unknown;
 }
 
-interface MessageClass<T = unknown> {
-  getSchemaVersion(): Version
-  getType(): string
-  from(rawPayload: Record<string, unknown>, header?: MessageHeaders): T
-  new (...args: unknown[]): T
+interface MessageClass<T = any> {
+  getSchemaVersion(): Version;
+  getType(): string;
+  from(rawPayload: Record<string, unknown>, header?: MessageHeaders): T;
+  new (payload: any, options?: any): T;
 }
 
 class MessageRegistry {
-  register(messageClass: MessageClass): this
-  dehydrate<T>(header: MessageHeaders, body: Record<string, unknown>): T
-  has(type: string, version?: Version): boolean
-  size(): number
+  register(messageClass: MessageClass): this;
+  dehydrate<T>(header: MessageHeaders, body: Record<string, unknown>): T;
+  has(type: string, version?: Version): boolean;
+  size(): number;
 }
 ```
 
-**Usage Example**:
-```typescript
-import { MessageRegistry } from '@hexaijs/plugin-contracts-generator/runtime';
-import { LectureCreated, VideoLessonStarted } from '@libera/contracts';
+The registry key is `type` or `type:version`. `register()` throws on a duplicate key; `dehydrate()` throws for an unknown key and otherwise returns `messageClass.from(body, header)`. `runtime/index.ts` exports `MessageRegistry`, `MessageClass` and `MessageHeaders`; `Version` stays internal.
 
-const registry = new MessageRegistry()
-  .register(LectureCreated)
-  .register(VideoLessonStarted);
+## 13. Re-export generation
 
-// Deserialize message
-const event = registry.dehydrate<LectureCreated>(header, body);
-```
-
-**Key Features**:
-- Register classes by message type + version
-- Convert raw payload to actual message instance
-- Prevent duplicate registration (throws error)
-
----
-
-### 17. RegistryGenerator (`src/registry-generator.ts`)
-
-Automatically generates MessageRegistry registration code based on selected extracted message contracts. General contract declarations are intentionally excluded from registry generation.
-
-```typescript
-interface RegistryGeneratorOptions {
-  readonly messageRegistryImport: string  // Default: "@hexaijs/plugin-contracts-generator/runtime"
-  readonly useNamespace?: boolean         // Default: false, true enables namespace mode
-}
-
-interface ContextMessages {
-  readonly contextName: string
-  readonly events: readonly DomainEvent[]
-  readonly commands: readonly Command[]
-  readonly queries?: readonly Query[]
-  readonly importPath?: string
-}
-
-class RegistryGenerator {
-  constructor(options?: Partial<RegistryGeneratorOptions>)
-  generate(contexts: readonly ContextMessages[]): string
-}
-```
-
-**Namespace Mode** (`useNamespace: true`, used by the CLI-generated root registry):
-
-```typescript
-// contracts/src/index.ts
-import { MessageRegistry } from "@hexaijs/plugin-contracts-generator/runtime";
-import * as lecture from "./lecture";
-import * as videoLesson from "./video-lesson";
-
-export * as lecture from "./lecture";
-export * as videoLesson from "./video-lesson";
-
-export const messageRegistry = new MessageRegistry()
-    .register(lecture.LectureCreated)
-    .register(lecture.LectureExpanded)
-    .register(videoLesson.VideoLessonStarted);
-```
-
-**Benefits**:
-- **Name collision prevention**: Classes with the same name from different contexts are distinguished as `ctx.ClassName`
-- **Explicit origin**: Code clearly shows which context each class belongs to
-- **Type safety**: TypeScript recognizes each namespace as a separate module
-
-**Default direct mode** (`useNamespace: false`, the `RegistryGenerator` constructor default):
-```typescript
-import { MessageRegistry } from "@hexaijs/plugin-contracts-generator/runtime";
-import { LectureCreated, LectureExpanded } from "./lecture";
-import { VideoLessonStarted } from "./video-lesson";
-
-export const messageRegistry = new MessageRegistry()
-    .register(LectureCreated)
-    .register(LectureExpanded)
-    .register(VideoLessonStarted);
-```
-
-**Note**: Direct mode can cause `Duplicate identifier` errors when classes with the same name exist in multiple contexts
-
-**kebab-case → camelCase Conversion**:
-- `video-lesson` → `videoLesson`
-- `topic-generation` → `topicGeneration`
-
-**Purpose**:
-- Auto-generate MessageRegistry registration code for selected decorated events, commands, and queries in the contracts package's `index.ts`
-- Enable message deserialization in frontend
-
----
-
-### 18. ReexportGenerator (`src/reexport-generator.ts`)
-
-Generates re-export files for imports rewritten via `pathAliasRewrites`.
+`src/reexport-generator.ts` writes the bridge files for `pathAliasRewrites` (see the [README](../README.md#path-alias-rewrites)).
 
 ```typescript
 interface RewrittenImport {
-  readonly rewrittenPath: string    // e.g., "@libera/contracts/common/request"
-  readonly originalPath: string     // e.g., "@libera/common/request"
-  readonly symbols: readonly string[]
-  readonly isTypeOnly: boolean
+  readonly rewrittenPath: string;   // "@acme/contracts/shared/money"
+  readonly originalPath: string;    // "@acme/shared/money"
+  readonly symbols: readonly string[];
+  readonly isTypeOnly: boolean;
 }
 
 interface ReexportFile {
-  readonly relativePath: string     // e.g., "common/request.ts"
-  readonly originalModule: string   // Original module to re-export from
-  readonly symbols: readonly string[]
-  readonly isTypeOnly: boolean
+  readonly relativePath: string;    // "shared/money.ts"
+  readonly originalModule: string;  // "@acme/shared/money"
+  readonly symbols: readonly string[];
+  readonly isTypeOnly: boolean;
 }
 
 class ReexportGenerator {
-  constructor(options?: { fileSystem?: FileSystem })
-
-  // Analyze files to find imports matching pathAliasRewrites
-  async analyze(options: {
-    files: readonly string[]
-    pathAliasRewrites: ReadonlyMap<string, string>
-  }): Promise<ReexportFile[]>
-
-  // Generate re-export files
-  async generate(options: {
-    outputDir: string
-    reexportFiles: readonly ReexportFile[]
-  }): Promise<string[]>
+  constructor(options?: { fileSystem?: FileSystem });
+  analyze(options: { files: readonly string[]; pathAliasRewrites: ReadonlyMap<string, string> }): Promise<ReexportFile[]>;
+  generate(options: { outputDir: string; reexportFiles: readonly ReexportFile[] }): Promise<string[]>;
 }
 ```
 
-**Generated Output Example**:
+`analyze()` reads the copied files and finds import declarations whose specifier starts with a rewritten prefix. It maps each back to the original module, groups imports by rewritten specifier and merges their symbols. A group is type-only when every import in it is. The file path is the specifier without its package name (one segment, or two for a scoped package) plus `.ts`, or `index.ts` when nothing remains.
+
+`generate()` writes `export { A, B } from "<original>";` (or `export type { ... }`) to `<outputDir>/<relativePath>`. A default import is re-exported as a named symbol of the same name, which is only correct when the original module has a named export of that name.
+
+## 14. Infrastructure
+
+### File system (`src/file-system.ts`)
+
 ```typescript
-// common/request.ts
-export { UseCaseRequest, BaseRequest } from "@libera/common/request";
+interface FileStats {
+  isDirectory(): boolean;
+  isFile(): boolean;
+}
+
+interface FileSystem {
+  readFile(path: string): Promise<string>;
+  readdir(path: string): Promise<string[]>;
+  writeFile(path: string, content: string): Promise<void>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  stat(path: string): Promise<FileStats>;
+}
+
+class NodeFileSystem implements FileSystem { /* fs/promises, UTF-8 */ }
+const nodeFileSystem: FileSystem;
 ```
 
-**Purpose**:
-- When `pathAliasRewrites` maps `@libera/common` → `@libera/contracts/common`
-- Analyzes generated files to find imports using the rewritten paths
-- Generates re-export files that bridge the rewritten paths to original modules
+Every stage takes a `FileSystem`, so unit tests run against the in-memory implementation in `test-utils.ts`. Two places bypass it: `Scanner.scan()` lists files with `glob` on the real disk, and the CLI's `--check` comparison and temporary directories use `node:fs/promises` directly.
 
----
+### Logger (`src/logger.ts`)
 
-## Data Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     CLI / processContext()                                   │
-│                                                                              │
-│  ┌─ FileSystem ─┐  ┌─ Logger ─┐                                             │
-│  │ nodeFileSystem│  │noopLogger│   (dependency injection)                    │
-│  └──────────────┘  └──────────┘                                             │
-└───────────────────────────────────┬─────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌───────────────────────────────────────────────────────────────────────────────┐
-│  ConfigLoader                                                                  │
-│  ─────────────                                                                 │
-│  application.config.ts → ContractsConfig                                       │
-│  (contexts, path aliases, marker names, outputs/select,                        │
-│   dependencyStrategy, module specifiers, removeDecorators, ...)                │
-└───────────────────────────────────┬───────────────────────────────────────────┘
-                                    │
-                    ┌───────────────┴───────────────┐
-                    │   For each context            │
-                    └───────────────┬───────────────┘
-                                    ▼
-┌───────────────────────────────────────────────────────────────────────────────┐
-│  ContractsPipeline.execute()                                                   │
-│  ───────────────────────────                                                   │
-│  Pipeline orchestrator - coordinates each stage with logging                   │
-└───────────────────────────────────┬───────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────────────┐
-│  1. SCAN (Scanner)                                                             │
-│  ──────────────────                                                            │
-│  Contract decorator discovery + general contract marker discovery              │
-│  messageTypes filters only message decorators                                  │
-│  Output: string[] (entry files)                                                │
-└────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────────────┐
-│  2. PARSE (Parser)                                                             │
-│  ─────────────────                                                             │
-│  Message class parsing + general contract metadata extraction                  │
-│  Response matching by naming convention                                        │
-│  Output: ParsedMessages (commands, events, queries, publicContracts, types)    │
-└────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────────────┐
-│  3. RESOLVE (FileGraphResolver)                                                │
-│  ──────────────────────────────                                                │
-│  Dependency file resolution + FileGraph creation (with isEntryPoint)           │
-│  Output: FileGraph                                                             │
-└────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────────────┐
-│  4. ENTRY + DEPENDENCY STRATEGY + EMIT (FileCopier)                            │
-│  ──────────────────────────────────────────────────                            │
-│                                                                                │
-│  Entry extraction                                                              │
-│   - Always strict: selected message and general contract declarations          │
-│   - Expand selected entry declarations through AST references                  │
-│                                                                                │
-│  Dependency handling                                                           │
-│   - Preserve retained import shapes: default, namespace, aliases,              │
-│     mixed, type-only default, and qualified namespace refs                     │
-│   - dependencyStrategy=safe-symbols: slice safe dependency files               │
-│     to retained named declarations; fail on unsafe modules                     │
-│   - dependencyStrategy=file: copy retained dependencies whole                  │
-│   - shared deps outside sourceRoot: copy whole to avoid slice overwrites       │
-│                                                                                │
-│  Emit                                                                          │
-│   - safe-symbols: emit extracted entries plus sliced safe deps                 │
-│   - file: emit extracted entries plus whole deps                               │
-│   - Common post-processing: decorator removal, export repair, aliases          │
-│                                                                                │
-│  Output: copiedFiles[]                                                         │
-└────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────────────┐
-│  5. BARREL                                                                     │
-│  ─────────                                                                     │
-│  Generate index.ts based on copiedFiles                                        │
-│  (Based on actually copied files, not FileGraph)                               │
-└────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                        ┌───────────────────────┐
-                        │   Contracts Package   │
-                        │   (ready to publish)  │
-                        └───────────────────────┘
-```
-
----
-
-## Module Dependencies
-
-```
-                            ┌──────────────────┐
-                            │   domain/types   │
-                            │ (type definitions)│
-                            └────────┬─────────┘
-                                     │
-     ┌──────────────────┐            │            ┌──────────────────┐
-     │    FileSystem    │            │            │      Logger      │
-     │  (file-system.ts)│            │            │   (logger.ts)    │
-     └────────┬─────────┘            │            └────────┬─────────┘
-              │                      │                     │
-              └──────────────────────┼─────────────────────┘
-                                     │
-         ┌───────────────────────────┼───────────────────────────┐
-         │                           │                           │
-         ▼                           ▼                           ▼
-  ┌─────────────┐      ┌───────────────────────┐        ┌───────────────┐
-  │   Scanner   │      │   TS Utils (separated) │        │context-config │
-  └─────────────┘      │ - ast-utils           │        └───────┬───────┘
-                       │ - import-analyzer     │                │
-                       │ - class-analyzer      │                │
-                       └───────────┬───────────┘                │
-                                   │                            │
-         ┌─────────────────────────┼────────────────────────────┤
-         │                         │                            │
-         ▼                         ▼                            ▼
-  ┌─────────────┐       ┌───────────────────────┐     ┌─────────────────┐
-  │   Parser    │       │ FileGraphResolver     │     │  ConfigLoader   │
-  └─────────────┘       └───────────┬───────────┘     └────────┬────────┘
-                                    │                          │
-                                    ▼                          │
-                          ┌─────────────────┐                  │
-                          │   FileCopier    │                  │
-                          └────────┬────────┘                  │
-                                   │                           │
-     ┌─────────────────────────────┼───────────────────────────┤
-     │                             │                           │
-     ▼                             ▼                           ▼
-┌─────────────────┐     ┌───────────────────────┐     ┌─────────────┐
-│ReexportGenerator│     │  ContractsPipeline    │     │   cli.ts    │
-└─────────────────┘     │ (orchestrator)        │     │             │
-                        └───────────┬───────────┘     └──────┬──────┘
-                                    │                        │
-                                    ▼                        ▼
-                        ┌───────────────────────────────────────────┐
-                        │              index.ts (exports)           │
-                        │           processContext() API            │
-                        └───────────────────────────────────────────┘
-```
-
----
-
-## Key Design Patterns
-
-| Pattern | Usage |
-|---------|-------|
-| **Discriminated Union** | `kind` field in `TypeRef` for type discrimination |
-| **Type Guards** | `isPrimitiveType()`, `isDomainEvent()`, etc. |
-| **Decorator** | `@ContractEvent`, `@ContractCommand`, `@ContractQuery`, and generic `@Contract({ kind })` markers |
-| **Compatibility Decorator** | Deprecated `PublicEvent`, `PublicCommand`, `PublicQuery`, and `PublicContract` aliases |
-| **Comment Marker** | Leading `@Contract(...)` comments for general contracts, with legacy `@PublicContract()` still supported |
-| **Visitor** | AST node traversal (Parser) |
-| **Graph Traversal** | BFS for import dependency exploration |
-| **Facade** | `processContext()` encapsulates entire pipeline |
-| **Factory Method** | `ContractsPipeline.create()`, `FileGraphResolver.create()` |
-| **Dependency Injection** | `FileSystem`, `Logger` interfaces for DI |
-| **Strategy** | `FileSystem` implementation swap for test/production separation |
-| **Error Hierarchy** | Hierarchical errors based on `MessageParserError` |
-
----
-
-## Public Exports
-
-### Types
 ```typescript
-// Domain Types
-SourceFile, TypeRef, Field, DomainEvent, Command, Query, Message
-TypeDefinition, TypeDefinitionKind, ClassDefinition, ClassImport
-EnumDefinition, EnumMember
-ExtractionResult, ExtractionError, ExtractionWarning, Config
-Dependency, DependencyKind, ImportSource
-MessageBase, MessageType, ContractDeclaration, ContractKind, ContractVisibility
-ContractOutputConfig, ContractOutputSelect, PublicContract, PublicContractDeclarationKind
-DependencyStrategy, OutputModuleSpecifiers
+type LogLevel = "debug" | "info" | "warn" | "error";
 
-// Type Variants
-PrimitiveType, ArrayType, ObjectType, UnionType, IntersectionType
-ReferenceType, LiteralType, TupleType, FunctionType, FunctionParameter
+interface Logger {
+  debug(message: string): void;
+  info(message: string): void;
+  warn(message: string): void;
+  error(message: string): void;
+}
 
-// Type Guards
-isPrimitiveType, isArrayType, isObjectType, isUnionType
-isIntersectionType, isReferenceType, isLiteralType
-isTupleType, isFunctionType, isDomainEvent, isCommand, isQuery
+class ConsoleLogger implements Logger {
+  constructor(options?: { level?: LogLevel });   // default "info"
+}
 
-// Infrastructure Types
-FileSystem, FileStats
-Logger, LogLevel, ConsoleLoggerOptions
-
-// Pipeline Types
-PipelineDependencies, PipelineOptions, PipelineResult, ParsedMessages
-ProcessContextOptions, ProcessContextResult
-
-// Config Types
-ContractsConfig, ContextConfig, DecoratorNames, ContractMarkerNames
-ScannerOptions, ParseResult
-
-// Runtime Types
-MessageHeaders, MessageClass, Version
-
-// Generator Types
-RegistryGeneratorOptions, ContextMessages
-RewrittenImport, ReexportFile, ReexportGeneratorOptions
+const noopLogger: Logger;
 ```
 
-### Classes
-```typescript
-// Core Classes
-Scanner, Parser, FileGraphResolver, FileCopier
-ContextConfig, ConfigLoader
-ContractsPipeline, RegistryGenerator, ReexportGenerator
+The CLI and the plugin log at `info`. Library entry points default to `noopLogger`.
 
-// Runtime Classes
-MessageRegistry
+### Errors (`src/errors.ts`)
 
-// Infrastructure
-ConsoleLogger
-nodeFileSystem  // Singleton instance
-noopLogger      // Singleton instance
-
-// Error Classes
+```text
 MessageParserError
-├── BoundaryViolationError
-├── UnsafeDependencySliceError
 ├── ConfigurationError
 │   └── ConfigLoadError
-├── FileSystemError
+├── BoundaryViolationError
+├── UnsafeDependencySliceError        filePath, reason
+├── FileSystemError                   path
 │   ├── FileNotFoundError
 │   ├── FileReadError
 │   └── FileWriteError
 ├── ParseError
-│   └── JsonParseError
+│   └── JsonParseError                filePath?
 └── ResolutionError
-    └── ModuleResolutionError
+    └── ModuleResolutionError         moduleSpecifier, fromFile
 ```
 
-### Functions
-```typescript
-processContext(options: ProcessContextOptions): Promise<ProcessContextResult>
+| Thrown by | Error |
+|-----------|-------|
+| `ConfigLoader`, the `validate*()` functions | `ConfigLoadError` |
+| `processContext()`, `ContractsPipeline.create()`, `FileCopier.copyFiles()` | `ConfigurationError` (removed `entryStrategy`, invalid `dependencyStrategy`) |
+| `FileCopier` | `BoundaryViolationError`, `UnsafeDependencySliceError`, `FileReadError`, `FileWriteError` |
+| `DependencySymbolSlicer` | `UnsafeDependencySliceError` |
+| `Scanner`, `FileGraphResolver` | `FileReadError` |
+
+`FileNotFoundError`, `ParseError`, `JsonParseError`, `ResolutionError` and `ModuleResolutionError` are exported but not thrown. A plain `Error` comes from `parseArgs()` (see [Standalone CLI](#standalone-cli-srcclits)), `--check` failures, tsconfig parse failures, `ContextConfig.create()` input checks and the plugin's `entryStrategy` check.
+
+### Helper modules
+
+| Module | Used exports |
+|--------|--------------|
+| `ast-utils.ts` | `parseTypeNode()`, `extractFieldsFromMembers()`, `isPrimitiveTypeName()` |
+| `import-analyzer.ts` | `extractImportBindings()` (binding per local name, with import kind and type-only flag), `extractImports()` (`ClassImport` list for the parser), `extractImportedNames()`, `isExternalModule()` |
+| `class-analyzer.ts` | `extractClassSourceText()`, `getBaseClassName()`, `hasExportModifier()` |
+
+`class-analyzer.ts` also exports `hasDecorator()`, `hasLeadingCommentMarker()`, `getDecoratorOptions()` and `collectClassReferences()`, which nothing calls; marker detection lives in `ContractDecoratorMatcher`.
+
+## 15. Module dependencies
+
+Arrows point from a module to the modules it imports. Every module may also import `domain/`, `errors`, `file-system` and `logger`.
+
+```text
+index ──► pipeline, config-loader, context-config, scanner, parser, file-graph-resolver,
+          file-copier, registry-generator, reexport-generator, hexai-plugin
+
+hexai-plugin ──► cli, config-loader
+cli ──► index, config-loader, context-config, registry-generator, reexport-generator,
+        module-specifier
+
+pipeline ──► scanner, parser, contract-selector, file-graph-resolver, file-copier,
+             context-config
+
+scanner ──► contract-decorator-matcher
+parser ──► contract-decorator-matcher, ast-utils, class-analyzer, import-analyzer
+contract-decorator-matcher ──► import-analyzer
+file-graph-resolver ──► context-config, import-analyzer
+file-copier ──► contract-decorator-matcher, contract-selector, dependency-symbol-slicer,
+                file-graph-resolver (types), import-analyzer, module-specifier
+dependency-symbol-slicer ──► import-analyzer, file-graph-resolver (types)
+registry-generator ──► module-specifier
+config-loader ──► context-config
+class-analyzer ──► ast-utils
+
+runtime/message-registry ──► nothing
 ```
 
-### Contract Decorators (in `@hexaijs/contracts/decorators`)
-```typescript
-@ContractEvent(options?: ContractEventOptions)
-@ContractCommand(options?: ContractCommandOptions)
-@ContractQuery(options?: ContractQueryOptions)
-@Contract(options?: ContractOptions)
+## 16. Tests
 
-// Deprecated aliases, kept without runtime warnings:
-@PublicEvent(options?: PublicEventOptions)
-@PublicCommand(options?: PublicCommandOptions)
-@PublicQuery(options?: PublicQueryOptions)
-@PublicContract(options?: PublicContractOptions)
-```
+Run the suite from the package directory with `pnpm test` (`vitest run`).
 
-`ContractOptions` extends the shared `visibility`, `tags`, and `context` fields with `kind?`, `response?`, and `version?`. `response?` is used for generic command/query contracts, and `version?` is used for generic event contracts.
+| Location | Covers |
+|----------|--------|
+| `src/*.test.ts` | One file per module, mostly against the in-memory file system from `test-utils.ts`. |
+| `e2e/generation/` | Full generation runs over the fixtures in `e2e/fixtures/`. About half also compile the output with TypeScript, some with NodeNext resolution. |
+| `e2e/cli/` | `run()` and `runWithConfig()` with real config files, including `outputs[]`, globs and flag parsing. |
+| `e2e/runtime/` | Imports generated modules and runs them: constructs messages and calls their methods. |
+| `e2e/helpers/` | `E2ETestContext`, file and compile assertions, runtime import helpers. |
+| `test/fixtures/` | Sample projects and configs for unit tests. |
 
-### Comment Markers
-```typescript
-// @Contract({ kind: "read-model", visibility: "public", tags: ["frontend"] })
-/* @Contract({ kind: "value-object" }) */
-/** @Contract({ kind: "snapshot", visibility: "internal" }) */
-
-// Deprecated compatibility markers:
-// @PublicContract()
-/* @PublicContract() */
-/** @PublicContract() */
-```
-
-`Contract` is a no-op class decorator and an import-free comment marker name. Interfaces, type aliases, and enums use comment markers only. `PublicContract` remains the default legacy comment marker name configured by `contractMarkerNames`.
-
-### CLI
-```bash
-# Standalone CLI
-generate-contracts -o <output-dir> [--config <path>] [--include all|messages|contracts] [--messages event,command,query] [--dependency-strategy file|safe-symbols] [--registry] [--dry-run] [--check]
-
-# hexai CLI plugin
-pnpm hexai generate-contracts -o <output-dir> [--include all|messages|contracts] [--messages event,command,query] [--dependency-strategy file|safe-symbols] [--registry] [--dry-run] [--check]
-```
-
-Legacy aliases remain supported: `-m, --message-types` maps to `--messages`, and `--generate-message-registry` maps to `--registry`.
+A change to marker matching, selection or copying usually needs a unit test next to the module and a fixture-based case in `e2e/generation/`.

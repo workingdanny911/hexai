@@ -1,449 +1,320 @@
 # hexai
 
-A TypeScript framework for building maintainable applications through hexagonal architecture.
+hexai is a set of TypeScript packages for building backend applications with hexagonal architecture, also called ports and adapters. Business logic sits at the center and reaches the outside world only through interfaces it defines, called ports. Databases and other infrastructure sit at the edges and implement those interfaces, as adapters.
 
-## Philosophy
+hexai provides building blocks for each layer: domain types such as messages and domain events, an application layer that routes commands, queries and events to handlers, PostgreSQL and SQLite adapters with explicit transactions, and build tools that generate handler wiring and frontend contract types.
 
-**hexai** believes that software complexity should be managed through clear boundaries, not clever abstractions.
+## Principles
 
-### The Problem
-
-Modern applications often become tangled messes where business logic is scattered across controllers, services, and infrastructure code. Testing becomes painful. Changes ripple unpredictably. The codebase fights back against every modification.
-
-### Our Approach
-
-hexai provides a structured way to keep your domain logic pure and your infrastructure concerns at the edges:
-
-- **Domain at the center** — Your business rules live in isolation, unaware of databases, HTTP, or frameworks
-- **Explicit boundaries** — Commands and Events define how the outside world interacts with your domain
-- **Infrastructure as plugins** — Databases, message queues, and external services are swappable adapters
-
-### Core Beliefs
-
-1. **Testability is non-negotiable.** If it's hard to test, the design is wrong.
-
-2. **The domain should be boring.** Pure functions, simple objects, no decorators or framework magic.
-
-3. **Side effects belong at the boundaries.** Event publishing, persistence, and external calls happen in a controlled, predictable way.
-
-4. **Transactions are explicit.** UnitOfWork makes it clear when and how state changes are committed.
-
-5. **Framework-agnostic by design.** Express, Fastify, NestJS — hexai doesn't care. Your domain shouldn't either.
+- **The domain does not depend on infrastructure.** Business rules depend on ports you define, such as a repository interface, not on a database driver or a web framework.
+- **Messages are the way in.** Code outside an application talks to it only through messages: commands change state, queries read state, and events report something that has happened.
+- **Transactions are explicit.** A unit of work runs a block of code in a scope, and everything the block writes commits or rolls back together.
+- **Tests swap adapters, not logic.** Handlers depend on ports, so a test can give them an in-memory repository and run the real handler.
+- **No web framework is assumed.** hexai has no HTTP layer. Call an application from Express, Fastify, NestJS, a CLI or a queue consumer.
 
 ## Packages
 
-### Foundation
+All packages are published as ES modules only. Each package README covers installation, peer dependencies and the full API.
 
-| Package | Description |
-|---------|-------------|
-| [`@hexaijs/core`](./packages/core/README.md) | Domain primitives, messaging, and infrastructure interfaces |
-| [`@hexaijs/application`](./packages/application/README.md) | Application layer with command handlers, contexts, and interceptors |
-| [`@hexaijs/contracts`](./packages/contracts/README.md) | Zero-dependency marker decorators and base Command/Query classes |
+| Package | What it provides |
+|---|---|
+| [`@hexaijs/core`](./packages/core/README.md) | Domain building blocks (`Message`, `DomainEvent`, `AggregateRoot`, `Id`), port interfaces (`Repository`, `UnitOfWork`, `EventStore`, `EventPublisher`), and test helpers in `@hexaijs/core/test` |
+| [`@hexaijs/contracts`](./packages/contracts/README.md) | The `Command` and `Query` base classes (also re-exported by `@hexaijs/application`), and the decorators `ContractCommand`, `ContractEvent`, `ContractQuery` and `Contract`, which mark declarations for the contracts generator |
+| [`@hexaijs/application`](./packages/application/README.md) | The application layer: `ApplicationBuilder`, command, query and event handlers, `Result`, interceptors, `ExecutionScope` and `ApplicationEventPublisher`; a pino logger in `@hexaijs/application/pino` |
+| [`@hexaijs/postgres`](./packages/postgres/README.md) | PostgreSQL unit of work, event store, transactional event store sink, migration runners and `PostgresConfig`; projections in `@hexaijs/postgres/projection`; test helpers in `@hexaijs/postgres/test` |
+| [`@hexaijs/sqlite`](./packages/sqlite/README.md) | SQLite unit of work on `better-sqlite3`, for tests and lightweight deployments; test helpers in `@hexaijs/sqlite/test` |
+| [`@hexaijs/cli`](./packages/cli/README.md) | The `hexai` command, which runs the plugins listed in a `hexai.config.ts`, `.js` or `.json` file |
+| [`@hexaijs/plugin-application-builder`](./packages/plugin-application-builder/README.md) | Marker decorators for handlers, and a generator that writes the `ApplicationBuilder` registration code (`hexai generate-app-builder`) |
+| [`@hexaijs/plugin-contracts-generator`](./packages/plugin-contracts-generator/README.md) | A generator that copies contract-marked messages, and the types they use, into a separate contracts package for frontends (`hexai generate-contracts`) |
+| [`@hexaijs/utils`](./packages/utils/README.md) | `@hexaijs/utils/config`, a re-export of the `ezcfg` configuration library kept for backward compatibility |
 
-### Infrastructure
+## Example: placing an order
 
-| Package | Description |
-|---------|-------------|
-| [`@hexaijs/postgres`](./packages/postgres/README.md) | PostgreSQL adapter with UnitOfWork, event store, and migrations |
-| [`@hexaijs/sqlite`](./packages/sqlite/README.md) | SQLite adapter for testing and lightweight deployments |
+This example builds the write side of a small order service on PostgreSQL: a command, a handler that does its work in one transaction, a repository, and the wiring that connects them. File names are suggestions.
 
-### Utilities
+```bash
+npm install @hexaijs/core @hexaijs/contracts @hexaijs/application @hexaijs/postgres pg ezcfg
+```
 
-| Package | Description |
-|---------|-------------|
-| [`@hexaijs/utils`](./packages/utils/README.md) | Shared utility functions and configuration helpers |
+The repository writes to this table:
 
-### CLI & Build Tools
+```sql
+CREATE TABLE orders (
+    id text PRIMARY KEY,
+    customer_id text NOT NULL,
+    product_id text NOT NULL,
+    quantity integer NOT NULL
+);
+```
 
-| Package | Description |
-|---------|-------------|
-| [`@hexaijs/cli`](./packages/cli/README.md) | Unified CLI tool for running hexai plugins |
-| [`@hexaijs/plugin-application-builder`](./packages/plugin-application-builder/README.md) | Decorators for automatic handler registration |
-| [`@hexaijs/plugin-contracts-generator`](./packages/plugin-contracts-generator/README.md) | Generate frontend-compatible contract types from domain events and commands |
+### 1. Define the messages
 
-## Recipes
-
-Practical patterns for common use cases.
-
-### Building a CQRS Application
-
-Separate read and write operations with distinct handlers.
+A command asks an application to change state. `Command` takes two type parameters: the payload, and the result its handler returns. `executeCommand()` uses the second one to type its result. A domain event records something that has happened. The static `type` names each message; the application finds a message's handler by it.
 
 ```typescript
-// commands/create-order/command.ts
+// src/orders/messages.ts
 import { Command } from "@hexaijs/application";
+import { DomainEvent } from "@hexaijs/core";
 
-export class CreateOrderCommand extends Command<{
-    customerId: string;
-    items: Array<{ productId: string; quantity: number }>;
-}> {
+export class CreateOrderCommand extends Command<
+    { customerId: string; productId: string; quantity: number },
+    { orderId: string }
+> {
     static readonly type = "order.create-order";
 }
 
-export type CreateOrderResult = {
+export class OrderPlaced extends DomainEvent<{
     orderId: string;
-};
+    customerId: string;
+}> {
+    static readonly type = "order.order-placed";
+}
 ```
 
-```typescript
-// commands/create-order/handler.ts
-import { CommandHandler } from "@hexaijs/application";
-import { CreateOrderCommand, CreateOrderResult } from "./command";
-import { OrderApplicationContext } from "../../application-context";
-import { OrderPlaced } from "./events";
+### 2. Define the ports
 
-export class CreateOrderHandler implements CommandHandler<
-    CreateOrderCommand,
-    OrderApplicationContext
-> {
+`OrderRepository` is a port: the handler needs it, and an adapter implements it. The application context is the object the application passes to every handler; it carries the ports and services the handlers use. Two of them are core interfaces: `UnitOfWork`, whose `scope()` runs a callback in one transaction, and `EventPublisher`, which publishes events.
+
+```typescript
+// src/orders/ports.ts
+import type { EventPublisher, Message, UnitOfWork } from "@hexaijs/core";
+
+export interface Order {
+    id: string;
+    customerId: string;
+    productId: string;
+    quantity: number;
+}
+
+export interface OrderRepository {
+    add(order: Order): Promise<void>;
+}
+
+export interface OrderApplicationContext {
+    unitOfWork: UnitOfWork;
+    orders: OrderRepository;
+    events: EventPublisher<Message>;
+}
+```
+
+### 3. Write the handler
+
+A command handler executes one command type. It receives the command and the application context, and returns the command's result. It does not know which database stores the order.
+
+The application does not open a transaction by itself, so the handler opens a scope. What the callback writes commits when the callback returns, and rolls back when it throws. The application then turns the error into an `ErrorResult`.
+
+```typescript
+// src/orders/create-order-handler.ts
+import { randomUUID } from "node:crypto";
+import type { CommandHandler } from "@hexaijs/application";
+
+import { CreateOrderCommand, OrderPlaced } from "./messages.js";
+import type { OrderApplicationContext } from "./ports.js";
+
+export class CreateOrderHandler
+    implements CommandHandler<CreateOrderCommand, OrderApplicationContext>
+{
     async execute(
         command: CreateOrderCommand,
         ctx: OrderApplicationContext
-    ): Promise<CreateOrderResult> {
-        const payload = command.getPayload();
-        const orderId = crypto.randomUUID();
+    ): Promise<{ orderId: string }> {
+        const { customerId, productId, quantity } = command.getPayload();
 
-        // Persist order
-        const client = ctx.getUnitOfWork().getClient();
-        await ctx.getOrderRepository().save(client, {
-            id: orderId,
-            customerId: payload.customerId,
-            items: payload.items,
+        return ctx.unitOfWork.scope(async () => {
+            const orderId = randomUUID();
+
+            await ctx.orders.add({ id: orderId, customerId, productId, quantity });
+            await ctx.events.publish(new OrderPlaced({ orderId, customerId }));
+
+            return { orderId };
         });
-
-        // Publish domain event
-        await ctx.publish(new OrderPlaced({
-            orderId,
-            customerId: payload.customerId,
-        }));
-
-        return { orderId };
     }
 }
 ```
 
+You can also open the scope in a command interceptor instead of in each handler. [Wiring the Unit of Work and Event Publishing](./packages/application/README.md#wiring-the-unit-of-work-and-event-publishing) describes that alternative and the `ErrorResult` pitfall it must handle.
+
+### 4. Implement the repository for PostgreSQL
+
+The Postgres unit of work runs queries through its `db` property, typed `PostgresQueryable`; give `db` to a repository once. Each query goes to the transaction of the scope that the calling code runs in, so the insert below joins the handler's scope. Outside any scope, a query runs on its own connection and commits by itself, like `pool.query()`, so a query handler that only reads does not need a scope.
+
 ```typescript
-// queries/get-order/handler.ts
-import { Query, QueryHandler } from "@hexaijs/application";
-import { OrderApplicationContext } from "../../application-context";
+// src/orders/postgres-order-repository.ts
+import type { PostgresQueryable } from "@hexaijs/postgres";
 
-export class GetOrderQuery extends Query<{ orderId: string }> {
-    static readonly type = "order.get-order";
-}
+import type { Order, OrderRepository } from "./ports.js";
 
-export class GetOrderHandler implements QueryHandler<
-    GetOrderQuery,
-    OrderApplicationContext
-> {
-    async execute(
-        query: GetOrderQuery,
-        ctx: OrderApplicationContext
-    ): Promise<OrderDetails> {
-        const client = ctx.getUnitOfWork().getClient();
-        return ctx.getOrderRepository().findById(client, query.getPayload().orderId);
+export class PostgresOrderRepository implements OrderRepository {
+    constructor(private readonly db: PostgresQueryable) {}
+
+    async add(order: Order): Promise<void> {
+        await this.db.query(
+            "INSERT INTO orders (id, customer_id, product_id, quantity) VALUES ($1, $2, $3, $4)",
+            [order.id, order.customerId, order.productId, order.quantity]
+        );
     }
 }
 ```
 
-**Key points:**
-- `Command` for write operations, `Query` for read operations
-- Handlers implement `CommandHandler` or `QueryHandler` interface
-- The `execute()` method receives the message and context
+### 5. Register the handlers
 
-**See also:** [@hexaijs/core](./packages/core/README.md), [@hexaijs/application](./packages/application/README.md)
-
----
-
-### Testing with In-Memory Database
-
-Use SQLite for fast, isolated tests.
+An application routes each message to its handler, and `ApplicationBuilder` assembles one. A function that registers the handlers lets production code and tests share the registration. [`@hexaijs/plugin-application-builder`](./packages/plugin-application-builder/README.md) can generate this function from decorated handlers.
 
 ```typescript
-// test/fixtures.ts
-import type { Database } from "better-sqlite3";
-import { Message } from "@hexaijs/core";
-import { SqliteUnitOfWork } from "@hexaijs/sqlite";
-import { OrderApplicationContext } from "../application-context";
+// src/orders/application.ts
+import { ApplicationBuilder } from "@hexaijs/application";
 
-export function createTestContext(db: Database): OrderApplicationContext & {
-    uow: SqliteUnitOfWork;
-    publishedMessages: Message[];
-} {
-    const uow = new SqliteUnitOfWork(db);
-    const publishedMessages: Message[] = [];
+import { CreateOrderHandler } from "./create-order-handler.js";
+import { CreateOrderCommand } from "./messages.js";
 
-    return {
-        uow,
-        publishedMessages,
-        getUnitOfWork: () => uow,
-        getOrderRepository: () => new InMemoryOrderRepository(),
-        publish: async (message: Message) => {
-            publishedMessages.push(message);
-        },
-    };
+export function createApplicationBuilder(): ApplicationBuilder {
+    return new ApplicationBuilder().withCommandHandler(
+        CreateOrderCommand,
+        () => new CreateOrderHandler()
+    );
 }
 ```
 
+### 6. Compose and run
+
+The composition root is the one place that creates the adapters and wires them into the application. `executeCommand()` returns a `Result`: check `isError`, or call `getOrThrow()` to get the data or throw the error.
+
 ```typescript
-// commands/create-order/handler.test.ts
+// src/main.ts
+import pg from "pg";
+import { ApplicationEventPublisher } from "@hexaijs/application";
+import { createPostgresUnitOfWork } from "@hexaijs/postgres";
+
+import { createApplicationBuilder } from "./orders/application.js";
+import { CreateOrderCommand } from "./orders/messages.js";
+import { PostgresOrderRepository } from "./orders/postgres-order-repository.js";
+import type { OrderApplicationContext } from "./orders/ports.js";
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const unitOfWork = createPostgresUnitOfWork(pool);
+const events = new ApplicationEventPublisher();
+
+const context: OrderApplicationContext = {
+    unitOfWork,
+    orders: new PostgresOrderRepository(unitOfWork.db),
+    events,
+};
+
+const application = createApplicationBuilder()
+    .withApplicationContext(context)
+    .build();
+
+const result = await application.executeCommand(
+    new CreateOrderCommand({
+        customerId: "customer-1",
+        productId: "product-1",
+        quantity: 2,
+    })
+);
+
+if (result.isError) {
+    console.error("Order failed:", result.error.message);
+} else {
+    console.log("Order placed:", result.data.orderId);
+}
+```
+
+`events` has no subscribers yet, so `OrderPlaced` goes nowhere. To store published events in the event store within the same transaction, attach `attachPostgresEventStoreSink(events, unitOfWork)`; see [`@hexaijs/postgres`](./packages/postgres/README.md). To deliver events to event handlers, see [Wiring the Unit of Work and Event Publishing](./packages/application/README.md#wiring-the-unit-of-work-and-event-publishing).
+
+## Testing a command
+
+The handler depends only on ports, so a test can build the same application with an in-memory repository, a unit of work whose `scope()` only runs the callback, and an event publisher whose events the test collects. `expectMessageToMatch()` from `@hexaijs/core/test` checks that a message of the given type, with the given payload fields, was published.
+
+```typescript
+// src/orders/create-order.test.ts
+import { describe, expect, it } from "vitest";
+import { ApplicationEventPublisher } from "@hexaijs/application";
+import type { Message, UnitOfWork } from "@hexaijs/core";
 import { expectMessageToMatch } from "@hexaijs/core/test";
-import { getSqliteConnection } from "@hexaijs/sqlite/test";
-import { CreateOrderHandler } from "./handler";
-import { CreateOrderCommand } from "./command";
-import { OrderPlaced } from "./events";
-import { createTestContext } from "../../test/fixtures";
 
-describe("CreateOrderHandler", () => {
-    it("creates an order and publishes OrderPlaced", async () => {
-        const db = getSqliteConnection();
-        const ctx = createTestContext(db);
-        const handler = new CreateOrderHandler();
+import { createApplicationBuilder } from "./application.js";
+import { CreateOrderCommand, OrderPlaced } from "./messages.js";
+import type {
+    Order,
+    OrderApplicationContext,
+    OrderRepository,
+} from "./ports.js";
 
-        const result = await handler.execute(
+class InMemoryOrderRepository implements OrderRepository {
+    readonly saved: Order[] = [];
+
+    async add(order: Order): Promise<void> {
+        this.saved.push(order);
+    }
+}
+
+describe("CreateOrderCommand", () => {
+    it("stores the order and publishes OrderPlaced", async () => {
+        const unitOfWork: UnitOfWork = { scope: (fn) => fn() };
+        const orders = new InMemoryOrderRepository();
+        const events = new ApplicationEventPublisher();
+        const published: Message[] = [];
+        events.subscribe((event) => {
+            published.push(event);
+        });
+        const context: OrderApplicationContext = { unitOfWork, orders, events };
+
+        const application = createApplicationBuilder()
+            .withApplicationContext(context)
+            .build();
+
+        const result = await application.executeCommand(
             new CreateOrderCommand({
-                customerId: "customer-123",
-                items: [{ productId: "prod-1", quantity: 2 }],
-            }),
-            ctx
+                customerId: "customer-1",
+                productId: "product-1",
+                quantity: 2,
+            })
         );
 
-        expect(result.orderId).toBeDefined();
-        expectMessageToMatch(ctx.publishedMessages, OrderPlaced, {
-            orderId: expect.any(String),
-            customerId: "customer-123",
+        const { orderId } = result.getOrThrow();
+        expect(orders.saved).toEqual([
+            {
+                id: orderId,
+                customerId: "customer-1",
+                productId: "product-1",
+                quantity: 2,
+            },
+        ]);
+        expectMessageToMatch(published, OrderPlaced, {
+            orderId,
+            customerId: "customer-1",
         });
     });
 });
 ```
 
-**Key points:**
-- `SqliteUnitOfWork` provides an in-memory database
-- Capture published messages in an array for assertions
-- `expectMessageToMatch` from `@hexaijs/core/test` for event verification
+To test SQL against a database, two packages help:
 
-**See also:** [@hexaijs/sqlite](./packages/sqlite/README.md), [@hexaijs/core](./packages/core/README.md)
+- `@hexaijs/postgres/test` provides `PostgresUnitOfWorkForTesting`, which runs inside a transaction that the test rolls back afterwards. Put it in the context as the unit of work, and give its `db` to `PostgresOrderRepository`. See [`@hexaijs/postgres`](./packages/postgres/README.md).
+- `@hexaijs/sqlite` runs scopes on SQLite with `SqliteUnitOfWork`, and `getSqliteConnection()` from `@hexaijs/sqlite/test` opens an in-memory database by default. See [`@hexaijs/sqlite`](./packages/sqlite/README.md).
 
----
+## Where to go next
 
-### Domain Event Handling
+| Topic | Read |
+|---|---|
+| Event handlers, `SelectorBasedEventHandler` and `@When` | [`@hexaijs/application`](./packages/application/README.md) |
+| Interceptors, logging, and `ExecutionScope` (security context, correlation and causation) | [`@hexaijs/application`](./packages/application/README.md) |
+| Messages, aggregates, repositories, units of work and the event store interface | [`@hexaijs/core`](./packages/core/README.md) |
+| Transactions in depth: propagation, isolation levels, lifecycle hooks | [`@hexaijs/postgres`](./packages/postgres/README.md) |
+| Event store, migrations and configuration with `PostgresConfig` | [`@hexaijs/postgres`](./packages/postgres/README.md) |
+| Projections: read models built from the event store | [Projection infrastructure](./packages/postgres/docs/projection.md) |
+| Generating handler registration from decorators | [`@hexaijs/plugin-application-builder`](./packages/plugin-application-builder/README.md) |
+| Marking contracts and generating a contracts package for frontends | [`@hexaijs/contracts`](./packages/contracts/README.md), [`@hexaijs/plugin-contracts-generator`](./packages/plugin-contracts-generator/README.md) |
+| Running plugins with the `hexai` command | [`@hexaijs/cli`](./packages/cli/README.md) |
 
-React to events published by other handlers.
+## Contributing
 
-```typescript
-// domain/events.ts
-import { DomainEvent } from "@hexaijs/core";
-
-export class OrderPlaced extends DomainEvent<{
-    orderId: string;
-    customerId: string;
-}> {
-    static readonly type = "order.order-placed";
-}
-```
-
-```typescript
-// event-handlers/send-order-confirmation.ts
-import { Message } from "@hexaijs/core";
-import { EventHandler } from "@hexaijs/application";
-import { OrderPlaced } from "../domain/events";
-import { NotificationApplicationContext } from "../application-context";
-
-export class SendOrderConfirmation implements EventHandler<OrderPlaced, NotificationApplicationContext> {
-    canHandle(message: Message): boolean {
-        return message.getMessageType() === OrderPlaced.getType();
-    }
-
-    async handle(
-        event: OrderPlaced,
-        ctx: NotificationApplicationContext
-    ): Promise<void> {
-        const { orderId, customerId } = event.getPayload();
-
-        await ctx.getEmailService().send({
-            to: customerId,
-            subject: "Order Confirmation",
-            body: `Your order ${orderId} has been placed.`,
-        });
-    }
-}
-```
-
-For handlers that respond to multiple event types, use `SelectorBasedEventHandler`:
-
-```typescript
-// event-handlers/order-notifications.ts
-import { Message } from "@hexaijs/core";
-import { SelectorBasedEventHandler, When, eventTypeMatches } from "@hexaijs/application";
-import { OrderPlaced, OrderShipped } from "../domain/events";
-
-export class OrderNotifications extends SelectorBasedEventHandler<Message, NotificationApplicationContext> {
-    @When(eventTypeMatches(OrderPlaced.getType()))
-    async onOrderPlaced(event: OrderPlaced, ctx: NotificationApplicationContext): Promise<void> {
-        // Send order confirmation
-    }
-
-    @When(eventTypeMatches(OrderShipped.getType()))
-    async onOrderShipped(event: OrderShipped, ctx: NotificationApplicationContext): Promise<void> {
-        // Send shipping notification
-    }
-}
-```
-
-**Key points:**
-- Events extend `DomainEvent<TPayload>` with a static `type`
-- Simple handlers implement `EventHandler` interface with `canHandle()` and `handle()`
-- Use `SelectorBasedEventHandler` with `@When` decorator for multi-event handlers
-
-**See also:** [@hexaijs/core](./packages/core/README.md), [@hexaijs/application](./packages/application/README.md)
-
----
-
-### Bootstrapping with Application Builder
-
-Use the plugin to auto-register handlers from decorators.
-
-```typescript
-// commands/create-order/handler.ts
-import { CommandHandler } from "@hexaijs/application";
-import { CommandHandlerMarker } from "@hexaijs/plugin-application-builder";
-import { CreateOrderCommand, CreateOrderResult } from "./command";
-import { OrderApplicationContext } from "../../application-context";
-
-@CommandHandlerMarker(CreateOrderCommand)
-export class CreateOrderHandler implements CommandHandler<
-    CreateOrderCommand,
-    OrderApplicationContext
-> {
-    async execute(
-        command: CreateOrderCommand,
-        ctx: OrderApplicationContext
-    ): Promise<CreateOrderResult> {
-        // Implementation
-    }
-}
-```
-
-```typescript
-// event-handlers/send-order-confirmation.ts
-import { Message } from "@hexaijs/core";
-import { EventHandler } from "@hexaijs/application";
-import { EventHandlerMarker } from "@hexaijs/plugin-application-builder";
-import { OrderPlaced } from "../domain/events";
-import { OrderApplicationContext } from "../application-context";
-
-@EventHandlerMarker()
-export class SendOrderConfirmation implements EventHandler<OrderPlaced, OrderApplicationContext> {
-    canHandle(message: Message): boolean {
-        return message.getMessageType() === OrderPlaced.getType();
-    }
-
-    async handle(event: OrderPlaced, ctx: OrderApplicationContext): Promise<void> {
-        // React to event
-    }
-}
-```
-
-```typescript
-// application-builder.ts (auto-generated)
-// Run: hexai generate-app-builder -p packages/order
-import { ApplicationBuilder } from "@hexaijs/application";
-import { CreateOrderCommand } from "./commands/create-order/command";
-import { CreateOrderHandler } from "./commands/create-order/handler";
-import { SendOrderConfirmation } from "./event-handlers/send-order-confirmation";
-
-export function createApplicationBuilder(): ApplicationBuilder {
-    return new ApplicationBuilder()
-        .withCommandHandler(CreateOrderCommand, () => new CreateOrderHandler())
-        .withEventHandler(() => new SendOrderConfirmation());
-}
-```
-
-**Key points:**
-- `@CommandHandlerMarker(CommandClass)` links handler to command
-- `@EventHandlerMarker()` marks event handlers (no argument)
-- Run `hexai generate-app-builder -p <context-path>` to regenerate after adding handlers
-
-**See also:** [@hexaijs/plugin-application-builder](./packages/plugin-application-builder/README.md), [@hexaijs/application](./packages/application/README.md)
-
----
-
-### Generating Contract Types
-
-Share type definitions between backend and frontend.
-
-```typescript
-// commands/create-order/command.ts
-import { Command } from "@hexaijs/application";
-import { PublicCommand } from "@hexaijs/contracts/decorators";
-
-@PublicCommand()
-export class CreateOrderCommand extends Command<{
-    customerId: string;
-    items: Array<{ productId: string; quantity: number }>;
-}> {
-    static readonly type = "order.create-order";
-}
-
-export type CreateOrderResult = {
-    orderId: string;
-};
-```
-
-```typescript
-// domain/events.ts
-import { DomainEvent } from "@hexaijs/core";
-import { PublicEvent } from "@hexaijs/contracts/decorators";
-
-@PublicEvent()
-export class OrderPlaced extends DomainEvent<{
-    orderId: string;
-    customerId: string;
-}> {
-    static readonly type = "order.order-placed";
-}
-```
-
-Run the generator:
-
-```bash
-hexai generate-contracts -o packages/contracts/src
-```
-
-Generated output in `contracts/`:
-
-```typescript
-// contracts/order.create-order.ts
-export interface CreateOrderCommand {
-    customerId: string;
-    items: Array<{ productId: string; quantity: number }>;
-}
-
-export interface CreateOrderResult {
-    orderId: string;
-}
-```
-
-```typescript
-// contracts/order.order-placed.ts
-export interface OrderPlacedPayload {
-    orderId: string;
-    customerId: string;
-}
-```
-
-**Key points:**
-- `@PublicCommand()` and `@PublicEvent()` mark public API surface
-- Generator outputs plain TypeScript interfaces
-- Frontend imports contracts without backend dependencies
-
-**See also:** [@hexaijs/plugin-contracts-generator](./packages/plugin-contracts-generator/README.md), [@hexaijs/core](./packages/core/README.md)
-
----
+[CONTRIBUTING.md](./CONTRIBUTING.md) explains how to install, build and test the repository, including the PostgreSQL setup that the `@hexaijs/postgres` tests need.
 
 ## Status
 
-hexai is under active development. APIs may change.
+hexai is under active development. Every package is still at version 0.x, and a minor version can contain breaking changes. Read a package's `CHANGELOG.md` before you upgrade it.
 
 ## License
 
-MIT
+[MIT](./LICENSE)
