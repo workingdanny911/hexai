@@ -6,7 +6,8 @@
     "scripts": {
         "test": "pnpm -r test",
         "clean": "find ./packages -name dist -type d -exec rm -rf {} +",
-        "build": "pnpm clean && pnpm --filter @hexaijs/core --filter @hexaijs/utils build && pnpm -r build"
+        "build": "pnpm clean && pnpm --filter @hexaijs/core --filter @hexaijs/utils build && pnpm -r build",
+        "typecheck": "pnpm -r typecheck"
     },
     "author": "",
     "license": "ISC",

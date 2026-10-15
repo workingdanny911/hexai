@@ -43,7 +43,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "build": "tsgo -p tsconfig.build.json"
+    "build": "tsgo -p tsconfig.build.json",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
     "@hexaijs/core": "^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0"

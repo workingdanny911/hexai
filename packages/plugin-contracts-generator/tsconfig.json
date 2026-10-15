@@ -2,8 +2,14 @@
     "extends": "@hexaijs/tooling/tsconfig/base.json",
     "compilerOptions": {
         "rootDir": "./src",
-        "outDir": "./dist"
+        "outDir": "./dist",
+        "paths": {
+            "@e2e/*": ["./e2e/*/index.ts"]
+        }
     },
-    "include": ["src", "e2e", "test"],
-    "exclude": ["node_modules", "dist"]
+    "include": ["src", "e2e"],
+    // Fixture projects are inputs the generator reads, not part of this
+    // package's program. Some are invalid on purpose, so keep them out of
+    // type checking. e2e/output holds files the tests generate.
+    "exclude": ["node_modules", "dist", "e2e/fixtures", "e2e/output"]
 }

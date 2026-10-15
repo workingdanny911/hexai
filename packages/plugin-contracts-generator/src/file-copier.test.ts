@@ -1117,7 +1117,12 @@ export class FindUserQuery {
             );
         }
 
-        it.each([
+        it.each<{
+            readonly name: string;
+            readonly reason: string;
+            readonly dependency: string;
+            readonly extraFiles?: Readonly<Record<string, string>>;
+        }>([
             {
                 name: "side-effect import",
                 reason: "side-effect import",

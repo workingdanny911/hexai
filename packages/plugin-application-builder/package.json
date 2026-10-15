@@ -40,7 +40,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "build": "tsgo -p tsconfig.build.json"
+    "build": "tsgo -p tsconfig.build.json",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "exports": {
     ".": {

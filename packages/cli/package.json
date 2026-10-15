@@ -46,7 +46,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "build": "tsgo -p tsconfig.build.json"
+    "build": "tsgo -p tsconfig.build.json",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "commander": "^12.0.0"

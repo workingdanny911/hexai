@@ -375,7 +375,7 @@ async function hasAppendWaitingForPositionCounter(
            AND query LIKE '%UPDATE hexai__event_position_counter%'
          LIMIT 1`
     );
-    return result.rowCount > 0;
+    return result.rows.length > 0;
 }
 
 function delay(ms: number): Promise<void> {
